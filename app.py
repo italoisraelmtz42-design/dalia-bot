@@ -239,6 +239,67 @@ def home():
 
 
 # ===========================
+# POLÍTICA DE PRIVACIDAD
+# ===========================
+
+@app.route("/privacidad", methods=["GET"])
+def privacidad():
+    html = """
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <title>Política de Privacidad - Recuerditos Dalia</title>
+        <style>
+            body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #222; }
+            h1 { font-size: 24px; }
+            h2 { font-size: 18px; margin-top: 30px; }
+        </style>
+    </head>
+    <body>
+        <h1>Política de Privacidad</h1>
+        <p><strong>Última actualización:</strong> agosto de 2026</p>
+
+        <p>Recuerditos Dalia ("nosotros") opera un asistente automatizado de ventas
+        a través de WhatsApp ("DALIA"). Esta política explica qué información
+        recopilamos cuando nos escribes y cómo la usamos.</p>
+
+        <h2>Información que recopilamos</h2>
+        <p>Cuando nos escribes por WhatsApp, podemos recopilar:</p>
+        <ul>
+            <li>Tu número de teléfono de WhatsApp.</li>
+            <li>El contenido de los mensajes que nos envías (por ejemplo, tus
+            preguntas, el producto que deseas, colores, fecha del evento y
+            dirección de entrega si nos la proporcionas).</li>
+        </ul>
+
+        <h2>Cómo usamos tu información</h2>
+        <p>Usamos esta información únicamente para:</p>
+        <ul>
+            <li>Responder tus preguntas sobre nuestros productos y precios.</li>
+            <li>Procesar y dar seguimiento a tu pedido.</li>
+            <li>Coordinar la entrega de tu compra.</li>
+        </ul>
+        <p>Para generar respuestas, tus mensajes se procesan mediante un
+        servicio de inteligencia artificial de terceros (OpenAI), únicamente
+        con el fin de generar una respuesta conversacional. No vendemos ni
+        compartimos tu información con terceros para fines publicitarios.</p>
+
+        <h2>Conservación de datos</h2>
+        <p>Conservamos el historial de conversación mientras sea necesario
+        para darte seguimiento a tu pedido. Puedes solicitar la eliminación
+        de tus datos escribiéndonos directamente por WhatsApp.</p>
+
+        <h2>Contacto</h2>
+        <p>Si tienes dudas sobre esta política o quieres solicitar la
+        eliminación de tus datos, contáctanos directamente por WhatsApp.</p>
+    </body>
+    </html>
+    """
+    return html, 200
+
+
+# ===========================
 # WEBHOOK: VERIFICACIÓN (Meta)
 # ===========================
 

@@ -30,9 +30,6 @@ VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "cambia_este_token")
 GRAPH_API_VERSION = "v20.0"
 GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
 
-MODELO = "gpt-4.1-mini"
-MAX_TURNOS_HISTORIAL = 20
-
 
 def _diagnostico_arranque():
     print("\n" + "=" * 60)
@@ -51,6 +48,9 @@ def _diagnostico_arranque():
 
 
 _diagnostico_arranque()
+
+MODELO = "gpt-4.1-mini"
+MAX_TURNOS_HISTORIAL = 20
 
 
 # ===========================
@@ -205,7 +205,10 @@ def preguntar_ia(numero, texto_cliente):
 # ENVIAR MENSAJE POR WHATSAPP
 # ===========================
 
-def enviar_whatsapp(numero, texto):
+def enviar_whatsapp(numero, texto, phone_id=None):
+    id_a_usar = phone_id or WHATSAPP_PHONE_ID
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{id_a_usar}/messages"
+
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json",
@@ -217,7 +220,7 @@ def enviar_whatsapp(numero, texto):
         "text": {"body": texto},
     }
     try:
-        r = requests.post(GRAPH_URL, headers=headers, json=data, timeout=15)
+        r = requests.post(url, headers=headers, json=data, timeout=15)
         if r.status_code >= 400:
             print("⚠️ Error enviando WhatsApp:", r.status_code, r.text)
         return r
@@ -258,6 +261,9 @@ def verify_webhook():
 def handle_message():
     data = request.get_json(silent=True) or {}
 
+    print("\n🔔 POST /webhook recibido")
+    print("PAYLOAD CRUDO:", data)
+
     try:
         entry = data["entry"][0]
         cambio = entry["changes"][0]
@@ -265,29 +271,44 @@ def handle_message():
         mensajes = valor.get("messages")
 
         if not mensajes:
+            print("ℹ️ Es una notificación de estado (no trae 'messages'), se ignora.")
             return jsonify({"status": "sin mensajes nuevos"}), 200
 
         mensaje = mensajes[0]
         numero = mensaje["from"]
         tipo = mensaje.get("type")
+        phone_id_destino = valor.get("metadata", {}).get("phone_number_id")
+
+        print(f"📩 Mensaje de tipo '{tipo}' recibido del número: {numero}")
+        print(f"📱 phone_number_id que recibió el mensaje: {phone_id_destino}")
 
         if tipo != "text":
+            print("⚠️ No es texto, se manda respuesta genérica.")
             enviar_whatsapp(
                 numero,
                 "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?",
+                phone_id=phone_id_destino,
             )
             return jsonify({"status": "tipo de mensaje no soportado"}), 200
 
         texto_cliente = mensaje["text"]["body"]
+        print(f"💬 Texto del cliente: {texto_cliente}")
 
+        print("🤖 Llamando a OpenAI...")
         respuesta = preguntar_ia(numero, texto_cliente)
+        print(f"✅ OpenAI respondió: {respuesta[:200]}")
 
         time.sleep(random.uniform(2, 4))
 
-        enviar_whatsapp(numero, respuesta)
+        print(f"📤 Enviando respuesta por WhatsApp a {numero} usando phone_id={phone_id_destino}")
+        resultado_envio = enviar_whatsapp(numero, respuesta, phone_id=phone_id_destino)
+        if resultado_envio is not None:
+            print(f"📬 Respuesta de la API de WhatsApp: {resultado_envio.status_code} - {resultado_envio.text}")
 
     except (KeyError, IndexError, TypeError) as e:
-        print("Evento sin mensaje de texto reconocible:", e)
+        print("❌ Evento sin mensaje de texto reconocible o payload inesperado:", e)
+    except Exception as e:
+        print("❌ ERROR INESPERADO procesando el mensaje:", repr(e))
 
     return jsonify({"status": "ok"}), 200
 

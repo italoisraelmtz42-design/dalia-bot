@@ -14,30 +14,47 @@ from openai import OpenAI
 # CONFIGURACIÓN
 # ===========================
 
-load_dotenv()
+BASE = Path(__file__).resolve().parent
+CARPETA = BASE / "conocimiento"
+
+DOTENV_PATH = BASE / ".env"
+cargado = load_dotenv(dotenv_path=DOTENV_PATH)
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
-# El token de verificación ya NO va escrito directo en el código.
-# Defínelo en tu .env como WHATSAPP_VERIFY_TOKEN=lo-que-tu-quieras
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "cambia_este_token")
 
 GRAPH_API_VERSION = "v20.0"
 GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
 
-BASE = Path(__file__).resolve().parent
-CARPETA = BASE / "conocimiento"
-
 MODELO = "gpt-4.1-mini"
-MAX_TURNOS_HISTORIAL = 20  # mensajes (usuario+asistente) que se guardan por cliente
+MAX_TURNOS_HISTORIAL = 20
+
+
+def _diagnostico_arranque():
+    print("\n" + "=" * 60)
+    print("DIAGNÓSTICO DE CONFIGURACIÓN (.env)")
+    print("=" * 60)
+    print(f"Ruta esperada del .env : {DOTENV_PATH}")
+    print(f".env encontrado y leído: {'SÍ' if cargado else 'NO ⚠️'}")
+    print(f"OPENAI_API_KEY cargada : {'SÍ' if os.getenv('OPENAI_API_KEY') else 'NO ⚠️'}")
+    print(f"WHATSAPP_TOKEN cargado : {'SÍ' if WHATSAPP_TOKEN else 'NO ⚠️'}")
+    print(f"WHATSAPP_PHONE_ID      : {WHATSAPP_PHONE_ID or 'NO ⚠️'}")
+    if os.getenv("WHATSAPP_VERIFY_TOKEN"):
+        print("WHATSAPP_VERIFY_TOKEN  : definido ✅")
+    else:
+        print("WHATSAPP_VERIFY_TOKEN  : NO definido -> usando valor por defecto ⚠️")
+    print("=" * 60 + "\n")
+
+
+_diagnostico_arranque()
 
 
 # ===========================
 # CARGAR BASE DE CONOCIMIENTO
-# (una sola vez, al iniciar el servidor)
 # ===========================
 
 def cargar_conocimiento():
@@ -81,8 +98,6 @@ KNOWLEDGE = cargar_conocimiento()
 
 # ===========================
 # SESIONES POR CLIENTE
-# Cada número de WhatsApp tiene su propio historial
-# y su propio "pedido" en construcción.
 # ===========================
 
 sesiones = {}
@@ -105,7 +120,6 @@ def pedido_vacio():
 
 
 def obtener_sesion(numero):
-    """Devuelve (y crea si no existe) la sesión de un cliente por su número."""
     with sesiones_lock:
         if numero not in sesiones:
             sesiones[numero] = {
@@ -170,7 +184,6 @@ def preguntar_ia(numero, texto_cliente):
     system_prompt = construir_system_prompt(sesion["pedido"])
     mensajes_completos = [{"role": "system", "content": system_prompt}] + historial
 
-    # Recortar historial para no crecer sin límite (igual que en main.py)
     if len(mensajes_completos) > MAX_TURNOS_HISTORIAL + 1:
         mensajes_completos = [mensajes_completos[0]] + mensajes_completos[-MAX_TURNOS_HISTORIAL:]
         sesion["messages"] = mensajes_completos[1:]
@@ -214,6 +227,15 @@ def enviar_whatsapp(numero, texto):
 
 
 # ===========================
+# RUTA RAÍZ (health check)
+# ===========================
+
+@app.route("/", methods=["GET"])
+def home():
+    return "DALIA bot está corriendo ✅", 200
+
+
+# ===========================
 # WEBHOOK: VERIFICACIÓN (Meta)
 # ===========================
 
@@ -242,8 +264,6 @@ def handle_message():
         valor = cambio["value"]
         mensajes = valor.get("messages")
 
-        # Meta también manda notificaciones de "estado" (entregado, leído, etc.)
-        # que no traen "messages". Las ignoramos sin error.
         if not mensajes:
             return jsonify({"status": "sin mensajes nuevos"}), 200
 
@@ -262,13 +282,11 @@ def handle_message():
 
         respuesta = preguntar_ia(numero, texto_cliente)
 
-        # Pequeña espera para que no se sienta instantáneo/robótico
         time.sleep(random.uniform(2, 4))
 
         enviar_whatsapp(numero, respuesta)
 
     except (KeyError, IndexError, TypeError) as e:
-        # Payload inesperado (ej. notificación de estado) -> no truena el servidor
         print("Evento sin mensaje de texto reconocible:", e)
 
     return jsonify({"status": "ok"}), 200

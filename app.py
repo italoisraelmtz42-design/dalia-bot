@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import random
 import threading
@@ -14,47 +15,30 @@ from openai import OpenAI
 # CONFIGURACIÓN
 # ===========================
 
-BASE = Path(__file__).resolve().parent
-CARPETA = BASE / "conocimiento"
-
-DOTENV_PATH = BASE / ".env"
-cargado = load_dotenv(dotenv_path=DOTENV_PATH)
+load_dotenv()
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
+# El token de verificación ya NO va escrito directo en el código.
+# Defínelo en tu .env como WHATSAPP_VERIFY_TOKEN=lo-que-tu-quieras
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "cambia_este_token")
 
 GRAPH_API_VERSION = "v20.0"
 GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
 
-
-def _diagnostico_arranque():
-    print("\n" + "=" * 60)
-    print("DIAGNÓSTICO DE CONFIGURACIÓN (.env)")
-    print("=" * 60)
-    print(f"Ruta esperada del .env : {DOTENV_PATH}")
-    print(f".env encontrado y leído: {'SÍ' if cargado else 'NO ⚠️'}")
-    print(f"OPENAI_API_KEY cargada : {'SÍ' if os.getenv('OPENAI_API_KEY') else 'NO ⚠️'}")
-    print(f"WHATSAPP_TOKEN cargado : {'SÍ' if WHATSAPP_TOKEN else 'NO ⚠️'}")
-    print(f"WHATSAPP_PHONE_ID      : {WHATSAPP_PHONE_ID or 'NO ⚠️'}")
-    if os.getenv("WHATSAPP_VERIFY_TOKEN"):
-        print("WHATSAPP_VERIFY_TOKEN  : definido ✅")
-    else:
-        print("WHATSAPP_VERIFY_TOKEN  : NO definido -> usando valor por defecto ⚠️")
-    print("=" * 60 + "\n")
-
-
-_diagnostico_arranque()
+BASE = Path(__file__).resolve().parent
+CARPETA = BASE / "conocimiento"
 
 MODELO = "gpt-4.1-mini"
-MAX_TURNOS_HISTORIAL = 20
+MAX_TURNOS_HISTORIAL = 20  # mensajes (usuario+asistente) que se guardan por cliente
 
 
 # ===========================
 # CARGAR BASE DE CONOCIMIENTO
+# (una sola vez, al iniciar el servidor)
 # ===========================
 
 def cargar_conocimiento():
@@ -98,10 +82,31 @@ KNOWLEDGE = cargar_conocimiento()
 
 # ===========================
 # SESIONES POR CLIENTE
+# Cada número de WhatsApp tiene su propio historial
+# y su propio "pedido" en construcción.
 # ===========================
 
 sesiones = {}
 sesiones_lock = threading.Lock()
+
+# IDs de mensajes de WhatsApp ya procesados, para ignorar reintentos que
+# Meta manda si el webhook no responde 200 OK lo bastante rápido.
+mensajes_procesados = set()
+mensajes_procesados_lock = threading.Lock()
+MAX_MENSAJES_PROCESADOS = 2000
+
+
+def ya_fue_procesado(mensaje_id):
+    """True si este message_id ya se procesó antes; si no, lo marca como procesado."""
+    if not mensaje_id:
+        return False  # sin id no podemos deduplicar, dejamos pasar
+    with mensajes_procesados_lock:
+        if mensaje_id in mensajes_procesados:
+            return True
+        mensajes_procesados.add(mensaje_id)
+        if len(mensajes_procesados) > MAX_MENSAJES_PROCESADOS:
+            mensajes_procesados.pop()
+        return False
 
 
 def pedido_vacio():
@@ -119,12 +124,26 @@ def pedido_vacio():
     }
 
 
+def info_enviada_vacia():
+    """Rastrea qué bloques de información 'fija' ya se le mandaron a este
+    cliente, para no repetirlos en cada respuesta (datos de pago, colores,
+    ubicación del local)."""
+    return {
+        "datos_pago": False,
+        "colores_disponibles": False,
+        "ubicacion_local": False,
+    }
+
+
 def obtener_sesion(numero):
+    """Devuelve (y crea si no existe) la sesión de un cliente por su número."""
     with sesiones_lock:
         if numero not in sesiones:
             sesiones[numero] = {
                 "messages": [],
                 "pedido": pedido_vacio(),
+                "info_enviada": info_enviada_vacia(),
+                "lock": threading.Lock(),  # serializa mensajes del MISMO cliente
             }
         return sesiones[numero]
 
@@ -134,7 +153,31 @@ def resumen_pedido(pedido):
     return "\n".join(datos) if datos else "Sin datos confirmados."
 
 
-def construir_system_prompt(pedido):
+def resumen_info_enviada(info_enviada):
+    ya_enviados = [k for k, v in info_enviada.items() if v]
+    if not ya_enviados:
+        return "Nada de esto se ha enviado todavía."
+    etiquetas = {
+        "datos_pago": "Datos bancarios para el anticipo",
+        "colores_disponibles": "Lista de colores disponibles",
+        "ubicacion_local": "Ubicación del local (link de Maps)",
+    }
+    return "\n".join(f"- {etiquetas[k]}: YA SE ENVIÓ, no lo repitas" for k in ya_enviados)
+
+
+def detectar_info_enviada(texto_respuesta):
+    """Revisa el texto que el bot está a punto de mandar y marca qué bloques
+    de información fija incluyó, para no repetirlos después."""
+    texto = texto_respuesta.lower()
+    detectado = {
+        "datos_pago": ("5579 0701 5291 2153" in texto_respuesta) or ("clabe" in texto),
+        "colores_disponibles": ("turquesa" in texto and "rosa palo" in texto),
+        "ubicacion_local": "maps.app.goo.gl" in texto,
+    }
+    return detectado
+
+
+def construir_system_prompt(pedido, info_enviada):
     ahora = datetime.now()
     fecha = ahora.strftime("%d/%m/%Y")
     hora = ahora.strftime("%H:%M")
@@ -157,6 +200,11 @@ REGLAS:
 - Si algo no existe en la Base de Conocimiento, indícalo.
 - Responde como una asesora humana por WhatsApp.
 - Sé amable, natural y orientada a cerrar ventas.
+- Responde PRIMERO y de forma directa a lo que el cliente pidió en su último
+  mensaje. No antepongas información que el cliente no pidió (ej. no repitas
+  colores si el cliente está hablando de forma de entrega).
+- Si el cliente dice que ya le diste cierta información antes ("ya me la
+  pasaste", "otra vez?"), discúlpate en una sola frase breve y NO la repitas.
 
 ESTADO ACTUAL DEL PEDIDO DE ESTE CLIENTE:
 
@@ -165,6 +213,18 @@ ESTADO ACTUAL DEL PEDIDO DE ESTE CLIENTE:
 No vuelvas a preguntar datos ya confirmados.
 Pregunta únicamente los datos faltantes.
 
+Cada vez que el cliente confirme o mencione un dato nuevo del pedido
+(producto, cantidad, evento, fecha, colores, tipo de entrega o dirección),
+llama a la función actualizar_pedido con los campos correspondientes para
+guardarlo. Puedes llamarla varias veces en la conversación conforme se vayan
+confirmando más datos. No llames la función con datos que el cliente no ha
+confirmado todavía.
+
+INFORMACIÓN QUE YA SE LE ENVIÓ A ESTE CLIENTE EN MENSAJES ANTERIORES
+(no la repitas salvo que el cliente la pida explícitamente de nuevo):
+
+{resumen_info_enviada(info_enviada)}
+
 BASE DE CONOCIMIENTO:
 
 {KNOWLEDGE}
@@ -172,31 +232,132 @@ BASE DE CONOCIMIENTO:
 
 
 # ===========================
+# HERRAMIENTA (function calling) PARA LLENAR EL PEDIDO
+# ===========================
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "actualizar_pedido",
+            "description": (
+                "Guarda o actualiza los datos del pedido del cliente que ya "
+                "quedaron confirmados en la conversación. Llama esta función "
+                "cada vez que el cliente confirme un dato nuevo. Solo incluye "
+                "los campos que el cliente confirmó en este mensaje o que "
+                "cambiaron; no hace falta mandar todos los campos cada vez."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "producto": {"type": "string", "description": "Producto pedido, ej. 'ositos con jaboncito'"},
+                    "cantidad": {"type": "integer", "description": "Cantidad de piezas pedidas"},
+                    "evento": {"type": "string", "description": "Tipo de evento, ej. 'baby shower', 'XV años'"},
+                    "fecha_evento": {"type": "string", "description": "Fecha o día de entrega acordado"},
+                    "color_toalla": {"type": "string"},
+                    "color_mono": {"type": "string"},
+                    "color_velita": {"type": "string"},
+                    "tipo_entrega": {
+                        "type": "string",
+                        "description": "Uno de: 'local', 'punto_de_entrega', 'domicilio'",
+                    },
+                    "direccion": {"type": "string", "description": "Dirección o municipio para envío a domicilio"},
+                },
+            },
+        },
+    }
+]
+
+
+# ===========================
 # LLAMADA A OPENAI
 # ===========================
+
+def aplicar_actualizacion_pedido(pedido, argumentos_json):
+    """Aplica al dict `pedido` los campos que el modelo mandó vía function calling."""
+    try:
+        datos = json.loads(argumentos_json) if argumentos_json else {}
+    except (json.JSONDecodeError, TypeError):
+        print("⚠️ No se pudo parsear argumentos de actualizar_pedido:", argumentos_json)
+        return
+    for campo, valor in datos.items():
+        if campo in pedido and valor not in (None, ""):
+            pedido[campo] = valor
+    print("📝 Pedido actualizado:", pedido)
+
 
 def preguntar_ia(numero, texto_cliente):
     sesion = obtener_sesion(numero)
     historial = sesion["messages"]
+    pedido = sesion["pedido"]
+    info_enviada = sesion["info_enviada"]
 
     historial.append({"role": "user", "content": texto_cliente})
 
-    system_prompt = construir_system_prompt(sesion["pedido"])
+    system_prompt = construir_system_prompt(pedido, info_enviada)
     mensajes_completos = [{"role": "system", "content": system_prompt}] + historial
 
+    # Recortar historial para no crecer sin límite (igual que en main.py)
     if len(mensajes_completos) > MAX_TURNOS_HISTORIAL + 1:
         mensajes_completos = [mensajes_completos[0]] + mensajes_completos[-MAX_TURNOS_HISTORIAL:]
         sesion["messages"] = mensajes_completos[1:]
+        historial = sesion["messages"]
 
-    r = client.chat.completions.create(
-        model=MODELO,
-        messages=mensajes_completos,
-        temperature=0.4,
-        top_p=0.9,
-        max_tokens=350,
-    )
+    # Loop de function calling: el modelo puede llamar actualizar_pedido
+    # una o varias veces antes de dar la respuesta final en texto.
+    MAX_ITERACIONES_HERRAMIENTAS = 4
+    for _ in range(MAX_ITERACIONES_HERRAMIENTAS):
+        r = client.chat.completions.create(
+            model=MODELO,
+            messages=mensajes_completos,
+            tools=TOOLS,
+            temperature=0.4,
+            top_p=0.9,
+            max_tokens=600,
+        )
 
-    texto = r.choices[0].message.content
+        choice = r.choices[0]
+        mensaje = choice.message
+
+        if choice.finish_reason == "length":
+            print("⚠️ Respuesta cortada por max_tokens, considera subirlo más")
+
+        if mensaje.tool_calls:
+            # Guardamos el mensaje del asistente (con los tool_calls) en la conversación
+            mensajes_completos.append(mensaje.model_dump(exclude_none=True))
+
+            for tool_call in mensaje.tool_calls:
+                if tool_call.function.name == "actualizar_pedido":
+                    aplicar_actualizacion_pedido(pedido, tool_call.function.arguments)
+                    resultado = "ok"
+                else:
+                    resultado = "función desconocida"
+
+                mensajes_completos.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": resultado,
+                })
+
+            # Como el pedido pudo cambiar, refrescamos el system prompt antes
+            # de la siguiente vuelta (por si el resumen del pedido cambia).
+            mensajes_completos[0]["content"] = construir_system_prompt(pedido, info_enviada)
+            continue  # volvemos a llamar al modelo para que dé la respuesta en texto
+
+        # No hubo (más) tool_calls: esta es la respuesta final para el cliente
+        texto = mensaje.content or "Disculpa, ¿me repites tu mensaje? 🙂"
+        historial.append({"role": "assistant", "content": texto})
+
+        # Marca qué bloques de info fija se acaban de enviar, para no repetirlos
+        detectado = detectar_info_enviada(texto)
+        for clave, se_envio in detectado.items():
+            if se_envio:
+                info_enviada[clave] = True
+
+        return texto
+
+    # Si se agotaron las iteraciones de herramientas sin respuesta de texto
+    texto = "Disculpa, dame un segundo y te confirmo 🙂"
     historial.append({"role": "assistant", "content": texto})
     return texto
 
@@ -205,10 +366,7 @@ def preguntar_ia(numero, texto_cliente):
 # ENVIAR MENSAJE POR WHATSAPP
 # ===========================
 
-def enviar_whatsapp(numero, texto, phone_id=None):
-    id_a_usar = phone_id or WHATSAPP_PHONE_ID
-    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{id_a_usar}/messages"
-
+def enviar_whatsapp(numero, texto):
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json",
@@ -220,83 +378,13 @@ def enviar_whatsapp(numero, texto, phone_id=None):
         "text": {"body": texto},
     }
     try:
-        r = requests.post(url, headers=headers, json=data, timeout=15)
+        r = requests.post(GRAPH_URL, headers=headers, json=data, timeout=15)
         if r.status_code >= 400:
             print("⚠️ Error enviando WhatsApp:", r.status_code, r.text)
         return r
     except requests.RequestException as e:
         print("⚠️ Excepción enviando WhatsApp:", e)
         return None
-
-
-# ===========================
-# RUTA RAÍZ (health check)
-# ===========================
-
-@app.route("/", methods=["GET"])
-def home():
-    return "DALIA bot está corriendo ✅", 200
-
-
-# ===========================
-# POLÍTICA DE PRIVACIDAD
-# ===========================
-
-@app.route("/privacidad", methods=["GET"])
-def privacidad():
-    html = """
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <title>Política de Privacidad - Recuerditos Dalia</title>
-        <style>
-            body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #222; }
-            h1 { font-size: 24px; }
-            h2 { font-size: 18px; margin-top: 30px; }
-        </style>
-    </head>
-    <body>
-        <h1>Política de Privacidad</h1>
-        <p><strong>Última actualización:</strong> agosto de 2026</p>
-
-        <p>Recuerditos Dalia ("nosotros") opera un asistente automatizado de ventas
-        a través de WhatsApp ("DALIA"). Esta política explica qué información
-        recopilamos cuando nos escribes y cómo la usamos.</p>
-
-        <h2>Información que recopilamos</h2>
-        <p>Cuando nos escribes por WhatsApp, podemos recopilar:</p>
-        <ul>
-            <li>Tu número de teléfono de WhatsApp.</li>
-            <li>El contenido de los mensajes que nos envías (por ejemplo, tus
-            preguntas, el producto que deseas, colores, fecha del evento y
-            dirección de entrega si nos la proporcionas).</li>
-        </ul>
-
-        <h2>Cómo usamos tu información</h2>
-        <p>Usamos esta información únicamente para:</p>
-        <ul>
-            <li>Responder tus preguntas sobre nuestros productos y precios.</li>
-            <li>Procesar y dar seguimiento a tu pedido.</li>
-            <li>Coordinar la entrega de tu compra.</li>
-        </ul>
-        <p>Para generar respuestas, tus mensajes se procesan mediante un
-        servicio de inteligencia artificial de terceros (OpenAI), únicamente
-        con el fin de generar una respuesta conversacional. No vendemos ni
-        compartimos tu información con terceros para fines publicitarios.</p>
-
-        <h2>Conservación de datos</h2>
-        <p>Conservamos el historial de conversación mientras sea necesario
-        para darte seguimiento a tu pedido. Puedes solicitar la eliminación
-        de tus datos escribiéndonos directamente por WhatsApp.</p>
-
-        <h2>Contacto</h2>
-        <p>Si tienes dudas sobre esta política o quieres solicitar la
-        eliminación de tus datos, contáctanos directamente por WhatsApp.</p>
-    </body>
-    </html>
-    """
-    return html, 200
 
 
 # ===========================
@@ -318,12 +406,26 @@ def verify_webhook():
 # WEBHOOK: MENSAJES ENTRANTES
 # ===========================
 
+def procesar_mensaje_en_fondo(numero, texto_cliente):
+    """Corre en un hilo aparte para no bloquear la respuesta al webhook de Meta."""
+    sesion = obtener_sesion(numero)
+    # Serializa mensajes del MISMO cliente (si llegan muy pegados) sin
+    # bloquear el procesamiento de otros clientes.
+    with sesion["lock"]:
+        try:
+            respuesta = preguntar_ia(numero, texto_cliente)
+        except Exception as e:
+            print("⚠️ Error llamando a OpenAI:", e)
+            respuesta = "Disculpa, tuve un problema técnico. ¿Me puedes repetir tu mensaje? 🙂"
+
+        # Pequeña espera para que no se sienta instantáneo/robótico
+        time.sleep(random.uniform(2, 4))
+        enviar_whatsapp(numero, respuesta)
+
+
 @app.route("/webhook", methods=["POST"])
 def handle_message():
     data = request.get_json(silent=True) or {}
-
-    print("\n🔔 POST /webhook recibido")
-    print("PAYLOAD CRUDO:", data)
 
     try:
         entry = data["entry"][0]
@@ -331,45 +433,42 @@ def handle_message():
         valor = cambio["value"]
         mensajes = valor.get("messages")
 
+        # Meta también manda notificaciones de "estado" (entregado, leído, etc.)
+        # que no traen "messages". Las ignoramos sin error.
         if not mensajes:
-            print("ℹ️ Es una notificación de estado (no trae 'messages'), se ignora.")
             return jsonify({"status": "sin mensajes nuevos"}), 200
 
         mensaje = mensajes[0]
         numero = mensaje["from"]
         tipo = mensaje.get("type")
-        phone_id_destino = valor.get("metadata", {}).get("phone_number_id")
+        mensaje_id = mensaje.get("id")
 
-        print(f"📩 Mensaje de tipo '{tipo}' recibido del número: {numero}")
-        print(f"📱 phone_number_id que recibió el mensaje: {phone_id_destino}")
+        # Si Meta reintentó el webhook (mismo message id), lo ignoramos.
+        if ya_fue_procesado(mensaje_id):
+            print(f"🔁 Mensaje duplicado ignorado: {mensaje_id}")
+            return jsonify({"status": "duplicado ignorado"}), 200
 
         if tipo != "text":
-            print("⚠️ No es texto, se manda respuesta genérica.")
-            enviar_whatsapp(
-                numero,
-                "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?",
-                phone_id=phone_id_destino,
-            )
+            threading.Thread(
+                target=enviar_whatsapp,
+                args=(numero, "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?"),
+                daemon=True,
+            ).start()
             return jsonify({"status": "tipo de mensaje no soportado"}), 200
 
         texto_cliente = mensaje["text"]["body"]
-        print(f"💬 Texto del cliente: {texto_cliente}")
 
-        print("🤖 Llamando a OpenAI...")
-        respuesta = preguntar_ia(numero, texto_cliente)
-        print(f"✅ OpenAI respondió: {respuesta[:200]}")
-
-        time.sleep(random.uniform(2, 4))
-
-        print(f"📤 Enviando respuesta por WhatsApp a {numero} usando phone_id={phone_id_destino}")
-        resultado_envio = enviar_whatsapp(numero, respuesta, phone_id=phone_id_destino)
-        if resultado_envio is not None:
-            print(f"📬 Respuesta de la API de WhatsApp: {resultado_envio.status_code} - {resultado_envio.text}")
+        # Procesamos en background y respondemos 200 OK de inmediato a Meta,
+        # para reducir el riesgo de que Meta reintente el webhook por timeout.
+        threading.Thread(
+            target=procesar_mensaje_en_fondo,
+            args=(numero, texto_cliente),
+            daemon=True,
+        ).start()
 
     except (KeyError, IndexError, TypeError) as e:
-        print("❌ Evento sin mensaje de texto reconocible o payload inesperado:", e)
-    except Exception as e:
-        print("❌ ERROR INESPERADO procesando el mensaje:", repr(e))
+        # Payload inesperado (ej. notificación de estado) -> no truena el servidor
+        print("Evento sin mensaje de texto reconocible:", e)
 
     return jsonify({"status": "ok"}), 200
 

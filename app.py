@@ -378,12 +378,15 @@ def enviar_whatsapp(numero, texto):
         "text": {"body": texto},
     }
     try:
+        print(f"➡️ POST {GRAPH_URL}")
         r = requests.post(GRAPH_URL, headers=headers, json=data, timeout=15)
+        print(f"⬅️ Status: {r.status_code}")
+        print(f"⬅️ Body: {r.text}")
         if r.status_code >= 400:
-            print("⚠️ Error enviando WhatsApp:", r.status_code, r.text)
+            print("⚠️ Error enviando WhatsApp")
         return r
     except requests.RequestException as e:
-        print("⚠️ Excepción enviando WhatsApp:", e)
+        print("❌ Excepción enviando WhatsApp:", repr(e))
         return None
 
 
@@ -408,19 +411,29 @@ def verify_webhook():
 
 def procesar_mensaje_en_fondo(numero, texto_cliente):
     """Corre en un hilo aparte para no bloquear la respuesta al webhook de Meta."""
+    print("="*70)
+    print(f"🚀 Procesando mensaje de {numero}")
+    print(f"💬 Texto recibido: {texto_cliente}")
     sesion = obtener_sesion(numero)
-    # Serializa mensajes del MISMO cliente (si llegan muy pegados) sin
-    # bloquear el procesamiento de otros clientes.
     with sesion["lock"]:
         try:
+            print("🧠 Consultando OpenAI...")
             respuesta = preguntar_ia(numero, texto_cliente)
+            print("✅ Respuesta generada")
+            print(respuesta[:300])
         except Exception as e:
-            print("⚠️ Error llamando a OpenAI:", e)
+            print("❌ Error llamando a OpenAI:", repr(e))
             respuesta = "Disculpa, tuve un problema técnico. ¿Me puedes repetir tu mensaje? 🙂"
-
-        # Pequeña espera para que no se sienta instantáneo/robótico
-        time.sleep(random.uniform(2, 4))
-        enviar_whatsapp(numero, respuesta)
+        time.sleep(random.uniform(2,4))
+        print("📤 Enviando respuesta a WhatsApp...")
+        r=enviar_whatsapp(numero,respuesta)
+        if r is not None:
+            print(f"📨 WhatsApp respondió: {r.status_code}")
+            print(r.text)
+        else:
+            print("❌ enviar_whatsapp devolvió None")
+        print("🏁 Fin procesamiento")
+        print("="*70)
 
 
 @app.route("/webhook", methods=["POST"])

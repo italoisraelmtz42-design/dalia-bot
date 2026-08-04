@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -31,9 +31,66 @@ GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_ID}
 
 BASE = Path(__file__).resolve().parent
 CARPETA = BASE / "conocimiento"
+CARPETA_IMAGENES = BASE / "imagenes"
 
 MODELO = "gpt-4.1-mini"
 MAX_TURNOS_HISTORIAL = 20  # mensajes (usuario+asistente) que se guardan por cliente
+
+# URL pública de tu servicio en Render (para que WhatsApp pueda descargar las
+# imágenes). Si algún día cambia el dominio, solo actualiza la variable de
+# entorno PUBLIC_BASE_URL en Render, sin tocar código.
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://dalia-bot.onrender.com")
+
+# ===========================
+# CATÁLOGO DE FOTOS DE PRODUCTO
+# Se arma AUTOMÁTICAMENTE leyendo lo que haya en la carpeta imagenes/.
+# Para agregar un producto nuevo solo tienes que:
+#   1. Poner tu foto (ya con la info escrita encima) dentro de imagenes/
+#      Ejemplo: imagenes/osito_toalla_jabon.jpg
+#   2. Subir el cambio a GitHub. Render redespliega solo y el bot ya
+#      puede mandar esa foto. No hace falta tocar este archivo.
+#
+# La "clave" del producto (con la que el modelo identifica la foto) sale
+# del nombre del archivo sin extensión, ej: "osito_toalla_jabon.jpg" ->
+# clave "osito_toalla_jabon". Usa nombres de archivo cortos, sin espacios
+# ni acentos, con guiones bajos.
+# ===========================
+
+EXTENSIONES_IMAGEN_VALIDAS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def cargar_catalogo_imagenes():
+    catalogo = {}
+    if not CARPETA_IMAGENES.exists():
+        print(f"⚠️ No existe la carpeta {CARPETA_IMAGENES}, no habrá fotos de producto")
+        return catalogo
+
+    archivos = sorted(CARPETA_IMAGENES.iterdir())
+    print("\n" + "=" * 60)
+    print("CARGANDO CATÁLOGO DE FOTOS DE PRODUCTO...")
+    print("=" * 60)
+    for archivo in archivos:
+        if archivo.is_file() and archivo.suffix.lower() in EXTENSIONES_IMAGEN_VALIDAS:
+            clave = archivo.stem.strip().lower().replace(" ", "_")
+            nombre_mostrar = archivo.stem.replace("_", " ").replace("-", " ").strip().capitalize()
+            catalogo[clave] = {
+                "nombre_mostrar": nombre_mostrar,
+                "archivo": archivo.name,
+            }
+            print(f"✅ {clave}  ->  {archivo.name}")
+    print("TOTAL DE FOTOS DE PRODUCTO:", len(catalogo))
+    print("=" * 60 + "\n")
+    return catalogo
+
+
+CATALOGO_IMAGENES = cargar_catalogo_imagenes()
+
+
+def url_imagen_producto(clave_producto):
+    info = CATALOGO_IMAGENES.get(clave_producto)
+    if not info:
+        return None
+    return f"{PUBLIC_BASE_URL}/imagenes/{info['archivo']}"
 
 
 # ===========================
@@ -143,6 +200,7 @@ def obtener_sesion(numero):
                 "messages": [],
                 "pedido": pedido_vacio(),
                 "info_enviada": info_enviada_vacia(),
+                "imagenes_enviadas": set(),  # claves de CATALOGO_IMAGENES ya mandadas
                 "lock": threading.Lock(),  # serializa mensajes del MISMO cliente
             }
         return sesiones[numero]
@@ -175,6 +233,33 @@ def detectar_info_enviada(texto_respuesta):
         "ubicacion_local": "maps.app.goo.gl" in texto,
     }
     return detectado
+
+
+def seccion_fotos_producto(catalogo_imagenes):
+    if not catalogo_imagenes:
+        return ""  # no hay fotos cargadas todavía, no mencionamos la herramienta
+
+    lista = "\n".join(
+        f"- \"{clave}\" -> {info['nombre_mostrar']}"
+        for clave, info in catalogo_imagenes.items()
+    )
+    return f"""
+Cuando el cliente muestre interés claro en ver cómo se ve un producto
+específico (pregunta "cómo se ve", "tienes foto", muestra intención de
+comprar ese producto, o es la primera vez que pregunta por ese producto en
+la conversación), llama a la función mostrar_foto_producto con la clave del
+producto correspondiente. No la llames en cada mensaje ni para productos que
+el cliente no mencionó. Si ya le mandaste la foto de ese producto antes en
+esta conversación, no la vuelvas a mandar salvo que el cliente la pida de
+nuevo explícitamente.
+
+FOTOS DE PRODUCTO DISPONIBLES (clave -> producto):
+{lista}
+
+Solo puedes mostrar fotos de estas claves. Si el cliente pregunta por un
+producto que no está en esta lista, no llames la función; simplemente
+indícale que por ahora no tienes foto de ese producto.
+"""
 
 
 def construir_system_prompt(pedido, info_enviada):
@@ -219,6 +304,8 @@ llama a la función actualizar_pedido con los campos correspondientes para
 guardarlo. Puedes llamarla varias veces en la conversación conforme se vayan
 confirmando más datos. No llames la función con datos que el cliente no ha
 confirmado todavía.
+
+{seccion_fotos_producto(catalogo_imagenes=CATALOGO_IMAGENES)}
 
 INFORMACIÓN QUE YA SE LE ENVIÓ A ESTE CLIENTE EN MENSAJES ANTERIORES
 (no la repitas salvo que el cliente la pida explícitamente de nuevo):
@@ -265,8 +352,35 @@ TOOLS = [
                 },
             },
         },
-    }
+    },
 ]
+
+# Solo agregamos la herramienta de fotos si de verdad hay imágenes cargadas
+# en la carpeta imagenes/ (un enum vacío haría fallar la llamada a OpenAI).
+if CATALOGO_IMAGENES:
+    TOOLS.append({
+        "type": "function",
+        "function": {
+            "name": "mostrar_foto_producto",
+            "description": (
+                "Manda por WhatsApp la foto de un producto del catálogo. "
+                "Úsala cuando el cliente muestre interés claro en ver un "
+                "producto específico. No la llames repetidamente para el "
+                "mismo producto en la misma conversación."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "producto": {
+                        "type": "string",
+                        "enum": list(CATALOGO_IMAGENES.keys()),
+                        "description": "Clave del producto del que se debe mandar la foto",
+                    },
+                },
+                "required": ["producto"],
+            },
+        },
+    })
 
 
 # ===========================
@@ -330,6 +444,27 @@ def preguntar_ia(numero, texto_cliente):
                 if tool_call.function.name == "actualizar_pedido":
                     aplicar_actualizacion_pedido(pedido, tool_call.function.arguments)
                     resultado = "ok"
+
+                elif tool_call.function.name == "mostrar_foto_producto":
+                    try:
+                        args = json.loads(tool_call.function.arguments or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    clave = args.get("producto")
+                    imagenes_enviadas = sesion["imagenes_enviadas"]
+
+                    if clave in imagenes_enviadas:
+                        resultado = "ya se le mandó esta foto antes en la conversación, no la repitas"
+                    else:
+                        url_imagen = url_imagen_producto(clave)
+                        if url_imagen:
+                            nombre_mostrar = CATALOGO_IMAGENES[clave]["nombre_mostrar"]
+                            enviar_whatsapp_imagen(numero, url_imagen, caption=nombre_mostrar)
+                            imagenes_enviadas.add(clave)
+                            resultado = "imagen enviada correctamente"
+                        else:
+                            resultado = f"no hay foto disponible para '{clave}', no ofrezcas una foto de esto"
+
                 else:
                     resultado = "función desconocida"
 
@@ -378,16 +513,47 @@ def enviar_whatsapp(numero, texto):
         "text": {"body": texto},
     }
     try:
-        print(f"➡️ POST {GRAPH_URL}")
         r = requests.post(GRAPH_URL, headers=headers, json=data, timeout=15)
-        print(f"⬅️ Status: {r.status_code}")
-        print(f"⬅️ Body: {r.text}")
         if r.status_code >= 400:
-            print("⚠️ Error enviando WhatsApp")
+            print("⚠️ Error enviando WhatsApp:", r.status_code, r.text)
         return r
     except requests.RequestException as e:
-        print("❌ Excepción enviando WhatsApp:", repr(e))
+        print("⚠️ Excepción enviando WhatsApp:", e)
         return None
+
+
+def enviar_whatsapp_imagen(numero, image_url, caption=""):
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": numero,
+        "type": "image",
+        "image": {"link": image_url, "caption": caption},
+    }
+    try:
+        r = requests.post(GRAPH_URL, headers=headers, json=data, timeout=15)
+        if r.status_code >= 400:
+            print("⚠️ Error enviando imagen por WhatsApp:", r.status_code, r.text)
+        else:
+            print(f"📤 Imagen enviada a {numero}: {image_url}")
+        return r
+    except requests.RequestException as e:
+        print("⚠️ Excepción enviando imagen por WhatsApp:", e)
+        return None
+
+
+# ===========================
+# SERVIR LAS FOTOS DE PRODUCTO
+# WhatsApp necesita descargar la imagen de una URL pública para poder
+# mandarla; esta ruta expone lo que hay en la carpeta imagenes/.
+# ===========================
+
+@app.route("/imagenes/<path:nombre_archivo>")
+def servir_imagen_producto(nombre_archivo):
+    return send_from_directory(CARPETA_IMAGENES, nombre_archivo)
 
 
 # ===========================
@@ -411,10 +577,13 @@ def verify_webhook():
 
 def procesar_mensaje_en_fondo(numero, texto_cliente):
     """Corre en un hilo aparte para no bloquear la respuesta al webhook de Meta."""
-    print("="*70)
+    print("=" * 70)
     print(f"🚀 Procesando mensaje de {numero}")
     print(f"💬 Texto recibido: {texto_cliente}")
+
     sesion = obtener_sesion(numero)
+    # Serializa mensajes del MISMO cliente (si llegan muy pegados) sin
+    # bloquear el procesamiento de otros clientes.
     with sesion["lock"]:
         try:
             print("🧠 Consultando OpenAI...")
@@ -424,16 +593,18 @@ def procesar_mensaje_en_fondo(numero, texto_cliente):
         except Exception as e:
             print("❌ Error llamando a OpenAI:", repr(e))
             respuesta = "Disculpa, tuve un problema técnico. ¿Me puedes repetir tu mensaje? 🙂"
-        time.sleep(random.uniform(2,4))
+
+        # Pequeña espera para que no se sienta instantáneo/robótico
+        time.sleep(random.uniform(2, 4))
         print("📤 Enviando respuesta a WhatsApp...")
-        r=enviar_whatsapp(numero,respuesta)
+        r = enviar_whatsapp(numero, respuesta)
         if r is not None:
             print(f"📨 WhatsApp respondió: {r.status_code}")
-            print(r.text)
         else:
             print("❌ enviar_whatsapp devolvió None")
-        print("🏁 Fin procesamiento")
-        print("="*70)
+
+    print("🏁 Fin procesamiento")
+    print("=" * 70)
 
 
 @app.route("/webhook", methods=["POST"])

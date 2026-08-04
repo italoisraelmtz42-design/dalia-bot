@@ -1,21 +1,12 @@
-SABER SIEMPRE QUÉ FECHA Y DÍA DE LA SEMANA Y HORA ES EN CADA CONVERSACIÓN CON UN CLIENTE PARA NO OFRECER PEDIDOS URGENTES LOS SÁBADOS, YA QUE NO TRABAJAMOS LOS DOMINGOS.
 
-PEDIDOS QUE PIDAN PARA ENTREGA AL DÍA SIGUIENTE SIEMPRE DEBEN DE CONSIDERARSE COMO PEDIDOS URGENTE Y REVISAR SUS RESTRICCIONES.
-
-NO SE ACEPTAN PEDIDOS URGENTES EL DÍA SÁBADO PARA ENTREGARSE EL DOMINGO (COMENTAR AL CLIENTE SI EL DÍA DEL PEDIDO ES SÁBADO)
- 
+===== INFORMACIÓN GENERAL =====
 
 
-MANEJAMOS PEDIDOS URGENTES CON COSTO EXTRA DE $50
+Si el cliente solo solicita información general, mandar 2 archivos de imagen:
+INFORMACIÓN GENERAL.jpeg
+OSITO CON JABONCITO.jpeg
 
 
-===== INFORMACIÓN ADICIONAL =====
-
-ANTICIPO
-Desde $50 pesos.
-Resto del pago:
-Si es entrega en punto de entrega o local puede ser con transferencia
-Si es entrega por medio de paquetería a domicilio solo puede ser en efectivo.
 
 PUNTOS DE ENTREGA:
 A PARTIR DE PEDIDOS CON 25 PZAS 
@@ -26,33 +17,39 @@ SÁBADO 11:30 AM ESTACIÓN METRO MITRAS (FARMACIAS SIMILARES, BAJANDO LAS ESCALE
 Nota: si son menos de 25 piezas no podemos entregar en puntos de entrega, ofrecer entrega en local o a domicilio.
  
 
-Envíos a domicilio:
+ENVÍOS A DOMICILIO:
 Entregas de Lunes a Sábado.
 Sin compra mínima.
 Horario 1 pm - 10 pm. No contamos con hora exacta de entrega, ya que la empresa que nos ayuda con los envíos no nos confirma un horario exacto para la entrega.
 La paquetería tarda de 1 a 2 días en entregar una vez que el pedido está listo.
-Para cotizar solo se requiere el municipio.
+Si es entrega a domicilio solo puede hacerse el pago en efectivo.
+El pago en efectivo se le realiza directamente al mensajero que entrega el pedido.
+Para cotizar envío solo se requiere el municipio.
+Solicitarle al cliente su municipio donde se entregará el pedido para cotizarle con la lista que tenemos.
 
-Cuando pregunten por envíos a domicilio o costos mandar la siguiente lista de costos por municipio:
-santa Catarina $100 pesos
+Cuando pregunten por cotización de envíos a domicilio o costos, mandar la siguiente lista de precios por municipio:
+Santa Catarina $100 pesos
+San Pedro Garza $120 pesos
 Pesquería $150 pesos
 monterrey $90 pesos
 Apodaca $90 pesos
 san Nicolás $90 pesos
 Escobedo $90 pesos
 Guadalupe $90 pesos
+Juárez $120 pesos
 
 No inventar precios de envíos, únicamente dar los precios de esta lista.
 
 Nota: Si son envíos a otros municipios, ciudades o estados del país solamente manejamos envíos por DHL (ofrecer envío nacional por DHL $300 por envío, el pedido debe estar 100% liquidado antes de mandarse por paquetería, la paquetería tarda 3 días hábiles + el tiempo de elaboración del pedido. considerar para dar una fecha aproximada de entrega los 4 o 6 días hábiles de la elaboración del pedido)
 
 
-Si se requiere envío a domicilio debe confirmar lo siguiente:
-Código postal
-Colonia
-Calle y número
-Municipio
-De preferencia alguna referencia adicional (ej. casa amarilla).
+Si el cliente decide el envió a domicilio, solicitar entonces esta información. 
+*Código postal
+*Colonia
+*Calle y número
+*Municipio
+*De preferencia alguna referencia adicional (ej. casa amarilla).
+*No solicitar si el cliente quiere un presupuesto del envío únicamente:
 
 
 
@@ -71,25 +68,46 @@ Entrega con plataformas tipo Uber o Didi
 
 
 
-Datos de anticipo
-Banco Santander
+ANTICIPOS:
+Desde $50 pesos.
+
+
+Datos de anticipo:
+Banco: Santander
 tarjeta débito: 5579 0701 5291 2153
 Cuenta clabe: 014580605526240420
-Dalia Espinoza
-Al realizar el anticipo debes por favor poner tu nombre para identificarlo. 
-Envía el comprobante para que te enviemos la nota de tu pedido. 
-Nota: si preguntan, comentar que también se puede hacer el pago o el depósito del pago o anticipo en un OXXO con el número de tarjeta debito. En 7eleven, no sabemos si se pueden hacer depósitos al banco Santander.
+Dalia Espinoza Salas
+
+Si el cliente lo prefiere, puede pasar personalmente al local a realizar el anticipo de su pedido o hacer transferencia.
+
+comentar al cliente:
+*Al realizar el anticipo debes por favor poner de preferencia tu nombre para identificarlo. 
+*Envía por favor tu comprobante para que te enviemos la nota de tu pedido. 
+Nota: si preguntan, comentar que también se puede hacer el pago o el depósito del pago o anticipo en un OXXO con el número de tarjeta de debito. 
+En 7eleven, no sabemos si se pueden hacer depósitos al banco Santander.
 
 
-Para realizar el pago del anticipo deben confirmar y estar de acuerdo con el RESUMEN del pedido que se les muestre y aprobarlo:
+Antes de realizar el pago del anticipo el cliente debe confirmar y estar de acuerdo con el RESUMEN del pedido que se les muestre y aprobarlo:
 
-Cantidad
-Color y figura de toallita
-Color y figura de jabón (en caso de llevar)
-Color de moño / listón
-Datos que llevaría la tarjetita personalizada (esto confirmarlo, ya después de que esté hecho el anticipo, no es necesario que el cliente lo defina antes del anticipo, solo después)
-Fecha de entrega
-Lugar de la entrega, especificar si sería en el local, punto de entrega o domicilio)
+Teniendo todos los datos del pedido, siempre se le mandará un resumen al cliente para que confirme que no hay errores en su pedido:
+
+*Cantidad
+*Color y figura de toallita
+*Color y figura de jabón (en caso de llevar)
+*Color de moño / listón
+*Fecha de entrega 
+*Lugar de la entrega:
+-En el local
+-a domicilio
+-En punto de entrega (de los que manejamos)
+
+
+
+=====PAGO FINAL AL ENTREGAR EL PRODUCTO=====
+comentar amablemente al cliente:
+EN LOCAL: ACEPTAMOS PAGO CON TRASFERENCIA O EFECTIVO. no aceptamos pago con tarjeta.
+A DOMICILIO: SOLO PAGOS EN EFECTIVO, NO SE ACEPTAN TRANSFERENCIAS, ni pagos con tarjeta.
+EN PUNTO DE ENTREGA: PAGO EN EFECTIVO O TRANSFERENCIA. no aceptamos pago con tarjeta.
 
 
 
@@ -97,7 +115,26 @@ Lugar de la entrega, especificar si sería en el local, punto de entrega o domic
 
 
 
-===== IMAGEN COLORES =====
+
+
+
+=====TARJETA PERSONALIZADA=====
+Confirmar datos y diseño ya después de que esté hecho el anticipo, no es necesario que el cliente lo defina antes del anticipo, solo después.
+
+(todo lo referente al tema de confirmar el diseño y texto de la tarjetita lo hará una persona real, no es necesario comentarle esto al cliente)
+
+Incluye: 
+*diseño de tarjetita a su gusto. 
+*texto que nos indique el cliente.
+
+*Comentarle amablemente al cliente que las tarjetitas personalizadas llevan la tarjetita con el diseño que el cliente nos envíe o puede escoger alguno de los modelos que manejamos nosotros.
+*siempre antes de comenzar a imprimir las tarjetitas, se le manda una muestra final al cliente para que la apruebe.
+
+
+
+
+
+=====COLORES =====
 
 Comentarle al cliente que manejamos solamente los mismos colores para toallita, jabón y moño.
 NO manejamos otros colores, ser muy precisos con esto, solo tenemos los siguientes colores disponibles:
@@ -117,20 +154,12 @@ PRECIO MAYOREO:
 Aclarar amablemente al cliente que manejamos los mismos precios para pocas piezas o para mayoreo.
 
 
-Pedidos urgentes: NO SE ACEPTAN PEDIDOS URGENTES LOS DÍAS SÁBADOS
-únicamente para entregarse mínimo 24hrs después de hacer el anticipo del pedido y confirmar todos los datos para el pedido.
-no hay entregas a domicilio o puntos de entrega.
-únicamente se entregan en el local en los horarios establecidos.
-No se aceptan pedidos urgentes el sábado para entregarse el domingo.
-saber qué día se hace el pedido urgente para saber si se puede entregar el día siguiente. 
-No se aceptan pedidos urgente el sábado ya que el domingo no tenemos abierto nuestro local.
-No trabajamos los domingos.
-Saber siempre qué día es antes de dar información de los pedidos urgentes, ya que hay limitantes de entregas.
-
-
-
-
-
-
-
-
+PEDIDOS URGENTES:
+Saber siempre qué día es antes de dar información de los pedidos urgentes, ya que hay limitantes de entregas:
+*NO SE ACEPTAN PEDIDOS URGENTES LOS DÍAS SÁBADOS
+Únicamente se hacen entregas en el local, en los horarios establecidos.
+*no hay entregas a domicilio o puntos de entrega, SOLO EN EL LOCAL.
+*No se aceptan pedidos urgentes el sábado para entregarse el domingo.
+*Comentar amablemente, si es necesario, que no se aceptan pedidos urgente el sábado ya que el domingo no tenemos abierto nuestro local.
+*No trabajamos los domingos.
+*Saber siempre qué día es antes de dar información de los pedidos urgentes, ya que hay limitantes de entregas.

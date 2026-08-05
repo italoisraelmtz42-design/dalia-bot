@@ -88,6 +88,36 @@ def cargar_catalogo_imagenes():
 
 CATALOGO_IMAGENES = cargar_catalogo_imagenes()
 
+# ===========================
+# CATÁLOGO GENERAL EN PDF
+# Para actualizar el catálogo completo (el PDF con todos los productos):
+#   1. Sube el PDF nuevo a la carpeta catalogo/ en tu repo (reemplaza el
+#      anterior o bórralo primero si le cambias de nombre).
+#   2. Commit + push. Render redespliega solo.
+# El bot comparte el LINK del PDF por texto cuando el cliente pide ver el
+# catálogo completo (no manda el archivo en sí, para no ser pesado).
+# ===========================
+
+CARPETA_CATALOGO = BASE / "catalogo"
+
+
+def encontrar_catalogo_pdf():
+    if not CARPETA_CATALOGO.exists():
+        print(f"⚠️ No existe la carpeta {CARPETA_CATALOGO}, no habrá link de catálogo")
+        return None
+    pdfs = sorted(CARPETA_CATALOGO.glob("*.pdf"))
+    if not pdfs:
+        print(f"⚠️ La carpeta {CARPETA_CATALOGO} no tiene ningún PDF todavía")
+        return None
+    print(f"✅ Catálogo PDF encontrado: {pdfs[0].name}")
+    return pdfs[0].name
+
+
+NOMBRE_CATALOGO_PDF = encontrar_catalogo_pdf()
+URL_CATALOGO_PDF = (
+    f"{PUBLIC_BASE_URL}/catalogo/{NOMBRE_CATALOGO_PDF}" if NOMBRE_CATALOGO_PDF else None
+)
+
 
 def url_imagen_producto(clave_producto):
     info = CATALOGO_IMAGENES.get(clave_producto)
@@ -187,11 +217,12 @@ def pedido_vacio():
 def info_enviada_vacia():
     """Rastrea qué bloques de información 'fija' ya se le mandaron a este
     cliente, para no repetirlos en cada respuesta (datos de pago, colores,
-    ubicación del local)."""
+    ubicación del local, link del catálogo)."""
     return {
         "datos_pago": False,
         "colores_disponibles": False,
         "ubicacion_local": False,
+        "catalogo_pdf": False,
     }
 
 
@@ -215,13 +246,14 @@ def resumen_pedido(pedido):
 
 
 def resumen_info_enviada(info_enviada):
-    ya_enviados = [k for k, v in info_enviada.items() if v]
+    ya_enviados = [k for k in info_enviada if info_enviada[k]]
     if not ya_enviados:
         return "Nada de esto se ha enviado todavía."
     etiquetas = {
         "datos_pago": "Datos bancarios para el anticipo",
         "colores_disponibles": "Lista de colores disponibles",
         "ubicacion_local": "Ubicación del local (link de Maps)",
+        "catalogo_pdf": "Link del catálogo completo en PDF",
     }
     return "\n".join(f"- {etiquetas[k]}: YA SE ENVIÓ, no lo repitas" for k in ya_enviados)
 
@@ -234,6 +266,7 @@ def detectar_info_enviada(texto_respuesta):
         "datos_pago": ("5579 0701 5291 2153" in texto_respuesta) or ("clabe" in texto),
         "colores_disponibles": ("turquesa" in texto and "rosa palo" in texto),
         "ubicacion_local": "maps.app.goo.gl" in texto,
+        "catalogo_pdf": bool(URL_CATALOGO_PDF) and (URL_CATALOGO_PDF.lower() in texto),
     }
     return detectado
 
@@ -274,6 +307,24 @@ def sumar_dias_habiles(fecha_inicio, dias_habiles):
         if fecha.weekday() != 6:  # 6 = domingo
             dias_sumados += 1
     return fecha
+
+
+def seccion_catalogo_pdf():
+    if not URL_CATALOGO_PDF:
+        return ""  # no hay catálogo PDF cargado todavía
+
+    return f"""
+Si el cliente pide ver el CATÁLOGO COMPLETO, todos los productos, o el
+catálogo general (no un producto específico), comparte este link donde
+puede verlo completo en PDF:
+
+{URL_CATALOGO_PDF}
+
+No mandes el catálogo completo si el cliente solo pregunta por UN producto
+en específico (para eso usa mostrar_foto_producto). No repitas este link si
+ya se lo compartiste antes en esta conversación, salvo que lo pida de nuevo
+explícitamente.
+"""
 
 
 def construir_system_prompt(pedido, info_enviada):
@@ -342,6 +393,8 @@ confirmando más datos. No llames la función con datos que el cliente no ha
 confirmado todavía.
 
 {seccion_fotos_producto(catalogo_imagenes=CATALOGO_IMAGENES)}
+
+{seccion_catalogo_pdf()}
 
 INFORMACIÓN QUE YA SE LE ENVIÓ A ESTE CLIENTE EN MENSAJES ANTERIORES
 (no la repitas salvo que el cliente la pida explícitamente de nuevo):
@@ -590,6 +643,11 @@ def enviar_whatsapp_imagen(numero, image_url, caption=""):
 @app.route("/imagenes/<path:nombre_archivo>")
 def servir_imagen_producto(nombre_archivo):
     return send_from_directory(CARPETA_IMAGENES, nombre_archivo)
+
+
+@app.route("/catalogo/<path:nombre_archivo>")
+def servir_catalogo_pdf(nombre_archivo):
+    return send_from_directory(CARPETA_CATALOGO, nombre_archivo)
 
 
 # ===========================

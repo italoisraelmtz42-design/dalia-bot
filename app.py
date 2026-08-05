@@ -4,7 +4,10 @@ import time
 import random
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+ZONA_HORARIA_NEGOCIO = ZoneInfo("America/Monterrey")
 
 import requests
 from flask import Flask, request, jsonify, send_from_directory
@@ -262,19 +265,34 @@ indícale que por ahora no tienes foto de ese producto.
 """
 
 
+def sumar_dias_habiles(fecha_inicio, dias_habiles):
+    """Suma días hábiles a una fecha, saltando domingos (el local no abre domingos)."""
+    fecha = fecha_inicio
+    dias_sumados = 0
+    while dias_sumados < dias_habiles:
+        fecha += timedelta(days=1)
+        if fecha.weekday() != 6:  # 6 = domingo
+            dias_sumados += 1
+    return fecha
+
+
 def construir_system_prompt(pedido, info_enviada):
-    ahora = datetime.now()
+    ahora = datetime.now(ZONA_HORARIA_NEGOCIO)
     fecha = ahora.strftime("%d/%m/%Y")
     hora = ahora.strftime("%H:%M")
 
     dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     dia_semana = dias[ahora.weekday()]
 
+    fecha_minima = sumar_dias_habiles(ahora.date(), 4)
+    fecha_maxima = sumar_dias_habiles(ahora.date(), 6)
+    dia_semana_minima = dias[fecha_minima.weekday()]
+
     return f"""
 Eres DALIA, asesora de ventas de Recuerditos Dalia.
 
 Hoy es {dia_semana} {fecha}.
-La hora actual es {hora}.
+La hora actual es {hora} (hora de Monterrey, México).
 
 Toda la información oficial está en la Base de Conocimiento.
 
@@ -290,6 +308,24 @@ REGLAS:
   colores si el cliente está hablando de forma de entrega).
 - Si el cliente dice que ya le diste cierta información antes ("ya me la
   pasaste", "otra vez?"), discúlpate en una sola frase breve y NO la repitas.
+
+REGLAS DE FECHAS Y PEDIDOS URGENTES (usa SIEMPRE la fecha de hoy de arriba,
+{dia_semana} {fecha}, para todo cálculo; nunca calcules fechas por tu cuenta):
+
+- El tiempo normal de elaboración de un pedido es de 4 a 6 días hábiles.
+- La fecha de entrega MÁS PRÓXIMA posible para un pedido NORMAL (no urgente)
+  es el {dia_semana_minima} {fecha_minima.strftime('%d/%m/%Y')}. Un pedido
+  normal podría tardar hasta el {fecha_maxima.strftime('%d/%m/%Y')}.
+- Si el cliente pide una fecha de entrega ANTES de {fecha_minima.strftime('%d/%m/%Y')},
+  eso es un PEDIDO URGENTE. Para pedidos urgentes aplican estas restricciones:
+  - Solo se puede entregar EN EL LOCAL (nunca a domicilio ni en puntos de entrega).
+  - No se aceptan pedidos urgentes los días sábado.
+  - No se aceptan pedidos urgentes para entregarse en domingo (no abrimos domingos).
+  - Avisa al cliente de estas restricciones ANTES de confirmar el pedido, de
+    forma amable, y no confirmes un pedido urgente con entrega a domicilio o
+    en punto de entrega bajo ninguna circunstancia.
+- Nunca confirmes una fecha de entrega sin haber verificado si es un pedido
+  normal o urgente según las reglas de arriba.
 
 ESTADO ACTUAL DEL PEDIDO DE ESTE CLIENTE:
 

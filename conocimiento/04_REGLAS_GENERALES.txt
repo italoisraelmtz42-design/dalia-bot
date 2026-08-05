@@ -1,31 +1,42 @@
+===== INFORMACIÓN DE ENTREGAS =====
 
-===== INFORMACIÓN GENERAL =====
+Si el cliente solo solicita información de entregas, mandar archivo de imagen:
+INFORMACIÓN GENERAL.jpeg (en la imagen está la información sobre las entregas: local/domicilio/punto)
 
-
-Si el cliente solo solicita información general, mandar 2 archivos de imagen:
-INFORMACIÓN GENERAL.jpeg
-OSITO CON JABONCITO.jpeg
-
+Y adicionalmente resolverle cualquier duda que tenga sobre las entregas.
 
 
-PUNTOS DE ENTREGA:
+
+===== PÁGINA DE FACEBOOK =====
+
+https://www.facebook.com/share/1D8y9UK2Wg/
+
+Si cliente solicita o pregunta por nuestra página de Facebook mandar link.
+si cliente solicita referencias o quiere ver pedidos entregados mandar link.
+si se nota al cliente un tanto desconfiado, mandar link para generar confianza y que vea todos nuestros pedidos que hemos entregado.
+
+
+
+
+===== PUNTOS DE ENTREGA =====
 A PARTIR DE PEDIDOS CON 25 PZAS 
-MIERCOLES 11:00 AM SORIANA FRESNOS (ÁREA DE ASADORES)
-JUEVES 11:00 AM SENDERO ESCOBEDO (KFC POR FUERA DEL ESTACIONAMIENTO)
-VIERNES 8:00 PM MERCO PUEBLO NUEVO (PASTELERÍA LETTY)
-SÁBADO 11:30 AM ESTACIÓN METRO MITRAS (FARMACIAS SIMILARES, BAJANDO LAS ESCALERAS DEL METRO).
+*MIERCOLES 11:00 AM SORIANA FRESNOS (ÁREA DE ASADORES)
+*JUEVES 11:00 AM SENDERO ESCOBEDO (KFC POR FUERA DEL ESTACIONAMIENTO)
+*VIERNES 8:00 PM MERCO PUEBLO NUEVO (PASTELERÍA LETTY)
+*SÁBADO 11:30 AM ESTACIÓN METRO MITRAS (FARMACIAS SIMILARES, BAJANDO LAS ESCALERAS DEL METRO).
 Nota: si son menos de 25 piezas no podemos entregar en puntos de entrega, ofrecer entrega en local o a domicilio.
  
 
-ENVÍOS A DOMICILIO:
-Entregas de Lunes a Sábado.
-Sin compra mínima.
-Horario 1 pm - 10 pm. No contamos con hora exacta de entrega, ya que la empresa que nos ayuda con los envíos no nos confirma un horario exacto para la entrega.
-La paquetería tarda de 1 a 2 días en entregar una vez que el pedido está listo.
-Si es entrega a domicilio solo puede hacerse el pago en efectivo.
-El pago en efectivo se le realiza directamente al mensajero que entrega el pedido.
-Para cotizar envío solo se requiere el municipio.
-Solicitarle al cliente su municipio donde se entregará el pedido para cotizarle con la lista que tenemos.
+===== ENVÍOS A DOMICILIO =====
+
+*Entregas de Lunes a Sábado.
+*Sin compra mínima.
+*Horario 1 pm - 10 pm. No contamos con hora exacta de entrega, ya que la empresa que nos ayuda con los envíos no nos confirma un horario exacto para la entrega.
+*La paquetería tarda de 1 a 2 días en entregar una vez que el pedido está listo.
+*Si es entrega a domicilio solo puede hacerse el pago en efectivo.
+*El pago en efectivo se le realiza directamente al mensajero que entrega el pedido.
+*Para cotizar envío solo se requiere el municipio.
+*Solicitarle al cliente su municipio donde se entregará el pedido para cotizarle con la lista que tenemos.
 
 Cuando pregunten por cotización de envíos a domicilio o costos, mandar la siguiente lista de precios por municipio:
 Santa Catarina $100 pesos
@@ -40,7 +51,7 @@ Juárez $120 pesos
 
 No inventar precios de envíos, únicamente dar los precios de esta lista.
 
-Nota: Si son envíos a otros municipios, ciudades o estados del país solamente manejamos envíos por DHL (ofrecer envío nacional por DHL $300 por envío, el pedido debe estar 100% liquidado antes de mandarse por paquetería, la paquetería tarda 3 días hábiles + el tiempo de elaboración del pedido. considerar para dar una fecha aproximada de entrega los 4 o 6 días hábiles de la elaboración del pedido)
+diferenciar cuando cliente solicita cotización de envío a domicilio (se requiere solo municipio) a cuando ya confirma que la entrega es a domicilio y se requiere la dirección completa del cliente.
 
 
 Si el cliente decide el envió a domicilio, solicitar entonces esta información. 
@@ -49,12 +60,18 @@ Si el cliente decide el envió a domicilio, solicitar entonces esta información
 *Calle y número
 *Municipio
 *De preferencia alguna referencia adicional (ej. casa amarilla).
-*No solicitar si el cliente quiere un presupuesto del envío únicamente:
+*No solicitar si el cliente quiere un presupuesto del envío únicamente.
+
+
+===== ENVÍOS FUERA DE NUESTRA ZONA DE COBERTURA =====
+
+Nota: Si son envíos a otros municipios, ciudades o estados del país solamente manejamos envíos por DHL (ofrecer envío nacional por DHL $300 por envío, el pedido debe estar 100% liquidado antes de mandarse por paquetería, la paquetería tarda 3 días hábiles + el tiempo de elaboración del pedido. considerar para dar una fecha aproximada de entrega los 4 o 6 días hábiles de la elaboración del pedido)
 
 
 
 
-Entregas en el local:
+===== ENTREGAS EN EL LOCAL =====
+
 Dirección de Local: Cedro #200B Col Los Encinos Apodaca (el local es dentro de una papelería, se llama papelería ISA)
 Horario de entregas: 
 Lunes a Viernes: 3:30 pm  - 6:30 pm
@@ -68,7 +85,8 @@ Entrega con plataformas tipo Uber o Didi
 
 
 
-ANTICIPOS:
+===== ANTICIPOS =====
+
 Desde $50 pesos.
 
 
@@ -111,13 +129,6 @@ EN PUNTO DE ENTREGA: PAGO EN EFECTIVO O TRANSFERENCIA. no aceptamos pago con tar
 
 
 
-
-
-
-
-
-
-
 =====TARJETA PERSONALIZADA=====
 Confirmar datos y diseño ya después de que esté hecho el anticipo, no es necesario que el cliente lo defina antes del anticipo, solo después.
 
@@ -150,15 +161,16 @@ Café claro
 Amarillo
 
 
-PRECIO MAYOREO:
+===== PRECIO MAYOREO =====
 Aclarar amablemente al cliente que manejamos los mismos precios para pocas piezas o para mayoreo.
 
 
-PEDIDOS URGENTES:
-Saber siempre qué día es antes de dar información de los pedidos urgentes, ya que hay limitantes de entregas:
+===== PEDIDOS URGENTES =====
+*Saber siempre qué día es antes de dar información de los pedidos urgentes, ya que hay limitantes de entregas:
+*Se cobra extra $50 pesos por pedido urgente. comentarle al cliente amablemente.
 *NO SE ACEPTAN PEDIDOS URGENTES LOS DÍAS SÁBADOS
 Únicamente se hacen entregas en el local, en los horarios establecidos.
-*no hay entregas a domicilio o puntos de entrega, SOLO EN EL LOCAL.
+*No hay entregas a domicilio o puntos de entrega, SOLO EN EL LOCAL.
 *No se aceptan pedidos urgentes el sábado para entregarse el domingo.
 *Comentar amablemente, si es necesario, que no se aceptan pedidos urgente el sábado ya que el domingo no tenemos abierto nuestro local.
 *No trabajamos los domingos.

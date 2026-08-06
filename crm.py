@@ -5,7 +5,6 @@ from database import get_db_connection, init_db
 from constantes import logger_crm, EstadoPedido, ModoAtencion, OrigenEvento
 import pedido_manager
 
-# Inicializamos las tablas
 init_db()
 
 MAPEO_PREGUNTAS = {
@@ -21,29 +20,27 @@ MAPEO_PREGUNTAS = {
     "municipio": "¿A qué municipio pertenece la dirección de entrega?"
 }
 
-# ==============================================================================
-# # WRAPPERS DE COMPATIBILIDAD ROBUSTOS
-# ==============================================================================
+# WRAPPERS DE COMPATIBILIDAD ROBUSTOS
 def cargar_cliente(numero):
     if isinstance(numero, dict): numero = numero.get('numero')
-    logger_crm.info(f"🔎 [CRM] Cliente: {numero} | TIPO: {type(numero)}")
+    logger_crm.info(f"🔎 [CRM] Cliente: {numero}")
     return {"numero": numero, "nombre": "Cliente Registrado", "estado": "activo"}
 
 def guardar_mensaje_cliente(cliente_ou_telefono, texto, tipo):
     telefono = cliente_ou_telefono
     if isinstance(cliente_ou_telefono, dict): telefono = cliente_ou_telefono.get('numero')
-    logger_crm.info(f"💾 [CRM] Mensaje para {telefono} | TIPO: {type(telefono)}")
+    logger_crm.info(f"💾 [CRM] Mensaje para {telefono}")
     try:
         with get_db_connection() as conn:
             conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, texto, "usuario"))
             conn.commit()
-    except Exception as e: logger_crm.error(f"Error guardando mensaje de usuario: {e}")
+    except Exception as e: logger_crm.error(f"Error guardando mensaje: {e}")
     return {"status": "ok", "mensaje_guardado": True}
 
 def cargar_memoria(telefono_ou_cliente, limite: int = 20) -> List[Dict[str, str]]:
     telefono = telefono_ou_cliente
     if isinstance(telefono_ou_cliente, dict): telefono = telefono_ou_cliente.get('numero')
-    logger_crm.info(f"🧠 [CRM] Cargando memoria para {telefono} | TIPO: {type(telefono)}")
+    logger_crm.info(f"🧠 [CRM] Memoria para {telefono}")
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -58,7 +55,7 @@ def registrar_uso_openai(*args, **kwargs):
     if args and args[0]:
         telefono = args[0]
         if isinstance(telefono, dict): telefono = telefono.get('numero')
-    logger_crm.info(f"🤖 [CRM] Registrando uso OpenAI para {telefono} | TIPO: {type(telefono)}")
+    logger_crm.info(f"🤖 [CRM] Uso OpenAI para {telefono}")
     try:
         with get_db_connection() as conn:
             conn.execute("INSERT INTO uso_openai (telefono) VALUES (?)", (telefono,))
@@ -68,7 +65,7 @@ def registrar_uso_openai(*args, **kwargs):
 def guardar_respuesta(cliente_ou_telefono, respuesta, tipo="texto"):
     telefono = cliente_ou_telefono
     if isinstance(cliente_ou_telefono, dict): telefono = cliente_ou_telefono.get('numero')
-    logger_crm.info(f"📤 [CRM] Guardando respuesta para {telefono} | TIPO: {type(telefono)}")
+    logger_crm.info(f"📤 [CRM] Guardando respuesta para {telefono}")
     try:
         with get_db_connection() as conn:
             conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, respuesta, "bot"))
@@ -85,13 +82,10 @@ def sincronizar_pedido(*args, **kwargs):
         if len(args) > 1: datos = args[1]
     elif kwargs.get('pedido_id'): pedido_id, datos = kwargs.get('pedido_id'), kwargs
     if pedido_id and datos:
-        logger_crm.info(f"🔄 [CRM] Sincronizando Pedido {pedido_id} | DATOS TIPO: {type(datos)}")
+        logger_crm.info(f"🔄 [CRM] Sincronizando Pedido {pedido_id}")
         pedido_manager.actualizar_pedido(pedido_id, **datos)
     return cargar_pedido(pedido_id)
 
-# ==============================================================================
-# # Capa de Conversación
-# ==============================================================================
 def _detectar_intencion_pedido(texto: str) -> bool:
     return sum(1 for p in ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo"] if p in texto.lower()) >= 2
 

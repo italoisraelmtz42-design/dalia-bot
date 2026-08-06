@@ -1,138 +1,112 @@
 import sqlite3
-from pathlib import Path
+import os
+import logging
 
-# ==========================================
-# CONFIGURACIÓN DE LA BASE DE DATOS
-# ==========================================
+logger = logging.getLogger(__name__)
 
-BASE = Path(__file__).resolve().parent
-DB_NAME = BASE / "dalia.db"
+# Ruta de la base de datos (configurable por variable de entorno)
+DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
 
-
-def get_connection():
-    conn = sqlite3.connect(DB_NAME, timeout=10)
+def get_db_connection():
+    """Obtiene una conexión a la base de datos SQLite."""
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
+def init_order_tables():
+    """
+    Crea las tablas correspondientes al Motor de Pedidos (Sprint 1).
+    No interfiere con tablas existentes del bot.
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
 
-def inicializar_bd():
-    conn = get_connection()
-    cur = conn.cursor()
+            # 1. Tabla de Pedidos
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pedidos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    folio TEXT UNIQUE NOT NULL,
+                    cliente_id INTEGER,
+                    telefono TEXT NOT NULL,
+                    estado TEXT NOT NULL,
+                    porcentaje_completitud INTEGER DEFAULT 0,
+                    bot_activo INTEGER DEFAULT 1,
+                    fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
-    # CLIENTES
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS clientes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        telefono TEXT UNIQUE NOT NULL,
-        nombre TEXT,
-        fecha_alta TEXT,
-        ultima_interaccion TEXT,
-        estado TEXT DEFAULT 'ACTIVO'
-    )
-    """)
+            # 2. Tabla de Items del Pedido
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pedido_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pedido_id INTEGER NOT NULL,
+                    producto TEXT NOT NULL,
+                    cantidad INTEGER NOT NULL,
+                    precio_unitario REAL NOT NULL,
+                    subtotal REAL NOT NULL,
+                    color_toalla TEXT,
+                    color_moño TEXT,
+                    tipo_jaboncito TEXT,
+                    color_jaboncito TEXT,
+                    nombre_bebe TEXT,
+                    tarjetita TEXT,
+                    FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
+                )
+            """)
 
-    # CONVERSACIONES
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS conversaciones (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cliente_id INTEGER NOT NULL,
-        fecha TEXT NOT NULL,
-        rol TEXT NOT NULL,
-        mensaje TEXT NOT NULL,
-        tipo TEXT DEFAULT 'texto',
-        FOREIGN KEY(cliente_id) REFERENCES clientes(id) ON DELETE CASCADE
-    )
-    """)
+            # 3. Tabla de Pagos
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pagos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pedido_id INTEGER NOT NULL,
+                    tipo TEXT NOT NULL,
+                    monto REAL NOT NULL,
+                    metodo TEXT NOT NULL,
+                    comprobante TEXT,
+                    confirmado INTEGER DEFAULT 0,
+                    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
+                )
+            """)
 
-    # PEDIDOS (nueva estructura completa)
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS pedidos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        folio TEXT UNIQUE,
-        cliente_id INTEGER NOT NULL,
-        producto TEXT,
-        cantidad INTEGER,
-        colores TEXT,
-        evento TEXT,
-        fecha_evento TEXT,
-        forma_entrega TEXT,
-        direccion TEXT,
-        color_toalla TEXT,
-        color_mono TEXT,
-        color_velita TEXT,
-        datos_tarjeta TEXT,
-        anticipo REAL DEFAULT 0,
-        anticipo_confirmado INTEGER DEFAULT 0,
-        saldo REAL DEFAULT 0,
-        estatus TEXT DEFAULT 'Cotizando',
-        -- Nuevas columnas
-        precio_unitario REAL DEFAULT 0,
-        subtotal REAL DEFAULT 0,
-        envio REAL DEFAULT 0,
-        total REAL DEFAULT 0,
-        municipio TEXT,
-        tipo_jaboncito TEXT,
-        color_jaboncito TEXT,
-        nombre_bebe TEXT,
-        tarjetita TEXT,
-        notas TEXT,
-        bot_activo INTEGER DEFAULT 1,
-        created_at TEXT,
-        updated_at TEXT,
-        FOREIGN KEY(cliente_id) REFERENCES clientes(id) ON DELETE CASCADE
-    )
-    """)
+            # 4. Tabla de Entregas
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS entregas (
+                    pedido_id INTEGER PRIMARY KEY,
+                    tipo_entrega TEXT NOT NULL,
+                    municipio TEXT,
+                    direccion TEXT,
+                    fecha_entrega TIMESTAMP,
+                    costo_envio REAL DEFAULT 0.0,
+                    FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
+                )
+            """)
 
-    # Migración: agregar columnas nuevas si no existen
-    columnas_nuevas = {
-        "precio_unitario": "REAL DEFAULT 0",
-        "subtotal": "REAL DEFAULT 0",
-        "envio": "REAL DEFAULT 0",
-        "total": "REAL DEFAULT 0",
-        "municipio": "TEXT",
-        "tipo_jaboncito": "TEXT",
-        "color_jaboncito": "TEXT",
-        "nombre_bebe": "TEXT",
-        "tarjetita": "TEXT",
-        "notas": "TEXT",
-        "bot_activo": "INTEGER DEFAULT 1",
-        "created_at": "TEXT",
-        "updated_at": "TEXT",
-    }
-    cur.execute("PRAGMA table_info(pedidos)")
-    columnas_existentes = {fila["name"] for fila in cur.fetchall()}
-    for nombre_columna, tipo_sql in columnas_nuevas.items():
-        if nombre_columna not in columnas_existentes:
-            cur.execute(f"ALTER TABLE pedidos ADD COLUMN {nombre_columna} {tipo_sql}")
+            # 5. Tabla de Historial de Cambios
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pedido_historial (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pedido_id INTEGER NOT NULL,
+                    cambio TEXT NOT NULL,
+                    usuario TEXT,
+                    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
+                )
+            """)
 
-    # CONTADOR DE FOLIOS
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS contador_folios (
-        fecha TEXT PRIMARY KEY,
-        ultimo INTEGER NOT NULL DEFAULT 0
-    )
-    """)
+            conn.commit()
+            logger.info("✅ Tablas del Motor de Pedidos inicializadas correctamente en SQLite.")
 
-    # USO DE OPENAI
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS uso_openai (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cliente_id INTEGER,
-        fecha TEXT NOT NULL,
-        modelo TEXT,
-        tokens_entrada INTEGER,
-        tokens_salida INTEGER,
-        FOREIGN KEY(cliente_id) REFERENCES clientes(id) ON DELETE CASCADE
-    )
-    """)
+    except Exception as e:
+        logger.error(f"❌ Error al crear las tablas de pedidos: {e}")
+        raise
 
-    conn.commit()
-    conn.close()
-
-
-if __name__ == "__main__":
-    inicializar_bd()
-    print("✅ Base de datos creada correctamente.")
+def init_db():
+    """Inicializa las tablas de la aplicación completa (incluye las nuevas de pedidos)."""
+    try:
+        init_order_tables()
+        # Aquí irían inicializaciones de otras tablas del CRM/Usuarios si existieran
+    except Exception as e:
+        logger.critical(f"Fallo crítico en la inicialización de la base de datos: {e}")

@@ -22,7 +22,7 @@ def init_order_tables():
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # 1. Tabla de Pedidos (Existente del Sprint 1)
+            # 1. Tabla de Pedidos
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pedidos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,7 +96,7 @@ def init_order_tables():
                 )
             """)
 
-            # 6. NUEVA TABLA: Historial de Chat (Para la memoria del bot)
+            # 6. Tabla de Historial de Chat (Recuperada para compatibilidad de app.py - Error 1)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS historial_chat (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,7 +107,7 @@ def init_order_tables():
                 )
             """)
 
-            # 7. NUEVA TABLA: Registro de uso de OpenAI
+            # 7. Tabla de Registro de uso de OpenAI
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS uso_openai (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

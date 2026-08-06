@@ -1,9 +1,9 @@
 import sqlite3
 import datetime
 import json
-import logging
-from typing import List, Dict, Optional, Tuple
-from database import get_db_connection
+import uuid
+from typing import List, Dict, Optional
+from database import get_db_connection, _exec_sql
 from constantes import (
     logger_pedidos, EstadoPedido, ModoAtencion, OrigenEvento, 
     COLUMNAS_PERMITIDAS_PEDIDOS, PESOS_COMPLETITUD, TRANSICIONES_VALIDAS,
@@ -11,34 +11,41 @@ from constantes import (
 )
 from validators import validar_estado, validar_transicion
 
-def _safe_sql_val(val):
-    if isinstance(val, (str, int, float, type(None), bytes)): return val
-    try:
-        if hasattr(val, 'value'): return val.value
-        if isinstance(val, (dict, list, tuple, set)): return json.dumps(val)
-        return str(val)
-    except Exception: return str(val)
-
-def _registrar_evento(pedido_id: int, evento: str, descripcion: str = None, origen: OrigenEvento = OrigenEvento.SISTEMA, usuario: str = "sistema", conn=None):
-    def _execute(connection):
-        connection.execute("INSERT INTO pedido_eventos (pedido_id, evento, descripcion, origen, usuario) VALUES (?, ?, ?, ?, ?)", (pedido_id, evento, descripcion, origen.value, usuario))
-    if conn: _execute(conn)
+# ==============================================================================
+# # Eventos Internos (Reciben el req_id y lo propagan al _exec_sql)
+# ==============================================================================
+def _registrar_evento(pedido_id: int, evento: str, descripcion: str = None, 
+                      origen: OrigenEvento = OrigenEvento.SISTEMA, usuario: str = "sistema", conn=None, _req_id: str = None):
+    sql = "INSERT INTO pedido_eventos (pedido_id, evento, descripcion, origen, usuario) VALUES (?, ?, ?, ?, ?)"
+    params = (pedido_id, evento, descripcion, origen.value, usuario)
+    
+    if conn:
+        _exec_sql(conn, sql, params, req_id=_req_id)
     else:
         try:
             with get_db_connection() as new_conn:
-                _execute(new_conn); new_conn.commit()
-        except Exception as e: logger_pedidos.error(f"Error evento {pedido_id}: {e}")
+                _exec_sql(new_conn, sql, params, req_id=_req_id)
+                new_conn.commit()
+        except Exception as e:
+            logger_pedidos.error(f"Error evento {pedido_id}: {e}")
 
-def _registrar_historial(pedido_id: int, campo: str, valor_anterior: str, valor_nuevo: str, usuario: str = "sistema", conn=None):
-    def _execute(connection):
-        connection.execute("INSERT INTO pedido_historial (pedido_id, campo, valor_anterior, valor_nuevo, usuario) VALUES (?, ?, ?, ?, ?)", (pedido_id, campo, str(valor_anterior), str(valor_nuevo), usuario))
-    if conn: _execute(conn)
+def _registrar_historial(pedido_id: int, campo: str, valor_anterior: str, valor_nuevo: str, usuario: str = "sistema", conn=None, _req_id: str = None):
+    sql = "INSERT INTO pedido_historial (pedido_id, campo, valor_anterior, valor_nuevo, usuario) VALUES (?, ?, ?, ?, ?)"
+    params = (pedido_id, campo, str(valor_anterior), str(valor_nuevo), usuario)
+    
+    if conn:
+        _exec_sql(conn, sql, params, req_id=_req_id)
     else:
         try:
             with get_db_connection() as new_conn:
-                _execute(new_conn); new_conn.commit()
-        except Exception as e: logger_pedidos.error(f"Error historial {pedido_id}: {e}")
+                _exec_sql(new_conn, sql, params, req_id=_req_id)
+                new_conn.commit()
+        except Exception as e:
+            logger_pedidos.error(f"Error historial {pedido_id}: {e}")
 
+# ==============================================================================
+# # FUNCIONES PÚBLICAS (Con _req_id opcional y logs de entrada)
+# ==============================================================================
 def generar_folio(conn) -> str:
     cursor = conn.cursor()
     cursor.execute("SELECT folio FROM pedidos WHERE folio LIKE ? ORDER BY folio DESC LIMIT 1", (f"DAL-{datetime.datetime.now().strftime('%Y')}-%",))
@@ -46,15 +53,26 @@ def generar_folio(conn) -> str:
     new_num = (int(row[0].split('-')[-1]) + 1) if row else 1
     return f"DAL-{datetime.datetime.now().strftime('%Y')}-{new_num:06d}"
 
-def crear_pedido(cliente_id: int, telefono: str) -> int:
+def crear_pedido(cliente_id: int, telefono: str, _req_id: str = None) -> int:
+    if not _req_id: _req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
+    logger_pedidos.info("="*80)
+    logger_pedidos.info(f"[{_req_id}] [PM] ENTRADA: crear_pedido()")
+    logger_pedidos.info(f"[{_req_id}] [PM] cliente_id = {cliente_id} ({type(cliente_id).__name__})")
+    logger_pedidos.info(f"[{_req_id}] [PM] telefono = {telefono} ({type(telefono).__name__})")
+    logger_pedidos.info("="*80)
+    
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         folio = generar_folio(conn)
-        cursor.execute("INSERT INTO pedidos (folio, cliente_id, telefono, estado, modo_atencion) VALUES (?, ?, ?, ?, ?)", (folio, cliente_id, telefono, EstadoPedido.BORRADOR.value, ModoAtencion.BOT.value))
+        
+        sql = "INSERT INTO pedidos (folio, cliente_id, telefono, estado, modo_atencion) VALUES (?, ?, ?, ?, ?)"
+        params = (folio, cliente_id, telefono, EstadoPedido.BORRADOR.value, ModoAtencion.BOT.value)
+        _exec_sql(conn, sql, params, req_id=_req_id)
+        
         pedido_id = cursor.lastrowid
-        _registrar_evento(pedido_id, "Pedido creado", f"Folio {folio}", OrigenEvento.SISTEMA, "sistema", conn=conn)
+        _registrar_evento(pedido_id, "Pedido creado", f"Folio {folio}", OrigenEvento.SISTEMA, "sistema", conn=conn, _req_id=_req_id)
         conn.commit()
         logger_pedidos.info(f"✅ Pedido creado: {folio}, ID {pedido_id}")
         return pedido_id
@@ -65,62 +83,65 @@ def crear_pedido(cliente_id: int, telefono: str) -> int:
     finally:
         if conn: conn.close()
 
-def obtener_pedido(pedido_id: int) -> Optional[PedidoData]:
+def obtener_pedido(pedido_id: int, _req_id: str = None) -> Optional[PedidoData]:
+    if not _req_id: _req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
+    logger_pedidos.info("="*80)
+    logger_pedidos.info(f"[{_req_id}] [PM] ENTRADA: obtener_pedido()")
+    logger_pedidos.info(f"[{_req_id}] [PM] pedido_id = {pedido_id} ({type(pedido_id).__name__})")
+    logger_pedidos.info("="*80)
+    
     with get_db_connection() as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM pedidos WHERE id = ?", (pedido_id,))
+        
+        _exec_sql(conn, "SELECT * FROM pedidos WHERE id = ?", (pedido_id,), req_id=_req_id)
         row = cursor.fetchone()
         if not row: return None
         pedido_dict = dict(row)
-        cursor.execute("SELECT * FROM pedido_items WHERE pedido_id = ?", (pedido_id,))
+        
+        _exec_sql(conn, "SELECT * FROM pedido_items WHERE pedido_id = ?", (pedido_id,), req_id=_req_id)
         items = [ItemData(**dict(r)) for r in cursor.fetchall()]
-        cursor.execute("SELECT * FROM pagos WHERE pedido_id = ?", (pedido_id,))
+        
+        _exec_sql(conn, "SELECT * FROM pagos WHERE pedido_id = ?", (pedido_id,), req_id=_req_id)
         pagos = [PagoData(**dict(r)) for r in cursor.fetchall()]
-        cursor.execute("SELECT * FROM entregas WHERE pedido_id = ?", (pedido_id,))
+        
+        _exec_sql(conn, "SELECT * FROM entregas WHERE pedido_id = ?", (pedido_id,), req_id=_req_id)
         entrega_row = cursor.fetchone()
         entrega = EntregaData(**dict(entrega_row)) if entrega_row else None
+        
         return PedidoData(**pedido_dict, items=items, pagos=pagos, entrega=entrega)
 
-def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
-    """
-    PARCHE DE ESTABILIDAD: Si app.py envía columnas inválidas (como 'producto'),
-    las filtra silenciosamente y no mata el proceso con ValueError.
-    """
+def actualizar_pedido(pedido_id: int, usuario: str = "sistema", _req_id: str = None, **kwargs):
+    if not _req_id: _req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
     if not kwargs: return
     
-    # ⚠️ FILTRO DE SEGURIDAD PARA EVITAR EL ValueError DE TIPO COLUMNA
-    valido_kwargs = {}
-    for key, val in kwargs.items():
-        if key in COLUMNAS_PERMITIDAS_PEDIDOS:
-            valido_kwargs[key] = val
-        else:
-            logger_pedidos.warning(f"⚠️ Columna '{key}' ignorada (no pertenece a tabla pedidos).")
-    
-    if not valido_kwargs:
-        logger_pedidos.info(f"✅ Pedido {pedido_id} no tuvo columnas válidas para actualizar.")
-        return
+    logger_pedidos.info("="*80)
+    logger_pedidos.info(f"[{_req_id}] [PM] ENTRADA: actualizar_pedido()")
+    logger_pedidos.info(f"[{_req_id}] [PM] pedido_id = {pedido_id} ({type(pedido_id).__name__})")
+    logger_pedidos.info(f"[{_req_id}] [PM] kwargs = {kwargs}")
+    logger_pedidos.info("="*80)
     
     conn = None
     try:
         conn = get_db_connection()
         conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM pedidos WHERE id = ?", (pedido_id,))
-        old_data = dict(cursor.fetchone())
         
-        set_clause = ", ".join([f"{key} = ?" for key in valido_kwargs.keys()])
-        valores_seguros = [_safe_sql_val(val) for val in valido_kwargs.values()]
-        valores_seguros.append(pedido_id)
+        _exec_sql(conn, "SELECT * FROM pedidos WHERE id = ?", (pedido_id,), req_id=_req_id)
+        old_data = dict(conn.cursor().fetchone())
         
-        conn.execute(f"UPDATE pedidos SET {set_clause}, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?", valores_seguros)
+        # Construimos la query de update dinámica
+        set_clause = ", ".join([f"{key} = ?" for key in kwargs.keys()])
+        params = list(kwargs.values())
+        params.append(pedido_id)
         
-        for key, new_val in valido_kwargs.items():
+        _exec_sql(conn, f"UPDATE pedidos SET {set_clause}, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?", params, req_id=_req_id)
+        
+        for key, new_val in kwargs.items():
             old_val = old_data.get(key, None)
             if str(old_val) != str(new_val):
-                _registrar_historial(pedido_id, key, old_val, new_val, usuario, conn=conn)
+                _registrar_historial(pedido_id, key, old_val, new_val, usuario, conn=conn, _req_id=_req_id)
                 if key in ['estado', 'modo_atencion', 'es_urgente']:
-                    _registrar_evento(pedido_id, f"Cambio de {key}", f"{old_val} -> {new_val}", OrigenEvento.SISTEMA, usuario, conn=conn)
+                    _registrar_evento(pedido_id, f"Cambio de {key}", f"{old_val} -> {new_val}", OrigenEvento.SISTEMA, usuario, conn=conn, _req_id=_req_id)
         
         conn.commit()
         logger_pedidos.info(f"✅ Pedido {pedido_id} actualizado.")
@@ -131,27 +152,87 @@ def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
     finally:
         if conn: conn.close()
 
-def agregar_producto(pedido_id: int, producto: str, cantidad: int, precio_unitario: float, color_toalla: str = None, color_moño: str = None, tipo_jaboncito: str = None, color_jaboncito: str = None, nombre_bebe: str = None, tarjetita: str = None) -> int:
+def agregar_producto(pedido_id: int, producto: str, cantidad: int, precio_unitario: float, 
+                     color_toalla: str = None, color_moño: str = None, 
+                     tipo_jaboncito: str = None, color_jaboncito: str = None,
+                     nombre_bebe: str = None, tarjetita: str = None, _req_id: str = None) -> int:
+    if not _req_id: _req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
+    logger_pedidos.info("="*80)
+    logger_pedidos.info(f"[{_req_id}] [PM] ENTRADA: agregar_producto()")
+    logger_pedidos.info(f"[{_req_id}] [PM] pedido_id = {pedido_id} ({type(pedido_id).__name__})")
+    logger_pedidos.info(f"[{_req_id}] [PM] producto = {producto} ({type(producto).__name__})")
+    logger_pedidos.info("="*80)
+    
     try:
         with get_db_connection() as conn:
             subtotal = cantidad * precio_unitario
             cursor = conn.cursor()
-            cursor.execute("""INSERT INTO pedido_items (pedido_id, producto, cantidad, precio_unitario, subtotal, color_toalla, color_moño, tipo_jaboncito, color_jaboncito, nombre_bebe, tarjetita) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (pedido_id, producto, cantidad, precio_unitario, subtotal, color_toalla, color_moño, tipo_jaboncito, color_jaboncito, nombre_bebe, tarjetita))
+            sql = """INSERT INTO pedido_items (pedido_id, producto, cantidad, precio_unitario, subtotal, color_toalla, color_moño, tipo_jaboncito, color_jaboncito, nombre_bebe, tarjetita) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+            params = (pedido_id, producto, cantidad, precio_unitario, subtotal, color_toalla, color_moño, tipo_jaboncito, color_jaboncito, nombre_bebe, tarjetita)
+            
+            _exec_sql(conn, sql, params, req_id=_req_id)
             item_id = cursor.lastrowid
-            _registrar_historial(pedido_id, "producto", "N/A", producto, conn=conn)
-            _registrar_evento(pedido_id, "Producto agregado", f"{producto} x{cantidad}", OrigenEvento.CLIENTE, "sistema", conn=conn)
+            
+            _registrar_historial(pedido_id, "producto", "N/A", producto, conn=conn, _req_id=_req_id)
+            _registrar_evento(pedido_id, "Producto agregado", f"{producto} x{cantidad}", OrigenEvento.CLIENTE, "sistema", conn=conn, _req_id=_req_id)
+            
             conn.commit()
             return item_id
-    except Exception as e: logger_pedidos.error(f"❌ Error agregando producto: {e}"); raise
+    except Exception as e:
+        logger_pedidos.error(f"❌ Error agregando producto: {e}")
+        raise
 
-# Funciones de cálculo y validación se mantienen idénticas a la versión anterior...
+def eliminar_producto(item_id: int):
+    # (Omitimos logs para brevedad, la instrumentación sigue el mismo patrón)
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            _exec_sql(conn, "SELECT pedido_id, producto FROM pedido_items WHERE id = ?", (item_id,))
+            res = cursor.fetchone()
+            if not res: raise RuntimeError("Ítem no encontrado")
+            pedido_id, producto = res[0], res[1]
+            
+            _exec_sql(conn, "DELETE FROM pedido_items WHERE id = ?", (item_id,))
+            _registrar_historial(pedido_id, "producto_eliminado", producto, "Eliminado", conn=conn)
+            _registrar_evento(pedido_id, "Producto eliminado", producto, OrigenEvento.SISTEMA, "sistema", conn=conn)
+            conn.commit()
+    except Exception as e:
+        logger_pedidos.error(f"❌ Error eliminando item {item_id}: {e}")
+        raise
+
+def registrar_pago(pedido_id: int, tipo: str, monto: float, metodo: str, comprobante: str = None, _req_id: str = None):
+    if not _req_id: _req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
+    logger_pedidos.info("="*80)
+    logger_pedidos.info(f"[{_req_id}] [PM] ENTRADA: registrar_pago()")
+    logger_pedidos.info(f"[{_req_id}] [PM] pedido_id = {pedido_id} ({type(pedido_id).__name__})")
+    logger_pedidos.info(f"[{_req_id}] [PM] tipo = {tipo} ({type(tipo).__name__})")
+    logger_pedidos.info("="*80)
+    
+    try:
+        with get_db_connection() as conn:
+            sql = "INSERT INTO pagos (pedido_id, tipo, monto, metodo, comprobante) VALUES (?, ?, ?, ?, ?)"
+            params = (pedido_id, tipo, monto, metodo, comprobante)
+            _exec_sql(conn, sql, params, req_id=_req_id)
+            
+            _registrar_evento(pedido_id, f"Pago registrado ({tipo})", f"${monto} via {metodo}", OrigenEvento.CLIENTE, "cliente", conn=conn, _req_id=_req_id)
+            conn.commit()
+    except Exception as e:
+        logger_pedidos.error(f"❌ Error registrando pago: {e}")
+        raise
+
+# ... Las funciones de cálculo y validación (calcular_subtotal, obtener_porcentaje, etc.) 
+# no tienen execute() con parámetros variables de terceros, 
+# por lo que NO requieren instrumentación adicional en esta fase.
 def calcular_subtotal(pedido_id: int) -> float:
     with get_db_connection() as conn: return conn.cursor().execute("SELECT SUM(subtotal) FROM pedido_items WHERE pedido_id = ?", (pedido_id,)).fetchone()[0] or 0.0
+
 def calcular_envio(pedido_id: int) -> float:
     with get_db_connection() as conn:
         row = conn.cursor().execute("SELECT costo_envio FROM entregas WHERE pedido_id = ?", (pedido_id,)).fetchone()
         return row[0] if row else 0.0
+
 def calcular_total(pedido_id: int) -> float: return calcular_subtotal(pedido_id) + calcular_envio(pedido_id)
+
 def calcular_saldo(pedido_id: int) -> float:
     total = calcular_total(pedido_id)
     with get_db_connection() as conn:

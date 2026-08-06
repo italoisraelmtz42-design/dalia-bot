@@ -6,86 +6,41 @@ from database import get_db_connection, init_db
 from constantes import logger_crm, EstadoPedido, ModoAtencion, OrigenEvento
 import pedido_manager
 
-# Inicializamos las tablas al arrancar el módulo
 init_db()
 
-# ==============================================================================
-# # COMPATIBILIDAD CON APP.PY (ELIMINA EL ATTRIBUTEERROR)
-# ==============================================================================
 def inicializar_base_datos():
-    logger_crm.info("🔄 [Compatibilidad] app.py llamó a crm.inicializar_base_datos(). Ejecutando init_db()...")
+    logger_crm.warning("🔄 [Compatibilidad] app.py llamó a crm.inicializar_base_datos(). Ejecutando init_db()...")
     try:
         init_db()
-        logger_crm.info("✅ Base de datos inicializada exitosamente desde crm.py.")
+        logger_crm.warning("✅ Base de datos inicializada exitosamente.")
     except Exception as e:
         logger_crm.error(f"❌ Error en crm.inicializar_base_datos: {e}")
 
-# ==============================================================================
-# # FUNCIONES DEL CRM (INSTRUMENTACIÓN COMPLETA)
-# ==============================================================================
-
+# -------------------------------------------------------------
+# WRAPPERS ORIGINALES (CRM)
+# -------------------------------------------------------------
 def cargar_cliente(numero):
-    logger_crm.info("="*80)
-    logger_crm.info("=== ENTRADA cargar_cliente ===")
-    logger_crm.info(f"numero={repr(numero)}")
-    logger_crm.info(f"tipo={type(numero).__name__}")
-    logger_crm.info("="*80)
-    
     if isinstance(numero, dict): numero = numero.get('numero')
     return {"numero": numero, "nombre": "Cliente Registrado", "estado": "activo"}
 
 def guardar_mensaje_cliente(cliente, texto, tipo):
-    logger_crm.info("="*80)
-    logger_crm.info("=== ENTRADA guardar_mensaje_cliente ===")
-    logger_crm.info(f"cliente={repr(cliente)}")
-    logger_crm.info(f"tipo_cliente={type(cliente).__name__}")
-    logger_crm.info(f"texto={repr(texto)}")
-    logger_crm.info(f"tipo_texto={type(texto).__name__}")
-    logger_crm.info("="*80)
-    
     telefono = cliente
-    if isinstance(cliente, dict):
-        telefono = cliente.get('numero')
-    
+    if isinstance(cliente, dict): telefono = cliente.get('numero')
     try:
         with get_db_connection() as conn:
-            logger_crm.info("=== SQL guardar_mensaje_cliente ===")
-            sql = "INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)"
-            params = (telefono, texto, "usuario")
-            logger_crm.info(f"SQL = {sql}")
-            logger_crm.info(f"PARAMS = {repr(params)}")
-            logger_crm.info(f"TYPES = {[type(p).__name__ for p in params]}")
-            logger_crm.info("="*80)
-            
-            conn.execute(sql, params)
+            conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, texto, "usuario"))
             conn.commit()
     except Exception as e:
         logger_crm.error(f"Error guardando mensaje de usuario: {e}")
     return {"status": "ok", "mensaje_guardado": True}
 
 def cargar_memoria(cliente, limite: int = 20) -> List[Dict[str, str]]:
-    logger_crm.info("="*80)
-    logger_crm.info("=== ENTRADA cargar_memoria ===")
-    logger_crm.info(f"cliente={repr(cliente)}")
-    logger_crm.info(f"tipo_cliente={type(cliente).__name__}")
-    logger_crm.info(f"limite={limite}")
-    logger_crm.info("="*80)
-    
     telefono = cliente
-    if isinstance(cliente, dict):
-        telefono = cliente.get('numero')
-    
+    if isinstance(cliente, dict): telefono = cliente.get('numero')
     try:
         with get_db_connection() as conn:
-            logger_crm.info("=== SQL cargar_memoria ===")
-            sql = "SELECT mensaje, emisor FROM historial_chat WHERE telefono = ? ORDER BY timestamp DESC LIMIT ?"
-            params = (telefono, limite)
-            logger_crm.info(f"SQL = {sql}")
-            logger_crm.info(f"PARAMS = {repr(params)}")
-            logger_crm.info(f"TYPES = {[type(p).__name__ for p in params]}")
-            logger_crm.info("="*80)
-            
-            cursor = conn.execute(sql, params)
+            cursor = conn.cursor()
+            cursor.execute("SELECT mensaje, emisor FROM historial_chat WHERE telefono = ? ORDER BY timestamp DESC LIMIT ?", (telefono, limite))
             rows = cursor.fetchall()
             return [{"role": "user" if e == "usuario" else "assistant", "content": m} for m, e in reversed(rows)]
     except Exception as e:
@@ -93,104 +48,85 @@ def cargar_memoria(cliente, limite: int = 20) -> List[Dict[str, str]]:
         return []
 
 def registrar_uso_openai(*args, **kwargs):
-    logger_crm.info("="*80)
-    logger_crm.info("=== ENTRADA registrar_uso_openai ===")
-    logger_crm.info(f"args={repr(args)}")
-    logger_crm.info(f"kwargs={repr(kwargs)}")
-    logger_crm.info("="*80)
-    
     telefono = None
     if args and args[0]:
         telefono = args[0]
-        if isinstance(telefono, dict):
-            telefono = telefono.get('numero')
-    
+        if isinstance(telefono, dict): telefono = telefono.get('numero')
     try:
         with get_db_connection() as conn:
-            logger_crm.info("=== SQL registrar_uso_openai ===")
-            sql = "INSERT INTO uso_openai (telefono) VALUES (?)"
-            params = (telefono,)
-            logger_crm.info(f"SQL = {sql}")
-            logger_crm.info(f"PARAMS = {repr(params)}")
-            logger_crm.info(f"TYPES = {[type(p).__name__ for p in params]}")
-            logger_crm.info("="*80)
-            
-            conn.execute(sql, params)
+            conn.execute("INSERT INTO uso_openai (telefono) VALUES (?)", (telefono,))
             conn.commit()
-    except Exception:
-        pass
+    except Exception: pass
 
 def guardar_respuesta(cliente, respuesta, tipo="texto"):
-    logger_crm.info("="*80)
-    logger_crm.info("=== ENTRADA guardar_respuesta ===")
-    logger_crm.info(f"cliente={repr(cliente)}")
-    logger_crm.info(f"tipo_cliente={type(cliente).__name__}")
-    logger_crm.info(f"respuesta={repr(respuesta)}")
-    logger_crm.info("="*80)
-    
     telefono = cliente
-    if isinstance(cliente, dict):
-        telefono = cliente.get('numero')
-    
+    if isinstance(cliente, dict): telefono = cliente.get('numero')
     try:
         with get_db_connection() as conn:
-            logger_crm.info("=== SQL guardar_respuesta ===")
-            sql = "INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)"
-            params = (telefono, respuesta, "bot")
-            logger_crm.info(f"SQL = {sql}")
-            logger_crm.info(f"PARAMS = {repr(params)}")
-            logger_crm.info(f"TYPES = {[type(p).__name__ for p in params]}")
-            logger_crm.info("="*80)
-            
-            conn.execute(sql, params)
+            conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, respuesta, "bot"))
             conn.commit()
-    except Exception:
-        pass
+    except Exception: pass
 
 def pedido_para_ram(*args, **kwargs): return {}
 def cargar_pedido(pedido_id): return pedido_manager.obtener_pedido(pedido_id)
 
-# ==============================================================================
-# # sincronizar_pedido - Instrumentación pura (SIN SUPOSICIONES DE ARGUMENTOS)
-# ==============================================================================
+# -------------------------------------------------------------
+# 🔥 LA CORRECCIÓN FINAL Y EL GUARDIÁN DE SEGURIDAD 🔥
+# -------------------------------------------------------------
 def sincronizar_pedido(*args, **kwargs):
-    # ================================================================
-    # [INSTRUMENTACIÓN DE ARGUMENTOS] - SIN CAMBIOS DE LÓGICA
-    # ================================================================
-    logger_crm.info("="*80)
-    logger_crm.info("=== ENTRADA sincronizar_pedido ===")
-    logger_crm.info(f"args = {repr(args)}")
-    logger_crm.info(f"kwargs = {repr(kwargs)}")
-    logger_crm.info("=== ARGS DETALLADOS ===")
+    # =====================================================================
+    # 1. INSTRUMENTACIÓN CON PRINT (GARANTIZADO QUE SE VEA EN RENDER)
+    # =====================================================================
+    print("="*80)
+    print("=== ENTRADA sincronizar_pedido (DEBUG) ===")
+    print(f"args = {args}")
+    print(f"kwargs = {kwargs}")
     for i, a in enumerate(args):
-        logger_crm.info(f"args[{i}] = {type(a).__name__} -> {repr(a)}")
-    for k, v in kwargs.items():
-        logger_crm.info(f"kwargs['{k}'] = {type(v).__name__} -> {repr(v)}")
-    logger_crm.info("="*80)
-    # ================================================================
-    
-    # --- Lógica original (SIN parche peligroso) ---
-    pedido_id, datos = None, {}
+        print(f"args[{i}] = {type(a).__name__} -> {a}")
+    print("="*80)
+    # =====================================================================
+
+    # 2. GUARDIÁN DE SEGURIDAD: Detecta el dict en args[0] y lo anula
+    pedido_id = None
+    datos = {}
+
     if args:
-        pedido_id = args[0]
-        if len(args) > 1: datos = args[1]
-    elif kwargs.get('pedido_id'):
+        # 🚨 ¡EL ASESINO! Si args[0] es un dict, es el CLIENTE. Lo ignoramos.
+        if isinstance(args[0], dict):
+            print("⚠️ [GUARDIÁN] Detectado dict en args[0] (Cliente). Ignorando.")
+            if len(args) > 1:
+                if isinstance(args[1], int):
+                    pedido_id = args[1]
+                elif isinstance(args[1], dict):
+                    datos = args[1]
+        else:
+            # args[0] no es dict, entonces es el pedido_id
+            pedido_id = args[0]
+            if len(args) > 1:
+                datos = args[1]
+
+    # 3. Buscar en kwargs si no lo encontramos
+    if not pedido_id and kwargs.get('pedido_id'):
         pedido_id = kwargs.get('pedido_id')
         datos = kwargs
         datos.pop('pedido_id', None)
-    
+
+    # Limpieza final
     if datos and isinstance(datos, dict):
         datos.pop('_req_id', None)
-    
-    if pedido_id and datos:
-        logger_crm.info(f"🔄 [CRM] Sincronizando Pedido {pedido_id}")
-        logger_crm.info(f"CLAVES_DATOS: {list(datos.keys())}")
-        pedido_manager.actualizar_pedido(pedido_id, **datos)
-    elif pedido_id and not datos:
-        logger_crm.info(f"🔄 [CRM] Pedido {pedido_id} sincronizado sin datos para actualizar.")
-    
-    return cargar_pedido(pedido_id)
 
+    # 4. Ejecutar SOLO SI pedido_id es un entero válido
+    if pedido_id and isinstance(pedido_id, int):
+        print(f"✅ sincronizar_pedido: Actualizando pedido {pedido_id}")
+        pedido_manager.actualizar_pedido(pedido_id, **datos)
+    elif pedido_id:
+        print(f"❌ sincronizar_pedido: pedido_id no es un entero ({type(pedido_id).__name__})")
+    else:
+        print(f"ℹ️ sincronizar_pedido: No se encontró pedido_id válido.")
+
+    return cargar_pedido(pedido_id) if isinstance(pedido_id, int) else {}
+
+# ... Resto de funciones sin cambios ...
 def _detectar_intencion_pedido(texto: str) -> bool:
     return sum(1 for p in ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo"] if p in texto.lower()) >= 2
 

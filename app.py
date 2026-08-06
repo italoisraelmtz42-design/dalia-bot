@@ -2,6 +2,10 @@ import os
 import json
 import time
 import random
+import re
+import hmac
+import hashlib
+import base64
 import threading
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -14,6 +18,8 @@ from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 from openai import OpenAI
 
+import crm
+
 # ===========================
 # CONFIGURACIÓN
 # ===========================
@@ -23,11 +29,30 @@ load_dotenv()
 app = Flask(__name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Crea las tablas de SQLite si no existen (y agrega columnas nuevas a las
+# que ya existían). app.py nunca ejecuta SQL directamente: todo pasa por
+# crm.py -> clientes.py / historial.py / pedidos.py / database.py.
+try:
+    crm.inicializar_base_datos()
+    print("✅ Base de datos (SQLite) lista")
+except Exception as e:
+    # No tumbamos el bot si la base de datos falla al iniciar: el bot sigue
+    # funcionando con la memoria en RAM (sesiones) como hasta ahora.
+    print("⚠️ No se pudo inicializar la base de datos:", repr(e))
+
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 # El token de verificación ya NO va escrito directo en el código.
 # Defínelo en tu .env como WHATSAPP_VERIFY_TOKEN=lo-que-tu-quieras
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "cambia_este_token")
+
+# App Secret de tu app de Meta (developers.facebook.com -> tu app ->
+# Configuración -> Básica -> "Clave secreta de la app"). Se usa para
+# verificar que cada webhook que llega de verdad viene de Meta, y no de
+# alguien que descubrió la URL y manda mensajes falsos. Si no lo defines
+# todavía, el bot sigue funcionando igual que antes (sin esta protección),
+# solo con una advertencia en los logs.
+WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
 
 GRAPH_API_VERSION = "v20.0"
 GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
@@ -143,7 +168,7 @@ def cargar_conocimiento():
         print(f"[{i:02}/{len(archivos)}] ✅ {archivo.name}")
         try:
             contenido = archivo.read_text(encoding="utf-8", errors="ignore")
-            knowledge += f"""
+            bloque = f"""
 
 ==================================================
 ARCHIVO: {archivo.name}
@@ -156,6 +181,8 @@ FIN DEL ARCHIVO
 ==================================================
 
 """
+            knowledge += bloque
+            CONOCIMIENTO_POR_ARCHIVO[archivo.name] = bloque
         except Exception as e:
             print(f"❌ Error leyendo {archivo.name}: {e}")
 
@@ -167,7 +194,67 @@ FIN DEL ARCHIVO
     return knowledge
 
 
+# Etapa 2: se guarda también cada archivo por separado (mismo formato de
+# bloque que ya se usaba) para poder seleccionar solo los relevantes al
+# mensaje del cliente, en vez de mandar los ~48 archivos completos en
+# cada llamada a OpenAI.
+CONOCIMIENTO_POR_ARCHIVO = {}
 KNOWLEDGE = cargar_conocimiento()
+
+# Archivos que se incluyen SIEMPRE sin importar el mensaje del cliente,
+# porque son reglas transversales (aplican casi a cualquier conversación:
+# cómo hablar, cómo cobrar, qué colores hay, cómo se vende). Si cambias
+# los nombres de estos archivos en /conocimiento, actualiza esta lista.
+ARCHIVOS_CONOCIMIENTO_SIEMPRE = {
+    "04_REGLAS_GENERALES.txt",
+    "033_Reglas_Conversacion.txt",
+    "027_Pagos_y_Anticipos.txt",
+    "028_Colores_Disponibles.txt",
+    "029_Flujo_de_Venta.txt",
+    "050_Saludos_Humanos.txt",
+}
+
+
+def seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=None, top_k=16):
+    """Selecciona un subconjunto de archivos de conocimiento relevantes al
+    mensaje del cliente (más los de ARCHIVOS_CONOCIMIENTO_SIEMPRE), en vez
+    de mandar los ~48 archivos completos en cada llamada a OpenAI.
+
+    Es un filtro simple por coincidencia de palabras, NO es RAG con
+    embeddings (eso queda como mejora futura, ver roadmap). Si por
+    cualquier motivo no hay archivos cargados individualmente, regresa el
+    KNOWLEDGE completo como respaldo (mismo comportamiento que antes).
+    """
+    if not CONOCIMIENTO_POR_ARCHIVO:
+        return KNOWLEDGE
+
+    texto_relevancia = texto_cliente or ""
+    if historial_reciente:
+        texto_relevancia += " " + " ".join(
+            m.get("content", "") for m in historial_reciente[-4:]
+            if isinstance(m.get("content"), str)
+        )
+
+    palabras_clave = {
+        p for p in re.findall(r"[a-záéíóúñ0-9]+", texto_relevancia.lower())
+        if len(p) > 3
+    }
+
+    puntajes = []
+    for nombre, bloque in CONOCIMIENTO_POR_ARCHIVO.items():
+        bloque_lower = bloque.lower()
+        puntaje = sum(1 for palabra in palabras_clave if palabra in bloque_lower)
+        puntajes.append((puntaje, nombre))
+
+    puntajes.sort(key=lambda x: x[0], reverse=True)
+    seleccionados = {nombre for _, nombre in puntajes[:top_k]}
+    seleccionados |= ARCHIVOS_CONOCIMIENTO_SIEMPRE
+
+    return "".join(
+        CONOCIMIENTO_POR_ARCHIVO[nombre]
+        for nombre in sorted(seleccionados)
+        if nombre in CONOCIMIENTO_POR_ARCHIVO
+    )
 
 
 # ===========================
@@ -181,7 +268,12 @@ sesiones_lock = threading.Lock()
 
 # IDs de mensajes de WhatsApp ya procesados, para ignorar reintentos que
 # Meta manda si el webhook no responde 200 OK lo bastante rápido.
+# Se guardan en un set (para checar existencia rápido) + una lista que
+# mantiene el orden real de llegada, así al llenarse se descarta siempre
+# el más viejo (antes se usaba set.pop(), que en Python no garantiza cuál
+# elemento quita).
 mensajes_procesados = set()
+orden_mensajes_procesados = []
 mensajes_procesados_lock = threading.Lock()
 MAX_MENSAJES_PROCESADOS = 2000
 
@@ -194,9 +286,34 @@ def ya_fue_procesado(mensaje_id):
         if mensaje_id in mensajes_procesados:
             return True
         mensajes_procesados.add(mensaje_id)
-        if len(mensajes_procesados) > MAX_MENSAJES_PROCESADOS:
-            mensajes_procesados.pop()
+        orden_mensajes_procesados.append(mensaje_id)
+        if len(orden_mensajes_procesados) > MAX_MENSAJES_PROCESADOS:
+            mas_viejo = orden_mensajes_procesados.pop(0)
+            mensajes_procesados.discard(mas_viejo)
         return False
+
+
+def verificar_firma_webhook(payload_bytes, firma_header):
+    """Verifica que el request al webhook realmente venga de Meta, usando
+    el App Secret para comparar contra el header X-Hub-Signature-256.
+
+    Si WHATSAPP_APP_SECRET todavía no está configurado, deja pasar todo
+    (igual que antes de este cambio) pero avisa en logs, para no romper
+    instalaciones existentes de un día para otro.
+    """
+    if not WHATSAPP_APP_SECRET:
+        print("⚠️ WHATSAPP_APP_SECRET no configurado: el webhook NO está verificando su origen")
+        return True
+
+    if not firma_header or not firma_header.startswith("sha256="):
+        return False
+
+    firma_esperada = hmac.new(
+        WHATSAPP_APP_SECRET.encode("utf-8"), payload_bytes, hashlib.sha256
+    ).hexdigest()
+    firma_recibida = firma_header.split("sha256=", 1)[1]
+
+    return hmac.compare_digest(firma_esperada, firma_recibida)
 
 
 def pedido_vacio():
@@ -211,6 +328,7 @@ def pedido_vacio():
         "datos_tarjeta": None,
         "tipo_entrega": None,
         "direccion": None,
+        "anticipo_confirmado": None,
     }
 
 
@@ -227,12 +345,38 @@ def info_enviada_vacia():
 
 
 def obtener_sesion(numero):
-    """Devuelve (y crea si no existe) la sesión de un cliente por su número."""
+    """Devuelve (y crea si no existe) la sesión de un cliente por su número.
+
+    Etapa 1 del roadmap: SQLite es la fuente de verdad. Si el número no
+    tiene sesión en RAM todavía (primer mensaje desde que arrancó este
+    proceso, por ejemplo después de que Render reinició el servicio), la
+    sesión se "hidrata" leyendo el historial y el pedido desde SQLite, en
+    vez de empezar en blanco. Así la memoria del cliente sobrevive un
+    reinicio, no solo mientras el proceso siga vivo.
+
+    Una vez hidratada, la sesión vive en RAM igual que antes (preguntar_ia
+    no cambió) y se sigue sincronizando hacia SQLite después de cada
+    respuesta (ver crm.sincronizar_pedido en procesar_mensaje_en_fondo).
+    """
     with sesiones_lock:
         if numero not in sesiones:
+            mensajes_previos = []
+            pedido_previo = None
+            try:
+                cliente = crm.cargar_cliente(numero)
+                mensajes_previos = crm.cargar_memoria(cliente, limite=MAX_TURNOS_HISTORIAL)
+                pedido_previo = crm.cargar_pedido_ram(cliente)
+                if mensajes_previos or (pedido_previo and any(pedido_previo.values())):
+                    print(f"♻️ Sesión de {numero} hidratada desde SQLite ({len(mensajes_previos)} mensajes previos)")
+            except Exception as e:
+                # Si SQLite falla por lo que sea, el bot sigue funcionando
+                # con una sesión en blanco (el comportamiento de antes),
+                # nunca se cae por esto.
+                print(f"⚠️ No se pudo hidratar sesión de {numero} desde SQLite, arranca en blanco: {repr(e)}")
+
             sesiones[numero] = {
-                "messages": [],
-                "pedido": pedido_vacio(),
+                "messages": mensajes_previos,
+                "pedido": pedido_previo or pedido_vacio(),
                 "info_enviada": info_enviada_vacia(),
                 "imagenes_enviadas": set(),  # claves de CATALOGO_IMAGENES ya mandadas
                 "lock": threading.Lock(),  # serializa mensajes del MISMO cliente
@@ -327,7 +471,10 @@ explícitamente.
 """
 
 
-def construir_system_prompt(pedido, info_enviada):
+def construir_system_prompt(pedido, info_enviada, conocimiento=None):
+    if conocimiento is None:
+        conocimiento = KNOWLEDGE  # respaldo: comportamiento igual que antes
+
     ahora = datetime.now(ZONA_HORARIA_NEGOCIO)
     fecha = ahora.strftime("%d/%m/%Y")
     hora = ahora.strftime("%H:%M")
@@ -396,6 +543,28 @@ confirmado todavía.
 
 {seccion_catalogo_pdf()}
 
+RECEPCIÓN DE IMÁGENES DEL CLIENTE (Vision):
+Cuando el cliente te mande una imagen, clasifícala primero en una de estas
+categorías y actúa según corresponda:
+
+1. COMPROBANTE DE PAGO (pantalla de banco, ticket, captura de transferencia
+   o depósito): confirma amablemente que lo recibiste, menciona el monto
+   si lo puedes leer con claridad, agradece, y llama a actualizar_pedido
+   con anticipo_confirmado=true. Avísale que en breve le confirman su
+   pedido. Si el monto no se alcanza a leer bien, dile que no se ve claro
+   y pide que lo reenvíe o confirme el monto por texto — no inventes un
+   monto que no puedas leer con seguridad.
+2. REFERENCIA DE COLOR (foto de un color/tela/objeto que el cliente manda
+   para pedir "quiero este color"): compáralo con los colores disponibles
+   en la Base de Conocimiento y dile cuál de los tuyos se parece más. No
+   asumas un color exacto que no tengas.
+3. EJEMPLO O REFERENCIA DE PRODUCTO (foto de un recuerdito de otro lado
+   que el cliente manda como inspiración): coméntale con naturalidad qué
+   tan parecido es a lo que ustedes manejan, sin prometer una réplica
+   exacta si no la tienen.
+4. OTRA IMAGEN (no encaja en ninguna de las anteriores): coméntalo con
+   naturalidad y sigue la conversación normal, sin asumir que es un pago.
+
 INFORMACIÓN QUE YA SE LE ENVIÓ A ESTE CLIENTE EN MENSAJES ANTERIORES
 (no la repitas salvo que el cliente la pida explícitamente de nuevo):
 
@@ -403,7 +572,7 @@ INFORMACIÓN QUE YA SE LE ENVIÓ A ESTE CLIENTE EN MENSAJES ANTERIORES
 
 BASE DE CONOCIMIENTO:
 
-{KNOWLEDGE}
+{conocimiento}
 """
 
 
@@ -438,6 +607,13 @@ TOOLS = [
                         "description": "Uno de: 'local', 'punto_de_entrega', 'domicilio'",
                     },
                     "direccion": {"type": "string", "description": "Dirección o municipio para envío a domicilio"},
+                    "anticipo_confirmado": {
+                        "type": "boolean",
+                        "description": (
+                            "Márcalo como true cuando el cliente mande una imagen que sea "
+                            "claramente un comprobante de pago o transferencia del anticipo."
+                        ),
+                    },
                 },
             },
         },
@@ -489,15 +665,66 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
     print("📝 Pedido actualizado:", pedido)
 
 
-def preguntar_ia(numero, texto_cliente):
+def ejecutar_tool_call(tool_call, sesion, numero, pedido):
+    """Ejecuta una sola llamada a herramienta que pidió el modelo y
+    devuelve el string de resultado que se le manda de vuelta a OpenAI.
+    Se extrajo de preguntar_ia() para que esa función no quedara tan larga
+    (Etapa 4: limpieza de código, mismo comportamiento de antes)."""
+    if tool_call.function.name == "actualizar_pedido":
+        aplicar_actualizacion_pedido(pedido, tool_call.function.arguments)
+        return "ok"
+
+    if tool_call.function.name == "mostrar_foto_producto":
+        try:
+            args = json.loads(tool_call.function.arguments or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        clave = args.get("producto")
+        imagenes_enviadas = sesion["imagenes_enviadas"]
+
+        if clave in imagenes_enviadas:
+            return "ya se le mandó esta foto antes en la conversación, no la repitas"
+
+        url_imagen = url_imagen_producto(clave)
+        if not url_imagen:
+            return f"no hay foto disponible para '{clave}', no ofrezcas una foto de esto"
+
+        nombre_mostrar = CATALOGO_IMAGENES[clave]["nombre_mostrar"]
+        enviar_whatsapp_imagen(numero, url_imagen, caption=nombre_mostrar)
+        imagenes_enviadas.add(clave)
+        return "imagen enviada correctamente"
+
+    return "función desconocida"
+
+
+def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
     sesion = obtener_sesion(numero)
     historial = sesion["messages"]
     pedido = sesion["pedido"]
     info_enviada = sesion["info_enviada"]
 
-    historial.append({"role": "user", "content": texto_cliente})
+    if imagen_base64:
+        # Etapa 3 (Vision): mensaje multimodal, texto (si lo hay) + la
+        # imagen que mandó el cliente.
+        contenido_usuario = [
+            {"type": "text", "text": texto_cliente or "(El cliente mandó una imagen sin texto)"},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{imagen_mime};base64,{imagen_base64}"},
+            },
+        ]
+    else:
+        contenido_usuario = texto_cliente
 
-    system_prompt = construir_system_prompt(pedido, info_enviada)
+    historial.append({"role": "user", "content": contenido_usuario})
+
+    # Etapa 2: en vez de mandar SIEMPRE la base de conocimiento completa,
+    # se selecciona solo lo relevante al mensaje (+ los archivos que
+    # siempre aplican). Se calcula una vez por mensaje y se reutiliza en
+    # las vueltas del loop de herramientas de abajo.
+    conocimiento_relevante = seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=historial)
+
+    system_prompt = construir_system_prompt(pedido, info_enviada, conocimiento=conocimiento_relevante)
     mensajes_completos = [{"role": "system", "content": system_prompt}] + historial
 
     # Recortar historial para no crecer sin límite (igual que en main.py)
@@ -530,33 +757,7 @@ def preguntar_ia(numero, texto_cliente):
             mensajes_completos.append(mensaje.model_dump(exclude_none=True))
 
             for tool_call in mensaje.tool_calls:
-                if tool_call.function.name == "actualizar_pedido":
-                    aplicar_actualizacion_pedido(pedido, tool_call.function.arguments)
-                    resultado = "ok"
-
-                elif tool_call.function.name == "mostrar_foto_producto":
-                    try:
-                        args = json.loads(tool_call.function.arguments or "{}")
-                    except json.JSONDecodeError:
-                        args = {}
-                    clave = args.get("producto")
-                    imagenes_enviadas = sesion["imagenes_enviadas"]
-
-                    if clave in imagenes_enviadas:
-                        resultado = "ya se le mandó esta foto antes en la conversación, no la repitas"
-                    else:
-                        url_imagen = url_imagen_producto(clave)
-                        if url_imagen:
-                            nombre_mostrar = CATALOGO_IMAGENES[clave]["nombre_mostrar"]
-                            enviar_whatsapp_imagen(numero, url_imagen, caption=nombre_mostrar)
-                            imagenes_enviadas.add(clave)
-                            resultado = "imagen enviada correctamente"
-                        else:
-                            resultado = f"no hay foto disponible para '{clave}', no ofrezcas una foto de esto"
-
-                else:
-                    resultado = "función desconocida"
-
+                resultado = ejecutar_tool_call(tool_call, sesion, numero, pedido)
                 mensajes_completos.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
@@ -565,7 +766,9 @@ def preguntar_ia(numero, texto_cliente):
 
             # Como el pedido pudo cambiar, refrescamos el system prompt antes
             # de la siguiente vuelta (por si el resumen del pedido cambia).
-            mensajes_completos[0]["content"] = construir_system_prompt(pedido, info_enviada)
+            mensajes_completos[0]["content"] = construir_system_prompt(
+                pedido, info_enviada, conocimiento=conocimiento_relevante
+            )
             continue  # volvemos a llamar al modelo para que dé la respuesta en texto
 
         # No hubo (más) tool_calls: esta es la respuesta final para el cliente
@@ -577,6 +780,21 @@ def preguntar_ia(numero, texto_cliente):
         for clave, se_envio in detectado.items():
             if se_envio:
                 info_enviada[clave] = True
+
+        # Etapa 2: registrar cuántos tokens consumió esta llamada (para
+        # poder ver costo aproximado más adelante en un dashboard). Si
+        # esto falla por lo que sea, nunca debe tumbar la respuesta al
+        # cliente -> va en su propio try/except.
+        try:
+            uso = getattr(r, "usage", None)
+            if uso is not None:
+                crm.registrar_uso_openai(
+                    numero, MODELO,
+                    getattr(uso, "prompt_tokens", None),
+                    getattr(uso, "completion_tokens", None),
+                )
+        except Exception as e:
+            print("⚠️ No se pudo registrar uso de OpenAI:", repr(e))
 
         return texto
 
@@ -634,6 +852,37 @@ def enviar_whatsapp_imagen(numero, image_url, caption=""):
         return None
 
 
+def descargar_imagen_whatsapp(media_id):
+    """Descarga una imagen que el CLIENTE mandó por WhatsApp (Etapa 3:
+    Vision), usando su media_id. Meta funciona en dos pasos: primero da la
+    URL real del archivo (que expira rápido), luego hay que descargarla
+    con el mismo token. Devuelve (bytes_de_la_imagen, mime_type) o
+    (None, None) si falla."""
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    try:
+        r = requests.get(f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}", headers=headers, timeout=15)
+        if r.status_code >= 400:
+            print("⚠️ Error obteniendo URL del medio:", r.status_code, r.text)
+            return None, None
+
+        info = r.json()
+        url_medio = info.get("url")
+        mime_type = info.get("mime_type", "image/jpeg")
+        if not url_medio:
+            print("⚠️ La respuesta de Meta no trajo URL del medio:", info)
+            return None, None
+
+        r2 = requests.get(url_medio, headers=headers, timeout=20)
+        if r2.status_code >= 400:
+            print("⚠️ Error descargando el archivo del medio:", r2.status_code)
+            return None, None
+
+        return r2.content, mime_type
+    except requests.RequestException as e:
+        print("⚠️ Excepción descargando imagen de WhatsApp:", e)
+        return None, None
+
+
 # ===========================
 # SERVIR LAS FOTOS DE PRODUCTO
 # WhatsApp necesita descargar la imagen de una URL pública para poder
@@ -669,11 +918,48 @@ def verify_webhook():
 # WEBHOOK: MENSAJES ENTRANTES
 # ===========================
 
-def procesar_mensaje_en_fondo(numero, texto_cliente):
+def registrar_entrada_cliente(numero, texto_para_guardar, tipo="texto"):
+    """Crea/actualiza el cliente en la base de datos y guarda su mensaje.
+    Se llama para CUALQUIER mensaje entrante, sea texto o no soportado."""
+    cliente = crm.cargar_cliente(numero)
+    crm.guardar_mensaje_cliente(cliente, texto_para_guardar, tipo=tipo)
+    return cliente
+
+
+def procesar_mensaje_no_soportado(numero, tipo):
+    """Registra en el CRM un mensaje de un tipo que el bot todavía no
+    puede leer (imagen, audio, etc.) y le avisa al cliente."""
+    cliente = registrar_entrada_cliente(numero, f"[mensaje no soportado: {tipo}]", tipo=tipo)
+    respuesta = "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?"
+    crm.guardar_respuesta(cliente, respuesta)
+    enviar_whatsapp(numero, respuesta)
+
+
+def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
     """Corre en un hilo aparte para no bloquear la respuesta al webhook de Meta."""
     print("=" * 70)
     print(f"🚀 Procesando mensaje de {numero}")
     print(f"💬 Texto recibido: {texto_cliente}")
+
+    imagen_base64 = None
+    imagen_mime = None
+    tipo_para_crm = "texto"
+    if media_id_imagen:
+        print("🖼️ El cliente mandó una imagen (Vision), descargándola...")
+        contenido, mime = descargar_imagen_whatsapp(media_id_imagen)
+        if contenido:
+            imagen_base64 = base64.b64encode(contenido).decode("utf-8")
+            imagen_mime = mime
+            tipo_para_crm = "imagen"
+            print(f"✅ Imagen descargada ({len(contenido)} bytes, {mime})")
+        else:
+            print("❌ No se pudo descargar la imagen del cliente, se sigue solo con el texto (si había)")
+
+    # CRM: crea/actualiza el cliente y guarda su mensaje en SQLite. Esto
+    # corre en paralelo a la memoria en RAM (sesiones), que sigue siendo la
+    # que usa preguntar_ia sin ningún cambio.
+    texto_para_guardar = texto_cliente or ("(imagen sin texto)" if media_id_imagen else "")
+    cliente = registrar_entrada_cliente(numero, texto_para_guardar, tipo=tipo_para_crm)
 
     sesion = obtener_sesion(numero)
     # Serializa mensajes del MISMO cliente (si llegan muy pegados) sin
@@ -681,12 +967,20 @@ def procesar_mensaje_en_fondo(numero, texto_cliente):
     with sesion["lock"]:
         try:
             print("🧠 Consultando OpenAI...")
-            respuesta = preguntar_ia(numero, texto_cliente)
+            respuesta = preguntar_ia(numero, texto_cliente, imagen_base64=imagen_base64, imagen_mime=imagen_mime)
             print("✅ Respuesta generada")
             print(respuesta[:300])
         except Exception as e:
             print("❌ Error llamando a OpenAI:", repr(e))
             respuesta = "Disculpa, tuve un problema técnico. ¿Me puedes repetir tu mensaje? 🙂"
+
+        # CRM: guarda la respuesta del bot y sincroniza el pedido (RAM ->
+        # SQLite) sin modificar preguntar_ia ni la lógica de ventas.
+        try:
+            crm.guardar_respuesta(cliente, respuesta)
+            crm.sincronizar_pedido(cliente, sesion["pedido"])
+        except Exception as e:
+            print("⚠️ Error guardando en CRM (el bot sigue funcionando con RAM):", repr(e))
 
         # Pequeña espera para que no se sienta instantáneo/robótico
         time.sleep(random.uniform(2, 4))
@@ -703,6 +997,11 @@ def procesar_mensaje_en_fondo(numero, texto_cliente):
 
 @app.route("/webhook", methods=["POST"])
 def handle_message():
+    firma = request.headers.get("X-Hub-Signature-256", "")
+    if not verificar_firma_webhook(request.get_data(), firma):
+        print("🚫 Webhook rechazado: la firma no coincide (el request no parece venir de Meta)")
+        return jsonify({"status": "firma inválida"}), 403
+
     data = request.get_json(silent=True) or {}
 
     try:
@@ -726,10 +1025,24 @@ def handle_message():
             print(f"🔁 Mensaje duplicado ignorado: {mensaje_id}")
             return jsonify({"status": "duplicado ignorado"}), 200
 
+        if tipo == "image":
+            # Etapa 3 (Vision): se procesa igual que un mensaje de texto,
+            # pero con la imagen adjunta. El caption (si el cliente le
+            # puso texto a la foto) se manda como el "texto" del mensaje.
+            media_id = mensaje["image"]["id"]
+            caption = mensaje["image"].get("caption", "")
+            threading.Thread(
+                target=procesar_mensaje_en_fondo,
+                args=(numero, caption),
+                kwargs={"media_id_imagen": media_id},
+                daemon=True,
+            ).start()
+            return jsonify({"status": "ok"}), 200
+
         if tipo != "text":
             threading.Thread(
-                target=enviar_whatsapp,
-                args=(numero, "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?"),
+                target=procesar_mensaje_no_soportado,
+                args=(numero, tipo),
                 daemon=True,
             ).start()
             return jsonify({"status": "tipo de mensaje no soportado"}), 200

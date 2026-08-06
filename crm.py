@@ -10,31 +10,38 @@ import pedido_manager
 init_db()
 
 # ==============================================================================
-# # UTILIDAD EXTREMA DE CONVERSIÓN DE TIPOS (A prueba de balas)
+# # UTILIDAD EXTREMA DE CONVERSIÓN DE TIPOS (A prueba de todo tipo de dato)
 # ==============================================================================
 def _safe_str(value) -> str:
     """
     Convierte ABSOLUTAMENTE CUALQUIER cosa a string de forma segura para SQLite.
-    Nunca retorna un dict, lista, tupla u objeto personalizado.
+    Si es un dict, intenta extraer 'numero'. Si falla el serializado, usa str(value).
     """
     if value is None:
         return ""
     if isinstance(value, (str, int, float, bool)):
         return str(value)
+    
+    # Si es un diccionario (o un sqlite3.Row que se comporta como dict)
     if isinstance(value, dict):
-        # Intentamos extraer el número de teléfono si existe
         numero = value.get('numero', None)
         if numero:
             return str(numero)
-        # Si no hay número, serializamos el dict completo como string
-        return json.dumps(value)
+        try:
+            return json.dumps(value)
+        except Exception:
+            return str(value)
+    
+    # Si es una lista o tupla
     if isinstance(value, (list, tuple)):
-        # Si es una lista, intentamos tomar el primer elemento seguro
         if value and isinstance(value[0], (str, int, float, bool)):
             return str(value[0])
-        # Si no, serializamos la lista
-        return json.dumps(value)
-    # Cualquier otro objeto (dataclasses, sqlite3.Row, etc.)
+        try:
+            return json.dumps(value)
+        except Exception:
+            return str(value)
+    
+    # Cualquier otro objeto (dataclasses, etc.)
     try:
         return str(value)
     except Exception:
@@ -47,7 +54,7 @@ def inicializar_base_datos():
     """
     Función requerida por el app.py congelado para inicializar la base de datos.
     """
-    logger_crm.info("🔄 [Compatibilidad] app.py llamó a crm.inicializar_base_datos(). Ejecutando init_db()...")
+    logger_crm.info("🔄 [Gunicorn/Master] app.py solicitó inicializar_base_datos(). Ejecutando init_db()...")
     try:
         init_db()
         logger_crm.info("✅ Base de datos inicializada exitosamente.")

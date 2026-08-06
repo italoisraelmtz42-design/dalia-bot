@@ -1,9 +1,3 @@
-# ------------------------------------------------------------------------------
-# DEBUG MARKER - IMPORTANTE: Si ves esto en los logs, el parche funcionó.
-# ------------------------------------------------------------------------------
-print("🟢 [DEBUG] CRM PARCHADO CON WRAPPERS DICT/STRING CARGADO CORRECTAMENTE")
-# ------------------------------------------------------------------------------
-
 import re
 import logging
 from typing import Dict, Any, List, Optional
@@ -11,10 +5,9 @@ from database import get_db_connection, init_db
 from constantes import logger_crm, EstadoPedido, ModoAtencion, OrigenEvento
 import pedido_manager
 
-# Inicializamos las tablas (ya están creadas, esto es seguro y no las reinicia)
+# Inicializamos las tablas
 init_db()
 
-# MAPEO DE PREGUNTAS (Pertenece a la capa de conversación)
 MAPEO_PREGUNTAS = {
     "producto": "¿Qué producto deseas pedir? (ej. Toalla, Jabón)",
     "color_toalla": "¿De qué color quieres la toallita?",
@@ -29,84 +22,58 @@ MAPEO_PREGUNTAS = {
 }
 
 # ==============================================================================
-# # WRAPPERS DE COMPATIBILIDAD ROBUSTOS (Tolerancia a dicts y strings)
+# # WRAPPERS DE COMPATIBILIDAD ROBUSTOS
 # ==============================================================================
-
 def cargar_cliente(numero):
-    """
-    Si app.py pasa un dict en lugar de un string, lo extraemos.
-    """
-    if isinstance(numero, dict):
-        numero = numero.get('numero')
-    logger_crm.info(f"🔎 [CRM] Cliente: {numero}")
+    if isinstance(numero, dict): numero = numero.get('numero')
+    logger_crm.info(f"🔎 [CRM] Cliente: {numero} | TIPO: {type(numero)}")
     return {"numero": numero, "nombre": "Cliente Registrado", "estado": "activo"}
 
 def guardar_mensaje_cliente(cliente_ou_telefono, texto, tipo):
-    """
-    Wrapper tolerante. Recibe el dict o el teléfono y lo normaliza.
-    """
     telefono = cliente_ou_telefono
-    if isinstance(cliente_ou_telefono, dict):
-        telefono = cliente_ou_telefono.get('numero')
-    
-    logger_crm.info(f"💾 [CRM] Mensaje para {telefono}")
+    if isinstance(cliente_ou_telefono, dict): telefono = cliente_ou_telefono.get('numero')
+    logger_crm.info(f"💾 [CRM] Mensaje para {telefono} | TIPO: {type(telefono)}")
     try:
         with get_db_connection() as conn:
             conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, texto, "usuario"))
             conn.commit()
-    except Exception as e:
-        logger_crm.error(f"Error guardando mensaje de usuario: {e}")
+    except Exception as e: logger_crm.error(f"Error guardando mensaje de usuario: {e}")
     return {"status": "ok", "mensaje_guardado": True}
 
 def cargar_memoria(telefono_ou_cliente, limite: int = 20) -> List[Dict[str, str]]:
-    """
-    Wrapper tolerante. Recibe el dict o el teléfono y lo normaliza para SQLite.
-    """
     telefono = telefono_ou_cliente
-    if isinstance(telefono_ou_cliente, dict):
-        telefono = telefono_ou_cliente.get('numero')
-    
+    if isinstance(telefono_ou_cliente, dict): telefono = telefono_ou_cliente.get('numero')
+    logger_crm.info(f"🧠 [CRM] Cargando memoria para {telefono} | TIPO: {type(telefono)}")
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT mensaje, emisor FROM historial_chat WHERE telefono = ? ORDER BY timestamp DESC LIMIT ?",
-                (telefono, limite)
-            )
+            cursor.execute("SELECT mensaje, emisor FROM historial_chat WHERE telefono = ? ORDER BY timestamp DESC LIMIT ?", (telefono, limite))
             rows = cursor.fetchall()
             return [{"role": "user" if e == "usuario" else "assistant", "content": m} for m, e in reversed(rows)]
-    except Exception as e:
-        logger_crm.error(f"Error cargando memoria: {e}")
-        return []
+    except Exception as e: logger_crm.error(f"Error cargando memoria: {e}")
+    return []
 
 def registrar_uso_openai(*args, **kwargs):
-    """Wrapper de compatibilidad que acepta 1 o varios argumentos."""
     telefono = None
     if args and args[0]:
         telefono = args[0]
-        if isinstance(telefono, dict):
-            telefono = telefono.get('numero')
+        if isinstance(telefono, dict): telefono = telefono.get('numero')
+    logger_crm.info(f"🤖 [CRM] Registrando uso OpenAI para {telefono} | TIPO: {type(telefono)}")
     try:
         with get_db_connection() as conn:
             conn.execute("INSERT INTO uso_openai (telefono) VALUES (?)", (telefono,))
             conn.commit()
-    except Exception:
-        pass
+    except Exception: pass
 
 def guardar_respuesta(cliente_ou_telefono, respuesta, tipo="texto"):
-    """
-    Guarda la respuesta del bot en el historial.
-    """
     telefono = cliente_ou_telefono
-    if isinstance(cliente_ou_telefono, dict):
-        telefono = cliente_ou_telefono.get('numero')
-    
+    if isinstance(cliente_ou_telefono, dict): telefono = cliente_ou_telefono.get('numero')
+    logger_crm.info(f"📤 [CRM] Guardando respuesta para {telefono} | TIPO: {type(telefono)}")
     try:
         with get_db_connection() as conn:
             conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, respuesta, "bot"))
             conn.commit()
-    except Exception:
-        pass
+    except Exception: pass
 
 def pedido_para_ram(*args, **kwargs): return {}
 def cargar_pedido(pedido_id): return pedido_manager.obtener_pedido(pedido_id)
@@ -116,13 +83,14 @@ def sincronizar_pedido(*args, **kwargs):
     if args:
         pedido_id = args[0]
         if len(args) > 1: datos = args[1]
-    elif kwargs.get('pedido_id'):
-        pedido_id, datos = kwargs.get('pedido_id'), kwargs
-    if pedido_id and datos: pedido_manager.actualizar_pedido(pedido_id, **datos)
+    elif kwargs.get('pedido_id'): pedido_id, datos = kwargs.get('pedido_id'), kwargs
+    if pedido_id and datos:
+        logger_crm.info(f"🔄 [CRM] Sincronizando Pedido {pedido_id} | DATOS TIPO: {type(datos)}")
+        pedido_manager.actualizar_pedido(pedido_id, **datos)
     return cargar_pedido(pedido_id)
 
 # ==============================================================================
-# # Capa de Conversación (Lógica de Traducción - SIN CAMBIOS)
+# # Capa de Conversación
 # ==============================================================================
 def _detectar_intencion_pedido(texto: str) -> bool:
     return sum(1 for p in ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo"] if p in texto.lower()) >= 2
@@ -131,18 +99,14 @@ def manejar_intencion_pedido(cliente, texto: str) -> str:
     try:
         telefono, cliente_id = cliente['numero'], cliente.get('id', 0)
         pedido_id = pedido_manager.crear_pedido(cliente_id, telefono)
-        
         producto_detectado, cantidad_detectada, precio_unitario = "Toalla Personalizada", 1, 350.0
         match_cantidad = re.search(r'(\d+)\s*(toalla|jabon)', texto.lower())
         if match_cantidad:
             cantidad_detectada = int(match_cantidad.group(1))
             if 'jabon' in match_cantidad.group(2): producto_detectado = "Jabón Personalizado"
-        
         pedido_manager.agregar_producto(pedido_id, producto_detectado, cantidad_detectada, precio_unitario)
         pedido_manager.cambiar_estado(pedido_id, EstadoPedido.CAPTURANDO_DATOS.value)
-        
         campos_faltantes = pedido_manager.obtener_campos_faltantes(pedido_id)
-        
         if not campos_faltantes:
             return f"{pedido_manager.generar_resumen(pedido_id)}\n\n✅ ¡Tu pedido está completo! Para reservarlo, te solicitamos un anticipo de $50 MXN. ¿Te parece bien?"
         else:

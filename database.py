@@ -4,7 +4,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Ruta de la base de datos (configurable por variable de entorno)
+# Ruta de la base de datos
 DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
 
 def get_db_connection():
@@ -15,14 +15,14 @@ def get_db_connection():
 
 def init_order_tables():
     """
-    Crea las tablas correspondientes al Motor de Pedidos (Sprint 1).
-    No interfiere con tablas existentes del bot.
+    Crea las tablas correspondientes al Motor de Pedidos y al sistema de Memoria.
+    No interfiere con tablas existentes.
     """
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # 1. Tabla de Pedidos
+            # 1. Tabla de Pedidos (Existente del Sprint 1)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pedidos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,7 +84,7 @@ def init_order_tables():
                 )
             """)
 
-            # 5. Tabla de Historial de Cambios
+            # 5. Tabla de Historial de Cambios de Pedidos
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pedido_historial (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,17 +96,36 @@ def init_order_tables():
                 )
             """)
 
+            # 6. NUEVA TABLA: Historial de Chat (Para la memoria del bot)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS historial_chat (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telefono TEXT NOT NULL,
+                    mensaje TEXT NOT NULL,
+                    emisor TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # 7. NUEVA TABLA: Registro de uso de OpenAI
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS uso_openai (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telefono TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             conn.commit()
-            logger.info("✅ Tablas del Motor de Pedidos inicializadas correctamente en SQLite.")
+            logger.info("✅ Tablas de Motor de Pedidos, Chat y OpenAI inicializadas correctamente en SQLite.")
 
     except Exception as e:
-        logger.error(f"❌ Error al crear las tablas de pedidos: {e}")
+        logger.error(f"❌ Error al crear las tablas en database.py: {e}")
         raise
 
 def init_db():
-    """Inicializa las tablas de la aplicación completa (incluye las nuevas de pedidos)."""
+    """Inicializa las tablas de la aplicación completa."""
     try:
         init_order_tables()
-        # Aquí irían inicializaciones de otras tablas del CRM/Usuarios si existieran
     except Exception as e:
         logger.critical(f"Fallo crítico en la inicialización de la base de datos: {e}")

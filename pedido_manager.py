@@ -162,9 +162,6 @@ def obtener_pedido(pedido_id: int) -> Optional[PedidoData]:
         return PedidoData(**pedido_dict, items=items, pagos=pagos, entrega=entrega)
 
 def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
-    # ================================================================
-    # [INSTRUMENTACIÓN TEMPORAL] - LOG DE ENTRADA
-    # ================================================================
     logger_pedidos.info("="*80)
     logger_pedidos.info("=== ENTRADA actualizar_pedido ===")
     logger_pedidos.info(f"pedido_id = {pedido_id} ({type(pedido_id).__name__})")
@@ -173,7 +170,6 @@ def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
     logger_pedidos.info(f"TIPO_KWARGS = {type(kwargs).__name__}")
     logger_pedidos.info(f"CLAVES_KWARGS = {list(kwargs.keys())}")
     logger_pedidos.info("="*80)
-    # ================================================================
     
     if not kwargs: return
     
@@ -182,7 +178,6 @@ def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
         conn = get_db_connection()
         conn.row_factory = sqlite3.Row
         
-        # SELECT previo para obtener los datos viejos (historial)
         sql_select = "SELECT * FROM pedidos WHERE id = ?"
         params_select = (pedido_id,)
         logger_pedidos.info("=== SQL actualizar_pedido (select previo) ===")
@@ -279,7 +274,7 @@ def eliminar_producto(item_id: int):
             pedido_id, producto = res[0], res[1]
             
             sql_delete = "DELETE FROM pedido_items WHERE id = ?"
-            logger_pedidos.info("=== SQL eliminar_producto (delete) ===")
+            logger_pedidos.info("=== SQL eliminar_producto (delete) ==="")
             logger_pedidos.info(f"SQL = {sql_delete}")
             logger_pedidos.info(f"PARAMS = {repr(params_select)}")
             logger_pedidos.info(f"TYPES = {[type(p).__name__ for p in params_select]}")

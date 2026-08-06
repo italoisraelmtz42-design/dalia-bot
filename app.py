@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 import crm
-import pedido_manager  # nuevo
+import pedido_manager
 
 # ===========================
 # CONFIGURACIÓN
@@ -30,15 +30,11 @@ load_dotenv()
 app = Flask(__name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Crea las tablas de SQLite si no existen (y agrega columnas nuevas a las
-# que ya existían). app.py nunca ejecuta SQL directamente: todo pasa por
-# crm.py -> clientes.py / historial.py / pedidos.py / database.py.
+# Crea las tablas de SQLite si no existen
 try:
     crm.inicializar_base_datos()
     print("✅ Base de datos (SQLite) lista")
 except Exception as e:
-    # No tumbamos el bot si la base de datos falla al iniciar: el bot sigue
-    # funcionando con la memoria en RAM (sesiones) como hasta ahora.
     print("⚠️ No se pudo inicializar la base de datos:", repr(e))
 
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
@@ -52,13 +48,13 @@ GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_ID}
 BASE = Path(__file__).resolve().parent
 CARPETA = BASE / "conocimiento"
 CARPETA_IMAGENES = BASE / "imagenes"
+CARPETA_CATALOGO = BASE / "catalogo"
+CARPETA_NOTAS = BASE / "notas"
+CARPETA_NOTAS.mkdir(exist_ok=True)  # Asegura que la carpeta exista
 
 MODELO = "gpt-4.1-mini"
-MAX_TURNOS_HISTORIAL = 20  # mensajes (usuario+asistente) que se guardan por cliente
+MAX_TURNOS_HISTORIAL = 20
 
-# URL pública de tu servicio en Render (para que WhatsApp pueda descargar las
-# imágenes). Si algún día cambia el dominio, solo actualiza la variable de
-# entorno PUBLIC_BASE_URL en Render, sin tocar código.
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://dalia-bot.onrender.com")
 
 # ===========================
@@ -97,9 +93,6 @@ CATALOGO_IMAGENES = cargar_catalogo_imagenes()
 # ===========================
 # CATÁLOGO GENERAL EN PDF
 # ===========================
-
-CARPETA_CATALOGO = BASE / "catalogo"
-
 
 def encontrar_catalogo_pdf():
     if not CARPETA_CATALOGO.exists():
@@ -400,7 +393,6 @@ def construir_system_prompt(pedido_id, info_enviada, conocimiento=None):
     if conocimiento is None:
         conocimiento = KNOWLEDGE
 
-    # Obtener el resumen desde la base de datos (no desde RAM)
     resumen = pedido_manager.generar_resumen(pedido_id) if pedido_id else "Sin pedido activo."
 
     ahora = datetime.now(ZONA_HORARIA_NEGOCIO)
@@ -542,7 +534,6 @@ TOOLS = [
                             "claramente un comprobante de pago o transferencia del anticipo."
                         ),
                     },
-                    # Nuevos campos para el motor de pedidos
                     "municipio": {"type": "string", "description": "Municipio para envío a domicilio"},
                     "tipo_jaboncito": {"type": "string", "description": "Tipo de jaboncito (ej. 'lavanda', 'vainilla')"},
                     "color_jaboncito": {"type": "string", "description": "Color del jaboncito"},
@@ -630,7 +621,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
     historial = sesion["messages"]
     pedido = sesion["pedido"]
     info_enviada = sesion["info_enviada"]
-    pedido_id = sesion.get("pedido_id")  # puede ser None si no hay pedido aún
+    pedido_id = sesion.get("pedido_id")
 
     if imagen_base64:
         contenido_usuario = [
@@ -683,7 +674,6 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
                     "content": resultado,
                 })
 
-            # Refrescar system prompt con el nuevo pedido (si cambió)
             mensajes_completos[0]["content"] = construir_system_prompt(
                 pedido_id, info_enviada, conocimiento=conocimiento_relevante
             )
@@ -766,6 +756,37 @@ def enviar_whatsapp_imagen(numero, image_url, caption=""):
         return None
 
 
+def enviar_whatsapp_documento(numero, url_documento, nombre_archivo, caption=""):
+    """
+    Envía un documento (PDF) por WhatsApp.
+    Esta función se usa desde nota_generator.py para enviar la nota de pedido.
+    """
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": numero,
+        "type": "document",
+        "document": {
+            "link": url_documento,
+            "caption": caption,
+            "filename": nombre_archivo,
+        },
+    }
+    try:
+        r = requests.post(GRAPH_URL, headers=headers, json=data, timeout=15)
+        if r.status_code >= 400:
+            print("⚠️ Error enviando documento por WhatsApp:", r.status_code, r.text)
+        else:
+            print(f"📄 Documento enviado a {numero}: {nombre_archivo}")
+        return r
+    except requests.RequestException as e:
+        print("⚠️ Excepción enviando documento:", e)
+        return None
+
+
 def descargar_imagen_whatsapp(media_id):
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
     try:
@@ -793,7 +814,7 @@ def descargar_imagen_whatsapp(media_id):
 
 
 # ===========================
-# SERVIR LAS FOTOS DE PRODUCTO
+# SERVIR ARCHIVOS ESTÁTICOS
 # ===========================
 
 @app.route("/imagenes/<path:nombre_archivo>")
@@ -804,6 +825,12 @@ def servir_imagen_producto(nombre_archivo):
 @app.route("/catalogo/<path:nombre_archivo>")
 def servir_catalogo_pdf(nombre_archivo):
     return send_from_directory(CARPETA_CATALOGO, nombre_archivo)
+
+
+@app.route("/notas/<path:nombre_archivo>")
+def servir_nota_pdf(nombre_archivo):
+    """Sirve las notas de pedido generadas en PDF."""
+    return send_from_directory(CARPETA_NOTAS, nombre_archivo)
 
 
 # ===========================
@@ -873,9 +900,8 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
 
         try:
             crm.guardar_respuesta(cliente, respuesta)
-            # Sincronizar el pedido de RAM a SQLite
             crm.sincronizar_pedido(cliente, sesion["pedido"])
-            # Actualizar el pedido_id en la sesión por si cambió (nuevo pedido)
+            # Actualizar pedido_id en sesión
             pedido_db = crm.cargar_pedido(cliente)
             sesion["pedido_id"] = pedido_db["id"] if pedido_db else None
         except Exception as e:

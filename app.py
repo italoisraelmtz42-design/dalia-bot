@@ -820,10 +820,15 @@ def enviar_whatsapp(numero, texto):
         "text": {"body": texto},
     }
     try:
-        r = requests.post(GRAPH_URL, headers=headers, json=data, timeout=15)
-        if r.status_code >= 400:
-            print("⚠️ Error enviando WhatsApp:", r.status_code, r.text)
-        return r
+       r = requests.post(GRAPH_URL, headers=headers, json=data, timeout=15)
+
+print("=" * 60)
+print("STATUS:", r.status_code)
+print("BODY:")
+print(r.text)
+print("=" * 60)
+
+return r
     except requests.RequestException as e:
         print("⚠️ Excepción enviando WhatsApp:", e)
         return None

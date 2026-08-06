@@ -1,361 +1,404 @@
-"""
-Módulo: pedido_manager.py
-Responsable de toda la lógica de negocio relacionada con pedidos.
-Lee y escribe exclusivamente en SQLite, nunca en RAM.
-"""
 import sqlite3
-import random
-from datetime import datetime
-from zoneinfo import ZoneInfo
-from typing import Optional, Dict, Any, List
+import datetime
+import logging
+from typing import List, Dict, Optional, Tuple, Any
 
-from database import get_connection
+# Configuración de logging
+logger = logging.getLogger(__name__)
 
-ZONA_HORARIA_NEGOCIO = ZoneInfo("America/Monterrey")
+# Máquina de Estados y Transiciones Válidas
+ESTADOS_VALIDOS = [
+    "BORRADOR", "CAPTURANDO_DATOS", "COTIZADO", "PENDIENTE_ANTICIPO", 
+    "ANTICIPO_CONFIRMADO", "TRANSFERIDO_A_DALIA", "EN_PRODUCCION", 
+    "LISTO", "ENTREGADO", "CANCELADO"
+]
 
-# ==========================================
-# CONSTANTES (precios de productos, envío, etc.)
-# ==========================================
-
-PRECIOS_PRODUCTO = {
-    "osito_toalla": 150.00,
-    "osito_jabon": 180.00,
-    "velita": 90.00,
-    # ... ampliar según catálogo real
+TRANSICIONES_VALIDAS = {
+    "BORRADOR": ["CAPTURANDO_DATOS", "CANCELADO"],
+    "CAPTURANDO_DATOS": ["COTIZADO", "CANCELADO"],
+    "COTIZADO": ["PENDIENTE_ANTICIPO", "CANCELADO"],
+    "PENDIENTE_ANTICIPO": ["ANTICIPO_CONFIRMADO", "CANCELADO"],
+    "ANTICIPO_CONFIRMADO": ["TRANSFERIDO_A_DALIA", "CANCELADO"],
+    "TRANSFERIDO_A_DALIA": ["EN_PRODUCCION", "CANCELADO"],
+    "EN_PRODUCCION": ["LISTO", "CANCELADO"],
+    "LISTO": ["ENTREGADO", "CANCELADO"],
+    "ENTREGADO": [],
+    "CANCELADO": []
 }
-COSTO_ENVIO = 50.00  # por defecto, se puede ajustar por municipio
 
-# ==========================================
-# FUNCIONES AUXILIARES
-# ==========================================
+class PedidoError(Exception):
+    """Excepción personalizada para errores de lógica de pedido."""
+    pass
 
-def _dict_from_row(row):
-    """Convierte una fila sqlite3.Row a dict."""
-    return dict(row) if row else None
 
-def _obtener_siguiente_numero(fecha_str):
-    """Obtiene el siguiente número de folio para la fecha."""
-    conn = get_connection()
+# --- Funciones Auxiliares Internas ---
+def _log_historial(conn, pedido_id: int, cambio: str, usuario: str = "sistema"):
+    """Registra un cambio en el historial del pedido."""
+    conn.execute(
+        "INSERT INTO pedido_historial (pedido_id, cambio, usuario) VALUES (?, ?, ?)",
+        (pedido_id, cambio, usuario)
+    )
+
+
+# --- Funciones Públicas del Módulo ---
+def generar_folio() -> str:
+    """Genera un folio único para el pedido basado en timestamp y contador."""
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    return f"DALIA-{timestamp}"
+
+
+def crear_pedido(cliente_id: int, telefono: str) -> int:
+    """
+    Crea un nuevo pedido en estado BORRADOR.
+    Retorna el ID del pedido creado.
+    """
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        cur = conn.cursor()
-        cur.execute("SELECT ultimo FROM contador_folios WHERE fecha = ?", (fecha_str,))
-        row = cur.fetchone()
-        siguiente = row["ultimo"] + 1 if row else 1
-        cur.execute("INSERT OR REPLACE INTO contador_folios (fecha, ultimo) VALUES (?, ?)",
-                    (fecha_str, siguiente))
-        conn.commit()
-        return siguiente
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
-
-def generar_folio_definitivo(pedido_id, fecha_str):
-    """
-    Genera un folio real y consecutivo tipo DAL-YYYYMMDD-NNNNNN para el
-    día indicado (fecha_str en formato YYYYMMDD) y se lo asigna al pedido.
-    """
-    for _ in range(5):
-        conn = get_connection()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                "INSERT OR IGNORE INTO contador_folios (fecha, ultimo) VALUES (?, 0)",
-                (fecha_str,),
-            )
-            conn.execute(
-                "UPDATE contador_folios SET ultimo = ultimo + 1 WHERE fecha = ?",
-                (fecha_str,),
-            )
-            numero = conn.execute(
-                "SELECT ultimo FROM contador_folios WHERE fecha = ?", (fecha_str,)
-            ).fetchone()["ultimo"]
-
-            folio = f"DAL-{fecha_str}-{numero:06d}"
-
-            conn.execute("UPDATE pedidos SET folio = ? WHERE id = ?", (folio, pedido_id))
+        with db_connect() as conn:
+            cursor = conn.cursor()
+            folio = generar_folio()
+            cursor.execute("""
+                INSERT INTO pedidos (folio, cliente_id, telefono, estado, bot_activo) 
+                VALUES (?, ?, ?, ?, ?)
+            """, (folio, cliente_id, telefono, "BORRADOR", 1))
+            
+            pedido_id = cursor.lastrowid
+            _log_historial(conn, pedido_id, f"Pedido creado en estado BORRADOR con folio {folio}")
             conn.commit()
-            conn.close()
-            return folio
-        except sqlite3.OperationalError:
-            conn.rollback()
-            conn.close()
-            continue
+            logger.info(f"✅ Pedido creado: Folio {folio}, ID {pedido_id}")
+            return pedido_id
+    except Exception as e:
+        logger.error(f"❌ Error al crear pedido: {e}")
+        raise PedidoError(f"No se pudo crear el pedido: {e}")
 
-    raise RuntimeError(f"No se pudo generar folio definitivo para el pedido {pedido_id}")
 
-def calcular_totales(producto: str, cantidad: int, precio_unitario: Optional[float] = None,
-                     envio: Optional[float] = None) -> Dict[str, float]:
+def obtener_pedido(pedido_id: int) -> Optional[Dict[str, Any]]:
     """
-    Calcula subtotal, envío y total.
-    Si no se pasa precio_unitario, se busca en PRECIOS_PRODUCTO.
-    Si no se pasa envio, se usa COSTO_ENVIO por defecto.
+    Obtiene toda la información completa de un pedido (incluye items, pagos, entrega).
     """
-    if precio_unitario is None:
-        precio_unitario = PRECIOS_PRODUCTO.get(producto, 0.0)
-    if envio is None:
-        envio = COSTO_ENVIO if cantidad > 0 else 0.0
+    with db_connect() as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM pedidos WHERE id = ?", (pedido_id,))
+        pedido_row = cursor.fetchone()
+        if not pedido_row:
+            return None
+        
+        pedido_data = dict(pedido_row)
+        
+        # Obtener Items
+        cursor.execute("SELECT * FROM pedido_items WHERE pedido_id = ?", (pedido_id,))
+        pedido_data['items'] = [dict(row) for row in cursor.fetchall()]
+        
+        # Obtener Pagos
+        cursor.execute("SELECT * FROM pagos WHERE pedido_id = ?", (pedido_id,))
+        pedido_data['pagos'] = [dict(row) for row in cursor.fetchall()]
+        
+        # Obtener Entrega
+        cursor.execute("SELECT * FROM entregas WHERE pedido_id = ?", (pedido_id,))
+        entrega_row = cursor.fetchone()
+        pedido_data['entrega'] = dict(entrega_row) if entrega_row else None
+        
+        return pedido_data
 
-    subtotal = cantidad * precio_unitario
-    total = subtotal + envio
-    return {
-        "subtotal": round(subtotal, 2),
-        "envio": round(envio, 2),
-        "total": round(total, 2)
-    }
 
-# ==========================================
-# FUNCIONES PRINCIPALES DEL MANAGER
-# ==========================================
-
-def crear_pedido(cliente_id: int, datos_iniciales: Optional[Dict] = None) -> int:
+def actualizar_pedido(pedido_id: int, **kwargs):
     """
-    Crea un nuevo pedido en estado 'Cotizando' con un folio temporal.
-    Retorna el ID del pedido.
+    Actualiza campos genéricos del pedido.
     """
-    ahora = datetime.now(ZONA_HORARIA_NEGOCIO).strftime("%Y%m%d%H%M%S")
-    sufijo = f"{random.randint(0, 9999):04d}"
-    folio = f"TMP-{ahora}-{cliente_id}-{sufijo}"
+    if not kwargs:
+        return
+    try:
+        with db_connect() as conn:
+            set_clause = ", ".join([f"{key} = ?" for key in kwargs.keys()])
+            values = list(kwargs.values())
+            values.append(pedido_id)
+            conn.execute(f"UPDATE pedidos SET {set_clause}, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?", values)
+            conn.commit()
+            
+            for key, val in kwargs.items():
+                _log_historial(conn, pedido_id, f"Campo '{key}' actualizado a: {val}")
+            logger.info(f"✅ Pedido {pedido_id} actualizado con: {kwargs}")
+    except Exception as e:
+        logger.error(f"❌ Error actualizando pedido {pedido_id}: {e}")
+        raise PedidoError(f"No se pudo actualizar el pedido: {e}")
 
-    conn = get_connection()
-    cur = conn.cursor()
 
-    # Campos base
-    producto = datos_iniciales.get("producto") if datos_iniciales else None
-    cantidad = datos_iniciales.get("cantidad") if datos_iniciales else None
-    evento = datos_iniciales.get("evento") if datos_iniciales else None
-    fecha_evento = datos_iniciales.get("fecha_evento") if datos_iniciales else None
-    tipo_entrega = datos_iniciales.get("tipo_entrega") if datos_iniciales else None
-    municipio = datos_iniciales.get("municipio") if datos_iniciales else None
-    direccion = datos_iniciales.get("direccion") if datos_iniciales else None
+def agregar_producto(pedido_id: int, producto: str, cantidad: int, precio_unitario: float, 
+                     color_toalla: str = None, color_moño: str = None, 
+                     tipo_jaboncito: str = None, color_jaboncito: str = None,
+                     nombre_bebe: str = None, tarjetita: str = None) -> int:
+    """
+    Agrega un item al pedido y actualiza el porcentaje de completitud.
+    """
+    try:
+        with db_connect() as conn:
+            subtotal = cantidad * precio_unitario
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO pedido_items 
+                (pedido_id, producto, cantidad, precio_unitario, subtotal, color_toalla, 
+                 color_moño, tipo_jaboncito, color_jaboncito, nombre_bebe, tarjetita) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (pedido_id, producto, cantidad, precio_unitario, subtotal, color_toalla, 
+                  color_moño, tipo_jaboncito, color_jaboncito, nombre_bebe, tarjetita))
+            
+            item_id = cursor.lastrowid
+            _log_historial(conn, pedido_id, f"Producto agregado: {producto} x{cantidad}")
+            
+            # Recalcular porcentaje de completitud
+            nuevo_porcentaje, _ = obtener_porcentaje_completitud(pedido_id)
+            conn.execute("UPDATE pedidos SET porcentaje_completitud = ?, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?", (nuevo_porcentaje, pedido_id))
+            
+            conn.commit()
+            logger.info(f"✅ Producto agregado (ID {item_id}) al pedido {pedido_id}")
+            return item_id
+    except Exception as e:
+        logger.error(f"❌ Error agregando producto al pedido {pedido_id}: {e}")
+        raise PedidoError(f"No se pudo agregar el producto: {e}")
 
-    if producto and cantidad:
-        precios = calcular_totales(producto, cantidad)
-        precio_unitario = PRECIOS_PRODUCTO.get(producto, 0.0)
-        subtotal = precios["subtotal"]
-        envio = precios["envio"]
-        total = precios["total"]
+
+def eliminar_producto(item_id: int):
+    """
+    Elimina un item del pedido y recalcula el porcentaje.
+    """
+    try:
+        with db_connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT pedido_id FROM pedido_items WHERE id = ?", (item_id,))
+            res = cursor.fetchone()
+            if not res:
+                raise PedidoError("Ítem no encontrado")
+            pedido_id = res[0]
+
+            cursor.execute("DELETE FROM pedido_items WHERE id = ?", (item_id,))
+            _log_historial(conn, pedido_id, f"Producto eliminado (Item ID: {item_id})")
+            
+            nuevo_porcentaje, _ = obtener_porcentaje_completitud(pedido_id)
+            conn.execute("UPDATE pedidos SET porcentaje_completitud = ?, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?", (nuevo_porcentaje, pedido_id))
+            
+            conn.commit()
+            logger.info(f"✅ Producto (ID {item_id}) eliminado del pedido {pedido_id}")
+    except Exception as e:
+        logger.error(f"❌ Error eliminando item {item_id}: {e}")
+        raise PedidoError(f"No se pudo eliminar el producto: {e}")
+
+
+def calcular_subtotal(pedido_id: int) -> float:
+    """Calcula la suma total de los subtotales de los items del pedido."""
+    with db_connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT SUM(subtotal) FROM pedido_items WHERE pedido_id = ?", (pedido_id,))
+        total = cursor.fetchone()[0]
+        return total if total else 0.0
+
+
+def calcular_envio(pedido_id: int) -> float:
+    """Obtiene el costo de envío registrado en la tabla de entregas."""
+    with db_connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT costo_envio FROM entregas WHERE pedido_id = ?", (pedido_id,))
+        row = cursor.fetchone()
+        return row[0] if row else 0.0
+
+
+def calcular_total(pedido_id: int) -> float:
+    """Calcula el total del pedido (Subtotal + Envío)."""
+    return calcular_subtotal(pedido_id) + calcular_envio(pedido_id)
+
+
+def calcular_saldo(pedido_id: int) -> float:
+    """Calcula el saldo pendiente (Total - Pagos Confirmados)."""
+    total = calcular_total(pedido_id)
+    with db_connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT SUM(monto) FROM pagos WHERE pedido_id = ? AND confirmado = 1", (pedido_id,))
+        pagado = cursor.fetchone()[0]
+        pagado = pagado if pagado else 0.0
+        return round(total - pagado, 2)
+
+
+def registrar_pago(pedido_id: int, tipo: str, monto: float, metodo: str, comprobante: str = None):
+    """Registra un pago en la base de datos."""
+    try:
+        with db_connect() as conn:
+            conn.execute("""
+                INSERT INTO pagos (pedido_id, tipo, monto, metodo, comprobante) 
+                VALUES (?, ?, ?, ?, ?)
+            """, (pedido_id, tipo, monto, metodo, comprobante))
+            _log_historial(conn, pedido_id, f"Pago registrado: {tipo} por ${monto} via {metodo}")
+            conn.commit()
+            logger.info(f"✅ Pago registrado para pedido {pedido_id}: {tipo} ${monto}")
+    except Exception as e:
+        logger.error(f"❌ Error registrando pago en pedido {pedido_id}: {e}")
+        raise PedidoError(f"No se pudo registrar el pago: {e}")
+
+
+def registrar_anticipo(pedido_id: int, monto: float, metodo: str, comprobante: str = None):
+    """Atajo para registrar un pago de tipo ANTICIPO."""
+    registrar_pago(pedido_id, "ANTICIPO", monto, metodo, comprobante)
+
+
+def cambiar_estado(pedido_id: int, nuevo_estado: str, usuario: str = "sistema"):
+    """Cambia el estado del pedido validando la máquina de estados."""
+    if nuevo_estado not in ESTADOS_VALIDOS:
+        raise PedidoError(f"Estado '{nuevo_estado}' inválido.")
+    
+    with db_connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT estado FROM pedidos WHERE id = ?", (pedido_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise PedidoError("Pedido no encontrado.")
+        
+        estado_actual = row[0]
+        
+        if nuevo_estado not in TRANSICIONES_VALIDAS.get(estado_actual, []):
+            raise PedidoError(f"Transición de estado inválida: {estado_actual} -> {nuevo_estado}")
+        
+        conn.execute("UPDATE pedidos SET estado = ?, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?", (nuevo_estado, pedido_id))
+        _log_historial(conn, pedido_id, f"Estado cambiado: {estado_actual} -> {nuevo_estado}", usuario)
+        conn.commit()
+        logger.info(f"✅ Pedido {pedido_id} cambió de estado: {estado_actual} -> {nuevo_estado}")
+
+
+def obtener_porcentaje_completitud(pedido_id: int) -> Tuple[int, List[str]]:
+    """
+    Calcula el porcentaje de completitud del pedido y devuelve la lista de campos faltantes.
+    Retorna: (porcentaje: int, campos_faltantes: list[str])
+    """
+    pedido = obtener_pedido(pedido_id)
+    if not pedido:
+        return 0, ["Pedido no existe"]
+
+    total_campos = 9
+    completados = 0
+    faltantes = []
+
+    # 1. Producto y Cantidad (depende de que existan items)
+    if pedido['items']:
+        completados += 2
     else:
-        precio_unitario = 0.0
-        subtotal = 0.0
-        envio = 0.0
-        total = 0.0
+        completados += 0 # No sumamos nada
+        faltantes.extend(["Producto", "Cantidad"])
+    
+    # 2. Colores (Toalla y Moño) y Tipo Jaboncito
+    item_colores_pendientes = False
+    for item in pedido['items']:
+        if not item['color_toalla'] or not item['color_moño'] or not item['tipo_jaboncito']:
+            item_colores_pendientes = True
+            break
+    
+    if pedido['items'] and not item_colores_pendientes:
+        completados += 3
+    else:
+        faltantes.extend(["Colores", "Jaboncito"])
 
-    ahora_iso = datetime.now(ZONA_HORARIA_NEGOCIO).isoformat()
-    cur.execute("""
-        INSERT INTO pedidos (
-            folio, cliente_id, estatus,
-            producto, cantidad, precio_unitario, subtotal, envio, total,
-            anticipo, saldo,
-            evento, fecha_evento,
-            tipo_entrega, municipio, direccion,
-            color_toalla, color_moño, tipo_jaboncito, color_jaboncito,
-            nombre_bebe, tarjetita, notas,
-            bot_activo,
-            created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        folio,
-        cliente_id,
-        "Cotizando",
-        producto,
-        cantidad,
-        precio_unitario,
-        subtotal,
-        envio,
-        total,
-        0.0,  # anticipo
-        total,  # saldo = total (sin anticipo)
-        evento,
-        fecha_evento,
-        tipo_entrega,
-        municipio,
-        direccion,
-        datos_iniciales.get("color_toalla") if datos_iniciales else None,
-        datos_iniciales.get("color_moño") if datos_iniciales else None,
-        datos_iniciales.get("tipo_jaboncito") if datos_iniciales else None,
-        datos_iniciales.get("color_jaboncito") if datos_iniciales else None,
-        datos_iniciales.get("nombre_bebe") if datos_iniciales else None,
-        datos_iniciales.get("tarjetita") if datos_iniciales else None,
-        datos_iniciales.get("notas") if datos_iniciales else None,
-        1,  # bot_activo = 1 (activo)
-        ahora_iso,
-        ahora_iso
-    ))
-    pedido_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return pedido_id
+    # 3. Entrega (Fecha y Dirección)
+    entrega = pedido.get('entrega')
+    if entrega and entrega.get('fecha_entrega'):
+        completados += 2
+    else:
+        faltantes.extend(["Fecha de Entrega", "Dirección o Municipio"])
 
-def obtener_pedido(pedido_id: int) -> Optional[Dict]:
-    """Obtiene un pedido por su ID."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM pedidos WHERE id = ?", (pedido_id,))
-    row = cur.fetchone()
-    conn.close()
-    return _dict_from_row(row)
-
-def obtener_pedido_activo(cliente_id: int) -> Optional[Dict]:
-    """Obtiene el pedido más reciente (activo) de un cliente."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT * FROM pedidos
-        WHERE cliente_id = ?
-        ORDER BY id DESC
-        LIMIT 1
-    """, (cliente_id,))
-    row = cur.fetchone()
-    conn.close()
-    return _dict_from_row(row)
-
-def actualizar_pedido(pedido_id: int, campos: Dict) -> Dict:
-    """
-    Actualiza uno o más campos del pedido. Recalcula totales si cambia producto/cantidad.
-    Retorna el pedido actualizado completo.
-    """
-    pedido = obtener_pedido(pedido_id)
-    if not pedido:
-        raise ValueError(f"Pedido {pedido_id} no encontrado")
-
-    nuevos = pedido.copy()
-    for k, v in campos.items():
-        if v is not None:
-            nuevos[k] = v
-
-    recalcular = False
-    if "producto" in campos or "cantidad" in campos:
-        producto = nuevos.get("producto")
-        cantidad = nuevos.get("cantidad", 0)
-        if producto and cantidad:
-            precios = calcular_totales(producto, cantidad)
-            nuevos["precio_unitario"] = PRECIOS_PRODUCTO.get(producto, 0.0)
-            nuevos["subtotal"] = precios["subtotal"]
-            nuevos["envio"] = precios["envio"]
-            nuevos["total"] = precios["total"]
-            recalcular = True
+    # 4. Nombre del Bebé y Tarjetita
+    nombre_bebe_pendiente = False
+    tarjetita_pendiente = False
+    
+    # Si hay items, revisamos el primero para estos datos compartidos
+    if pedido['items']:
+        first_item = pedido['items'][0]
+        if not first_item.get('nombre_bebe'):
+            nombre_bebe_pendiente = True
+        if not first_item.get('tarjetita'):
+            tarjetita_pendiente = True
+    
+    if pedido['items']:
+        if not nombre_bebe_pendiente:
+            completados += 1
         else:
-            nuevos["precio_unitario"] = 0.0
-            nuevos["subtotal"] = 0.0
-            nuevos["envio"] = 0.0
-            nuevos["total"] = 0.0
-            recalcular = True
+            faltantes.append("Nombre del Bebé")
+        
+        if not tarjetita_pendiente:
+            completados += 1
+        else:
+            faltantes.append("Texto Tarjetita")
+    
+    # Cálculo final
+    porcentaje = int((completados / total_campos) * 100) if total_campos > 0 else 0
+    
+    return porcentaje, faltantes
 
-    if "anticipo" in campos:
-        anticipo = nuevos.get("anticipo", 0.0)
-        nuevos["saldo"] = round(nuevos.get("total", 0.0) - anticipo, 2)
-        recalcular = True
 
-    if recalcular:
-        anticipo = nuevos.get("anticipo", 0.0)
-        nuevos["saldo"] = round(nuevos.get("total", 0.0) - anticipo, 2)
+def campos_faltantes(pedido_id: int) -> List[str]:
+    """Wrapper para devolver únicamente la lista de campos faltantes."""
+    _, faltantes = obtener_porcentaje_completitud(pedido_id)
+    return faltantes
 
-    set_clause = []
-    params = []
-    for col in [
-        "estatus", "producto", "cantidad", "precio_unitario", "subtotal",
-        "envio", "total", "anticipo", "saldo", "evento", "fecha_evento",
-        "tipo_entrega", "municipio", "direccion", "color_toalla", "color_moño",
-        "tipo_jaboncito", "color_jaboncito", "nombre_bebe", "tarjetita", "notas",
-        "bot_activo"
-    ]:
-        if col in campos or (col in nuevos and nuevos[col] != pedido.get(col)):
-            set_clause.append(f"{col} = ?")
-            params.append(nuevos.get(col))
-
-    if not set_clause:
-        return pedido
-
-    set_clause.append("updated_at = ?")
-    params.append(datetime.now(ZONA_HORARIA_NEGOCIO).isoformat())
-    params.append(pedido_id)
-    sql = f"UPDATE pedidos SET {', '.join(set_clause)} WHERE id = ?"
-
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(sql, params)
-    conn.commit()
-    conn.close()
-
-    return obtener_pedido(pedido_id)
-
-def registrar_anticipo(pedido_id: int, monto: float) -> Dict:
-    """Registra un anticipo, actualiza el campo anticipo y recalcula saldo."""
-    pedido = obtener_pedido(pedido_id)
-    if not pedido:
-        raise ValueError(f"Pedido {pedido_id} no encontrado")
-
-    nuevo_anticipo = pedido.get("anticipo", 0.0) + monto
-    campos = {"anticipo": nuevo_anticipo}
-    if nuevo_anticipo >= pedido.get("total", 0.0):
-        campos["estatus"] = "Pagado"
-    return actualizar_pedido(pedido_id, campos)
 
 def generar_resumen(pedido_id: int) -> str:
-    """Genera un resumen legible del pedido para mostrar al cliente o en el prompt."""
+    """
+    Genera el resumen del pedido usando datos puros de SQLite (SIN GPT).
+    """
     pedido = obtener_pedido(pedido_id)
     if not pedido:
-        return "No hay un pedido activo."
+        return "❌ No se encontró el pedido."
+    
+    subtotal = calcular_subtotal(pedido_id)
+    envio = calcular_envio(pedido_id)
+    total = calcular_total(pedido_id)
+    saldo = calcular_saldo(pedido_id)
+    
+    items_str = []
+    for item in pedido['items']:
+        line = f"   • {item['producto']} (x{item['cantidad']}) - ${item['subtotal']:.2f}"
+        if item.get('color_toalla'): line += f"\n     Colores: Toalla {item['color_toalla']}, Moño {item['color_moño']}"
+        if item.get('nombre_bebe'): line += f"\n     Bebé: {item['nombre_bebe']}"
+        if item.get('tarjetita'): line += f"\n     Tarjeta: {item['tarjetita']}"
+        items_str.append(line)
 
-    lineas = []
-    lineas.append(f"📋 Pedido: {pedido['folio']}")
-    lineas.append(f"📅 Fecha: {pedido['created_at']}")
-    lineas.append(f"👤 Cliente ID: {pedido['cliente_id']}")
-    if pedido.get("producto"):
-        lineas.append(f"🛍️ Producto: {pedido['producto']}")
-    if pedido.get("cantidad"):
-        lineas.append(f"🔢 Cantidad: {pedido['cantidad']}")
-    if pedido.get("precio_unitario"):
-        lineas.append(f"💰 Precio unitario: ${pedido['precio_unitario']:.2f}")
-    if pedido.get("subtotal"):
-        lineas.append(f"🧾 Subtotal: ${pedido['subtotal']:.2f}")
-    if pedido.get("envio"):
-        lineas.append(f"📦 Envío: ${pedido['envio']:.2f}")
-    if pedido.get("total"):
-        lineas.append(f"💵 Total: ${pedido['total']:.2f}")
-    if pedido.get("anticipo"):
-        lineas.append(f"✅ Anticipo: ${pedido['anticipo']:.2f}")
-    if pedido.get("saldo"):
-        lineas.append(f"💰 Saldo pendiente: ${pedido['saldo']:.2f}")
-    if pedido.get("evento"):
-        lineas.append(f"🎉 Evento: {pedido['evento']}")
-    if pedido.get("fecha_evento"):
-        lineas.append(f"📆 Fecha evento: {pedido['fecha_evento']}")
-    if pedido.get("tipo_entrega"):
-        lineas.append(f"🚚 Tipo entrega: {pedido['tipo_entrega']}")
-    if pedido.get("municipio"):
-        lineas.append(f"🏙️ Municipio: {pedido['municipio']}")
-    if pedido.get("direccion"):
-        lineas.append(f"📍 Dirección: {pedido['direccion']}")
-    if pedido.get("color_toalla"):
-        lineas.append(f"🧵 Color toalla: {pedido['color_toalla']}")
-    if pedido.get("color_moño"):
-        lineas.append(f"🎀 Color moño: {pedido['color_moño']}")
-    if pedido.get("tipo_jaboncito"):
-        lineas.append(f"🧼 Tipo jaboncito: {pedido['tipo_jaboncito']}")
-    if pedido.get("color_jaboncito"):
-        lineas.append(f"🎨 Color jaboncito: {pedido['color_jaboncito']}")
-    if pedido.get("nombre_bebe"):
-        lineas.append(f"👶 Nombre bebé: {pedido['nombre_bebe']}")
-    if pedido.get("tarjetita"):
-        lineas.append(f"💌 Tarjetita: {pedido['tarjetita']}")
-    if pedido.get("notas"):
-        lineas.append(f"📝 Notas: {pedido['notas']}")
-    lineas.append(f"📊 Estatus: {pedido['estatus']}")
-    if pedido.get("bot_activo"):
-        lineas.append("🤖 Bot activo: Sí")
-    else:
-        lineas.append("🤖 Bot activo: No")
+    entrega = pedido.get('entrega')
+    entrega_str = "No especificada" if not entrega else f"{entrega.get('tipo_entrega', 'N/A')} a {entrega.get('municipio', 'N/A')} ({entrega.get('direccion', 'N/A')}) - Fecha: {entrega.get('fecha_entrega', 'Pendiente')}"
 
-    return "\n".join(lineas)
+    resumen = f"""
+📦 **RESUMEN DEL PEDIDO**
+Folio: {pedido['folio']}
 
-def desactivar_bot(pedido_id: int) -> Dict:
-    """Desactiva el bot para este pedido."""
-    return actualizar_pedido(pedido_id, {"bot_activo": 0})
+👤 Cliente
+Teléfono: {pedido['telefono']}
 
-def activar_bot(pedido_id: int) -> Dict:
-    """Activa el bot para este pedido."""
-    return actualizar_pedido(pedido_id, {"bot_activo": 1})
+🛍️ Productos
+{chr(10).join(items_str) if items_str else "   No hay productos agregados."}
+
+🚚 Entrega
+{entrega_str}
+
+💰 Finanzas
+Subtotal: ${subtotal:.2f}
+Envío: ${envio:.2f}
+Total: ${total:.2f}
+Anticipo: ${total - saldo:.2f}
+Saldo Pendiente: ${saldo:.2f}
+
+Estado actual: {pedido['estado']}
+Completitud: {pedido['porcentaje_completitud']}%
+    """
+    return resumen.strip()
+
+
+def desactivar_bot(pedido_id: int):
+    """Desactiva el bot para este pedido específico."""
+    actualizar_pedido(pedido_id, bot_activo=0)
+    logger.info(f"🚫 Bot desactivado para el pedido {pedido_id}")
+
+
+def activar_bot(pedido_id: int):
+    """Re-activa el bot para este pedido específico."""
+    actualizar_pedido(pedido_id, bot_activo=1)
+    logger.info(f"✅ Bot reactivado para el pedido {pedido_id}")
+
+
+# Helper local para usar dentro del módulo (dado que database.py ya está importado fuera, lo importamos dentro para evitar dependencias circulares)
+def db_connect():
+    from database import get_db_connection
+    return get_db_connection()

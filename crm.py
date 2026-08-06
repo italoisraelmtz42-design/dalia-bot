@@ -1,13 +1,14 @@
 import datetime
 import logging
 import re
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
-# Importamos nuestro nuevo módulo
+# Importamos database para consultas SQL directas y el motor de pedidos
+from database import get_db_connection
 from pedido_manager import (
     crear_pedido, agregar_producto, generar_resumen, 
     cambiar_estado, obtener_pedido, campos_faltantes,
-    PedidoError, calcular_saldo
+    PedidoError
 )
 
 logger = logging.getLogger(__name__)
@@ -18,8 +19,7 @@ def cargar_cliente(numero):
     """
     logger.info(f"🔎 [CRM] Buscando/registrando cliente con número: {numero}")
     
-    # --- AQUÍ TU LÓGICA DE OBTENCIÓN DE CLIENTE (BASE DE DATOS EXISTENTE) ---
-    # Ejemplo simulado de retorno de datos
+    # Lógica para retornar el objeto cliente
     cliente_data = {
         "numero": numero,
         "nombre": "Cliente Registrado",
@@ -28,64 +28,122 @@ def cargar_cliente(numero):
     }
     return cliente_data
 
-
 def guardar_mensaje_cliente(cliente, texto, tipo):
     """
-    Guarda el mensaje recibido asociado al cliente (Función original).
+    Guarda el mensaje recibido asociado al cliente.
     """
     logger.info(f"💾 [CRM] Guardando mensaje para cliente {cliente['numero']}")
-    logger.info(f"📝 Mensaje: {texto}")
-    logger.info(f"🏷️  Tipo: {tipo}")
+    telefono = cliente['numero']
     
-    # Aquí iría tu INSERT original en la tabla de mensajes o bitácora.
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                "INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)",
+                (telefono, texto, "usuario")
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Error guardando mensaje de usuario en BD: {e}")
+
     return {"status": "ok", "mensaje_guardado": True}
 
+# ==============================================================================
+# FUNCIONES DE COMPATIBILIDAD HACIA ATRÁS (Las que pide app.py)
+# ==============================================================================
 
-# --- NUEVAS FUNCIONES DE ORQUESTACIÓN DEL MOTOR DE PEDIDOS ---
+def cargar_memoria(telefono: str, limite: int = 20) -> List[Dict[str, str]]:
+    """
+    Función adaptadora recuperada. Carga el historial de chat desde SQLite.
+    Retorna una lista de diccionarios en formato compatible con OpenAI (role, content).
+    """
+    try:
+        with get_db_connection() as conn:
+            conn.row_factory = None # Usamos fetchall por defecto
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT mensaje, emisor FROM historial_chat 
+                WHERE telefono = ? 
+                ORDER BY timestamp DESC LIMIT ?
+            """, (telefono, limite))
+            
+            rows = cursor.fetchall()
+            
+            # Convertir el historial al formato que OpenAI espera
+            historial = []
+            for mensaje, emisor in reversed(rows):
+                role = "user" if emisor == "usuario" else "assistant"
+                historial.append({"role": role, "content": mensaje})
+            
+            return historial
+            
+    except Exception as e:
+        logger.error(f"Error cargando memoria para {telefono}: {e}")
+        return [] # Si falla, retorna vacío para no matar la conversación
+
+def registrar_uso_openai(telefono: str):
+    """
+    Función adaptadora recuperada. Registra en BD que se hizo una llamada a OpenAI.
+    """
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                "INSERT INTO uso_openai (telefono) VALUES (?)",
+                (telefono,)
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Error registrando uso de OpenAI para {telefono}: {e}")
+
+def guardar_respuesta(cliente, respuesta, tipo="texto"):
+    """
+    Función adaptadora recuperada. Guarda la respuesta generada por el bot en la BD.
+    """
+    try:
+        telefono = cliente['numero'] if isinstance(cliente, dict) else cliente
+        with get_db_connection() as conn:
+            conn.execute(
+                "INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)",
+                (telefono, respuesta, "bot")
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Error guardando respuesta del bot en BD: {e}")
+
+# ==============================================================================
+# MOTOR DE PEDIDOS (Nuevo diseño)
+# ==============================================================================
 
 def _detectar_intencion_pedido(texto: str) -> bool:
     """Lógica simple de detección de intención de compra."""
     palabras_clave = ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo", "baby", "bebé"]
     texto_lower = texto.lower()
     
-    # Si contiene al menos 2 palabras clave (para no disparar falsos positivos con saludos simples)
     coincidencias = sum(1 for palabra in palabras_clave if palabra in texto_lower)
     return coincidencias >= 2
 
-
 def manejar_intencion_pedido(cliente, texto: str) -> str:
     """
-    Procesa la intención de un pedido.
-    Crea el pedido en BORRADOR, agrega el producto base, y devuelve el resumen al chat.
+    Procesa la intención de un pedido y devuelve el resumen al chat.
     """
     try:
         telefono = cliente['numero']
-        cliente_id = cliente.get('id', 0) # Si no tenemos ID de BD, usamos 0 para cliente externo
+        cliente_id = cliente.get('id', 0)
 
-        # 1. Crear el pedido (Estado: BORRADOR)
         pedido_id = crear_pedido(cliente_id, telefono)
         
-        # 2. Lógica de parseo simple para detectar producto (Ejemplo)
-        # En un sistema real, aquí se usarían modelos de IA o RegEx más robustos,
-        # pero por restricción de prompt, usaremos un parseo básico para no romper el sistema actual.
         producto_detectado = "Toalla Personalizada"
         cantidad_detectada = 1
-        precio_unitario = 350.0 # Precio default de ejemplo
+        precio_unitario = 350.0
         
-        # Si el texto dice "2 toallas", intentamos capturar la cantidad
         match_cantidad = re.search(r'(\d+)\s*(toalla|jabon)', texto.lower())
         if match_cantidad:
             cantidad_detectada = int(match_cantidad.group(1))
             if 'jabon' in match_cantidad.group(2):
                 producto_detectado = "Jabón Personalizado"
 
-        # 3. Agregar el producto al pedido
         agregar_producto(pedido_id, producto_detectado, cantidad_detectada, precio_unitario)
-        
-        # 4. Cambiar el estado automáticamente a CAPTURANDO_DATOS
         cambiar_estado(pedido_id, "CAPTURANDO_DATOS")
         
-        # 5. Obtener porcentaje y campos faltantes para guiar al usuario
         _, faltantes = obtener_porcentaje_completitud(pedido_id)
         
         resumen = generar_resumen(pedido_id)
@@ -99,7 +157,7 @@ def manejar_intencion_pedido(cliente, texto: str) -> str:
         return mensaje_respuesta
 
     except PedidoError as e:
-        logger.error(f"Error en el motor de pedidos para cliente {telefono}: {str(e)}")
+        logger.error(f"Error en el motor de pedidos: {str(e)}")
         return f"❌ Ocurrió un error al intentar crear tu pedido: {str(e)}"
     except Exception as e:
         logger.error(f"Error inesperado en manejar_intencion_pedido: {e}")

@@ -1,50 +1,20 @@
 import sqlite3
 import os
 import logging
-import uuid
 
-# Configuramos un logger específico para base de datos
+# Logger dedicado para database
 logger_db = logging.getLogger('database')
 
 DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
 
 def get_db_connection():
     """Obtiene una conexión a la base de datos SQLite y logea la apertura."""
-    logger_db.info(f"[DB] Abriendo conexión a la base de datos: {DB_PATH}")
+    logger_db.info(f"Nueva conexión SQLite abierta: {DB_PATH}")
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
-# ==============================================================================
-# # NUEVO: Ejecutor de SQL con trazabilidad completa
-# ==============================================================================
-def _exec_sql(conn, sql, params=None, req_id=None):
-    """
-    Ejecuta una sentencia SQL y registra TODOS los detalles en los logs.
-    Esto nos permitirá ver el origen exacto de cualquier dict.
-    """
-    if not req_id:
-        req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
-    
-    logger_db.info("="*80)
-    logger_db.info(f"[{req_id}] [DB] SQL: {sql}")
-    
-    if params is None:
-        logger_db.info(f"[{req_id}] [DB] PARAMS: None")
-    else:
-        logger_db.info(f"[{req_id}] [DB] PARAMS: {params}")
-        if isinstance(params, (list, tuple)):
-            logger_db.info(f"[{req_id}] [DB] TYPES: {[type(p).__name__ for p in params]}")
-        else:
-            logger_db.info(f"[{req_id}] [DB] TYPES: {type(params).__name__}")
-    
-    logger_db.info("="*80)
-    return conn.execute(sql, params)
-
-# ==============================================================================
-# # Tablas y Migraciones (Sin cambios, solo se reemplazan los execute internos)
-# ==============================================================================
 def init_order_tables():
     try:
         with get_db_connection() as conn:

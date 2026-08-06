@@ -1,23 +1,40 @@
 import sqlite3
 import os
 import logging
-
-logger = logging.getLogger(__name__)
+from constantes import logger_db
 
 DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
 
 def get_db_connection():
+    logger_db.info("[SQL DEBUG] Abriendo conexión a DB")
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;") # Activar llaves foráneas explícitamente
+    conn.execute("PRAGMA foreign_keys = ON;")
     return conn
+
+def _run_migrations(conn, current_version):
+    cursor = conn.cursor()
+    if current_version == 0:
+        cursor.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, fecha TEXT DEFAULT CURRENT_TIMESTAMP)")
+        cursor.execute("INSERT INTO schema_version (version) VALUES (1)")
+        logger_db.info("🚀 Migración inicial completada.")
+        conn.commit()
+        return 1
+    return current_version
 
 def init_order_tables():
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-
-            # 1. Tabla Pedidos (Añadida columna es_urgente para el resumen)
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+            if not cursor.fetchone():
+                current_version = 0
+            else:
+                cursor.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
+                row = cursor.fetchone()
+                current_version = row[0] if row else 0
+            
+            logger_db.info("[SQL DEBUG] Creando/Verificando tablas...")
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pedidos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,8 +49,6 @@ def init_order_tables():
                     fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-
-            # 2. Tabla Items
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pedido_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,8 +66,6 @@ def init_order_tables():
                     FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
                 )
             """)
-
-            # 3. Tabla Pagos
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pagos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,8 +79,6 @@ def init_order_tables():
                     FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
                 )
             """)
-
-            # 4. Tabla Entregas (Añadido municipio)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS entregas (
                     pedido_id INTEGER PRIMARY KEY,
@@ -79,8 +90,6 @@ def init_order_tables():
                     FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
                 )
             """)
-
-            # 5. Tabla Historial
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pedido_historial (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,21 +102,18 @@ def init_order_tables():
                     FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
                 )
             """)
-
-            # 6. Tabla Eventos
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pedido_eventos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     pedido_id INTEGER NOT NULL,
                     evento TEXT NOT NULL,
                     descripcion TEXT,
+                    origen TEXT NOT NULL DEFAULT 'SISTEMA',
                     usuario TEXT,
                     fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
                 )
             """)
-
-            # 7. Historial Chat (Compatibilidad)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS historial_chat (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,8 +123,6 @@ def init_order_tables():
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-
-            # 8. Uso OpenAI (Compatibilidad)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS uso_openai (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,14 +131,14 @@ def init_order_tables():
                 )
             """)
 
-            conn.commit()
-            logger.info("✅ Tablas de Motor de Pedidos inicializadas correctamente.")
+            _run_migrations(conn, current_version)
+            logger_db.info("✅ Tablas verificadas y migradas correctamente.")
     except Exception as e:
-        logger.error(f"❌ Error al crear las tablas: {e}")
+        logger_db.error(f"❌ Error al crear las tablas: {e}")
         raise
 
 def init_db():
     try:
         init_order_tables()
     except Exception as e:
-        logger.critical(f"Fallo crítico en la inicialización de la base de datos: {e}")
+        logger_db.critical(f"Fallo crítico en la inicialización de la base de datos: {e}")

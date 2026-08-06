@@ -21,7 +21,7 @@ def inicializar_base_datos():
         logger_crm.error(f"❌ Error en crm.inicializar_base_datos: {e}")
 
 # ==============================================================================
-# # FUNCIONES DEL CRM (INSTRUMENTACIÓN PURA - SIN DEPENDENCIAS PRIVADAS)
+# # FUNCIONES DEL CRM (INSTRUMENTACIÓN COMPLETA)
 # ==============================================================================
 
 def cargar_cliente(numero):
@@ -150,28 +150,45 @@ def guardar_respuesta(cliente, respuesta, tipo="texto"):
 def pedido_para_ram(*args, **kwargs): return {}
 def cargar_pedido(pedido_id): return pedido_manager.obtener_pedido(pedido_id)
 
+# ==============================================================================
+# # sincronizar_pedido - Instrumentación pura (SIN SUPOSICIONES DE ARGUMENTOS)
+# ==============================================================================
 def sincronizar_pedido(*args, **kwargs):
+    # ================================================================
+    # [INSTRUMENTACIÓN DE ARGUMENTOS] - SIN CAMBIOS DE LÓGICA
+    # ================================================================
     logger_crm.info("="*80)
     logger_crm.info("=== ENTRADA sincronizar_pedido ===")
-    logger_crm.info(f"args={repr(args)}")
-    logger_crm.info(f"kwargs={repr(kwargs)}")
+    logger_crm.info(f"args = {repr(args)}")
+    logger_crm.info(f"kwargs = {repr(kwargs)}")
+    logger_crm.info("=== ARGS DETALLADOS ===")
+    for i, a in enumerate(args):
+        logger_crm.info(f"args[{i}] = {type(a).__name__} -> {repr(a)}")
+    for k, v in kwargs.items():
+        logger_crm.info(f"kwargs['{k}'] = {type(v).__name__} -> {repr(v)}")
     logger_crm.info("="*80)
+    # ================================================================
     
+    # --- Lógica original (SIN parche peligroso) ---
     pedido_id, datos = None, {}
     if args:
         pedido_id = args[0]
         if len(args) > 1: datos = args[1]
-    elif kwargs.get('pedido_id'): pedido_id, datos = kwargs.get('pedido_id'), kwargs
+    elif kwargs.get('pedido_id'):
+        pedido_id = kwargs.get('pedido_id')
+        datos = kwargs
+        datos.pop('pedido_id', None)
+    
+    if datos and isinstance(datos, dict):
+        datos.pop('_req_id', None)
     
     if pedido_id and datos:
-        # --- CAMBIO DE SEGURIDAD: ELIMINAMOS _req_id EXPLÍCITAMENTE ---
-        datos = dict(datos)
-        datos.pop('_req_id', None)  # <-- Nunca debe viajar al motor
-        # -----------------------------------------------------------
-        
         logger_crm.info(f"🔄 [CRM] Sincronizando Pedido {pedido_id}")
         logger_crm.info(f"CLAVES_DATOS: {list(datos.keys())}")
         pedido_manager.actualizar_pedido(pedido_id, **datos)
+    elif pedido_id and not datos:
+        logger_crm.info(f"🔄 [CRM] Pedido {pedido_id} sincronizado sin datos para actualizar.")
+    
     return cargar_pedido(pedido_id)
 
 def _detectar_intencion_pedido(texto: str) -> bool:

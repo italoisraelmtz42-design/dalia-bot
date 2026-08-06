@@ -4,25 +4,20 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Ruta de la base de datos
 DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
 
 def get_db_connection():
-    """Obtiene una conexión a la base de datos SQLite."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;") # Activar llaves foráneas explícitamente
     return conn
 
 def init_order_tables():
-    """
-    Crea las tablas correspondientes al Motor de Pedidos y al sistema de Memoria.
-    No interfiere con tablas existentes.
-    """
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # 1. Tabla de Pedidos
+            # 1. Tabla Pedidos (Añadida columna es_urgente para el resumen)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pedidos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,14 +25,15 @@ def init_order_tables():
                     cliente_id INTEGER,
                     telefono TEXT NOT NULL,
                     estado TEXT NOT NULL,
+                    modo_atencion TEXT NOT NULL DEFAULT 'BOT',
+                    es_urgente INTEGER DEFAULT 0,
                     porcentaje_completitud INTEGER DEFAULT 0,
-                    bot_activo INTEGER DEFAULT 1,
                     fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
-            # 2. Tabla de Items del Pedido
+            # 2. Tabla Items
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pedido_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +52,7 @@ def init_order_tables():
                 )
             """)
 
-            # 3. Tabla de Pagos
+            # 3. Tabla Pagos
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pagos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +67,7 @@ def init_order_tables():
                 )
             """)
 
-            # 4. Tabla de Entregas
+            # 4. Tabla Entregas (Añadido municipio)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS entregas (
                     pedido_id INTEGER PRIMARY KEY,
@@ -84,19 +80,34 @@ def init_order_tables():
                 )
             """)
 
-            # 5. Tabla de Historial de Cambios de Pedidos
+            # 5. Tabla Historial
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pedido_historial (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     pedido_id INTEGER NOT NULL,
-                    cambio TEXT NOT NULL,
+                    campo TEXT NOT NULL,
+                    valor_anterior TEXT,
+                    valor_nuevo TEXT,
                     usuario TEXT,
                     fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
                 )
             """)
 
-            # 6. Tabla de Historial de Chat (Recuperada para compatibilidad de app.py - Error 1)
+            # 6. Tabla Eventos
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pedido_eventos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pedido_id INTEGER NOT NULL,
+                    evento TEXT NOT NULL,
+                    descripcion TEXT,
+                    usuario TEXT,
+                    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
+                )
+            """)
+
+            # 7. Historial Chat (Compatibilidad)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS historial_chat (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,7 +118,7 @@ def init_order_tables():
                 )
             """)
 
-            # 7. Tabla de Registro de uso de OpenAI
+            # 8. Uso OpenAI (Compatibilidad)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS uso_openai (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,14 +128,12 @@ def init_order_tables():
             """)
 
             conn.commit()
-            logger.info("✅ Tablas de Motor de Pedidos, Chat y OpenAI inicializadas correctamente en SQLite.")
-
+            logger.info("✅ Tablas de Motor de Pedidos inicializadas correctamente.")
     except Exception as e:
-        logger.error(f"❌ Error al crear las tablas en database.py: {e}")
+        logger.error(f"❌ Error al crear las tablas: {e}")
         raise
 
 def init_db():
-    """Inicializa las tablas de la aplicación completa."""
     try:
         init_order_tables()
     except Exception as e:

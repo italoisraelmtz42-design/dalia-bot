@@ -1,6 +1,5 @@
 import re
 import logging
-import uuid
 from typing import Dict, Any, List, Optional
 
 from database import get_db_connection, init_db
@@ -11,12 +10,9 @@ import pedido_manager
 init_db()
 
 # ==============================================================================
-# # RESTAURACIÓN DE COMPATIBILIDAD: ELIMINA EL ATTRIBUTEERROR
+# # COMPATIBILIDAD CON APP.PY (ELIMINA EL ATTRIBUTEERROR)
 # ==============================================================================
 def inicializar_base_datos():
-    """
-    Función pública restaurada para mantener la compatibilidad con app.py congelado.
-    """
     logger_crm.info("🔄 [Compatibilidad] app.py llamó a crm.inicializar_base_datos(). Ejecutando init_db()...")
     try:
         init_db()
@@ -25,64 +21,71 @@ def inicializar_base_datos():
         logger_crm.error(f"❌ Error en crm.inicializar_base_datos: {e}")
 
 # ==============================================================================
-# # WRAPPERS DE CRM (CON LOGS DE ENTRADA Y GENERACIÓN DEL REQ-ID)
+# # FUNCIONES DEL CRM (INSTRUMENTACIÓN PURA - SIN DEPENDENCIAS PRIVADAS)
 # ==============================================================================
+
 def cargar_cliente(numero):
-    req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
     logger_crm.info("="*80)
-    logger_crm.info(f"[{req_id}] [CRM] ENTRADA: cargar_cliente()")
-    logger_crm.info(f"[{req_id}] [CRM] Argumento = {numero}")
-    logger_crm.info(f"[{req_id}] [CRM] Tipo = {type(numero).__name__}")
+    logger_crm.info("=== ENTRADA cargar_cliente ===")
+    logger_crm.info(f"numero={repr(numero)}")
+    logger_crm.info(f"tipo={type(numero).__name__}")
     logger_crm.info("="*80)
     
-    # El código de lógica queda exactamente como estaba
     if isinstance(numero, dict): numero = numero.get('numero')
-    logger_crm.info(f"🔎 [CRM] Cliente: {numero}")
     return {"numero": numero, "nombre": "Cliente Registrado", "estado": "activo"}
 
-def guardar_mensaje_cliente(cliente_ou_telefono, texto, tipo):
-    req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
+def guardar_mensaje_cliente(cliente, texto, tipo):
     logger_crm.info("="*80)
-    logger_crm.info(f"[{req_id}] [CRM] ENTRADA: guardar_mensaje_cliente()")
-    logger_crm.info(f"[{req_id}] [CRM] Arg 1 (cliente) = {cliente_ou_telefono}")
-    logger_crm.info(f"[{req_id}] [CRM] Arg 1 Tipo = {type(cliente_ou_telefono).__name__}")
-    logger_crm.info(f"[{req_id}] [CRM] Arg 2 (texto) = {texto}")
-    logger_crm.info(f"[{req_id}] [CRM] Arg 3 (tipo) = {tipo}")
+    logger_crm.info("=== ENTRADA guardar_mensaje_cliente ===")
+    logger_crm.info(f"cliente={repr(cliente)}")
+    logger_crm.info(f"tipo_cliente={type(cliente).__name__}")
+    logger_crm.info(f"texto={repr(texto)}")
+    logger_crm.info(f"tipo_texto={type(texto).__name__}")
     logger_crm.info("="*80)
     
-    # La lógica original sin cambios
-    telefono = cliente_ou_telefono
-    if isinstance(cliente_ou_telefono, dict):
-        telefono = cliente_ou_telefono.get('numero')
-    logger_crm.info(f"💾 [CRM] Guardando mensaje para {telefono}")
+    telefono = cliente
+    if isinstance(cliente, dict):
+        telefono = cliente.get('numero')
+    
     try:
         with get_db_connection() as conn:
-            # NUEVO: Usamos el helper con req_id
-            from database import _exec_sql
-            _exec_sql(conn, "INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, texto, "usuario"), req_id=req_id)
+            logger_crm.info("=== SQL guardar_mensaje_cliente ===")
+            sql = "INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)"
+            params = (telefono, texto, "usuario")
+            logger_crm.info(f"SQL = {sql}")
+            logger_crm.info(f"PARAMS = {repr(params)}")
+            logger_crm.info(f"TYPES = {[type(p).__name__ for p in params]}")
+            logger_crm.info("="*80)
+            
+            conn.execute(sql, params)
             conn.commit()
     except Exception as e:
         logger_crm.error(f"Error guardando mensaje de usuario: {e}")
     return {"status": "ok", "mensaje_guardado": True}
 
-def cargar_memoria(telefono_ou_cliente, limite: int = 20) -> List[Dict[str, str]]:
-    req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
+def cargar_memoria(cliente, limite: int = 20) -> List[Dict[str, str]]:
     logger_crm.info("="*80)
-    logger_crm.info(f"[{req_id}] [CRM] ENTRADA: cargar_memoria()")
-    logger_crm.info(f"[{req_id}] [CRM] Arg 1 (cliente) = {telefono_ou_cliente}")
-    logger_crm.info(f"[{req_id}] [CRM] Arg 1 Tipo = {type(telefono_ou_cliente).__name__}")
-    logger_crm.info(f"[{req_id}] [CRM] Arg 2 (limite) = {limite}")
+    logger_crm.info("=== ENTRADA cargar_memoria ===")
+    logger_crm.info(f"cliente={repr(cliente)}")
+    logger_crm.info(f"tipo_cliente={type(cliente).__name__}")
+    logger_crm.info(f"limite={limite}")
     logger_crm.info("="*80)
     
-    # La lógica original sin cambios
-    telefono = telefono_ou_cliente
-    if isinstance(telefono_ou_cliente, dict):
-        telefono = telefono_ou_cliente.get('numero')
-    logger_crm.info(f"🧠 [CRM] Cargando memoria para {telefono}")
+    telefono = cliente
+    if isinstance(cliente, dict):
+        telefono = cliente.get('numero')
+    
     try:
         with get_db_connection() as conn:
-            from database import _exec_sql
-            cursor = _exec_sql(conn, "SELECT mensaje, emisor FROM historial_chat WHERE telefono = ? ORDER BY timestamp DESC LIMIT ?", (telefono, limite), req_id=req_id)
+            logger_crm.info("=== SQL cargar_memoria ===")
+            sql = "SELECT mensaje, emisor FROM historial_chat WHERE telefono = ? ORDER BY timestamp DESC LIMIT ?"
+            params = (telefono, limite)
+            logger_crm.info(f"SQL = {sql}")
+            logger_crm.info(f"PARAMS = {repr(params)}")
+            logger_crm.info(f"TYPES = {[type(p).__name__ for p in params]}")
+            logger_crm.info("="*80)
+            
+            cursor = conn.execute(sql, params)
             rows = cursor.fetchall()
             return [{"role": "user" if e == "usuario" else "assistant", "content": m} for m, e in reversed(rows)]
     except Exception as e:
@@ -90,46 +93,56 @@ def cargar_memoria(telefono_ou_cliente, limite: int = 20) -> List[Dict[str, str]
         return []
 
 def registrar_uso_openai(*args, **kwargs):
-    req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
     logger_crm.info("="*80)
-    logger_crm.info(f"[{req_id}] [CRM] ENTRADA: registrar_uso_openai()")
-    logger_crm.info(f"[{req_id}] [CRM] args = {args}")
-    logger_crm.info(f"[{req_id}] [CRM] kwargs = {kwargs}")
+    logger_crm.info("=== ENTRADA registrar_uso_openai ===")
+    logger_crm.info(f"args={repr(args)}")
+    logger_crm.info(f"kwargs={repr(kwargs)}")
     logger_crm.info("="*80)
     
-    # Lógica original sin cambios
     telefono = None
     if args and args[0]:
         telefono = args[0]
         if isinstance(telefono, dict):
             telefono = telefono.get('numero')
-    logger_crm.info(f"🤖 [CRM] Registrando uso OpenAI para {telefono}")
+    
     try:
         with get_db_connection() as conn:
-            from database import _exec_sql
-            _exec_sql(conn, "INSERT INTO uso_openai (telefono) VALUES (?)", (telefono,), req_id=req_id)
+            logger_crm.info("=== SQL registrar_uso_openai ===")
+            sql = "INSERT INTO uso_openai (telefono) VALUES (?)"
+            params = (telefono,)
+            logger_crm.info(f"SQL = {sql}")
+            logger_crm.info(f"PARAMS = {repr(params)}")
+            logger_crm.info(f"TYPES = {[type(p).__name__ for p in params]}")
+            logger_crm.info("="*80)
+            
+            conn.execute(sql, params)
             conn.commit()
     except Exception:
         pass
 
-def guardar_respuesta(cliente_ou_telefono, respuesta, tipo="texto"):
-    req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
+def guardar_respuesta(cliente, respuesta, tipo="texto"):
     logger_crm.info("="*80)
-    logger_crm.info(f"[{req_id}] [CRM] ENTRADA: guardar_respuesta()")
-    logger_crm.info(f"[{req_id}] [CRM] Arg 1 (cliente) = {cliente_ou_telefono}")
-    logger_crm.info(f"[{req_id}] [CRM] Arg 1 Tipo = {type(cliente_ou_telefono).__name__}")
-    logger_crm.info(f"[{req_id}] [CRM] Arg 2 (respuesta) = {respuesta}")
+    logger_crm.info("=== ENTRADA guardar_respuesta ===")
+    logger_crm.info(f"cliente={repr(cliente)}")
+    logger_crm.info(f"tipo_cliente={type(cliente).__name__}")
+    logger_crm.info(f"respuesta={repr(respuesta)}")
     logger_crm.info("="*80)
     
-    # Lógica original sin cambios
-    telefono = cliente_ou_telefono
-    if isinstance(cliente_ou_telefono, dict):
-        telefono = cliente_ou_telefono.get('numero')
-    logger_crm.info(f"📤 [CRM] Guardando respuesta para {telefono}")
+    telefono = cliente
+    if isinstance(cliente, dict):
+        telefono = cliente.get('numero')
+    
     try:
         with get_db_connection() as conn:
-            from database import _exec_sql
-            _exec_sql(conn, "INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, respuesta, "bot"), req_id=req_id)
+            logger_crm.info("=== SQL guardar_respuesta ===")
+            sql = "INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)"
+            params = (telefono, respuesta, "bot")
+            logger_crm.info(f"SQL = {sql}")
+            logger_crm.info(f"PARAMS = {repr(params)}")
+            logger_crm.info(f"TYPES = {[type(p).__name__ for p in params]}")
+            logger_crm.info("="*80)
+            
+            conn.execute(sql, params)
             conn.commit()
     except Exception:
         pass
@@ -138,22 +151,27 @@ def pedido_para_ram(*args, **kwargs): return {}
 def cargar_pedido(pedido_id): return pedido_manager.obtener_pedido(pedido_id)
 
 def sincronizar_pedido(*args, **kwargs):
-    req_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
     logger_crm.info("="*80)
-    logger_crm.info(f"[{req_id}] [CRM] ENTRADA: sincronizar_pedido()")
-    logger_crm.info(f"[{req_id}] [CRM] args = {args}")
-    logger_crm.info(f"[{req_id}] [CRM] kwargs = {kwargs}")
+    logger_crm.info("=== ENTRADA sincronizar_pedido ===")
+    logger_crm.info(f"args={repr(args)}")
+    logger_crm.info(f"kwargs={repr(kwargs)}")
     logger_crm.info("="*80)
     
-    # Lógica original sin cambios
     pedido_id, datos = None, {}
     if args:
         pedido_id = args[0]
         if len(args) > 1: datos = args[1]
     elif kwargs.get('pedido_id'): pedido_id, datos = kwargs.get('pedido_id'), kwargs
+    
     if pedido_id and datos:
+        # --- CAMBIO DE SEGURIDAD: ELIMINAMOS _req_id EXPLÍCITAMENTE ---
+        datos = dict(datos)
+        datos.pop('_req_id', None)  # <-- Nunca debe viajar al motor
+        # -----------------------------------------------------------
+        
         logger_crm.info(f"🔄 [CRM] Sincronizando Pedido {pedido_id}")
-        pedido_manager.actualizar_pedido(pedido_id, _req_id=req_id, **datos)
+        logger_crm.info(f"CLAVES_DATOS: {list(datos.keys())}")
+        pedido_manager.actualizar_pedido(pedido_id, **datos)
     return cargar_pedido(pedido_id)
 
 def _detectar_intencion_pedido(texto: str) -> bool:

@@ -1,34 +1,61 @@
 import re
 import logging
+import json
 from typing import Dict, Any, List, Optional
 from database import get_db_connection, init_db
 from constantes import logger_crm, EstadoPedido, ModoAtencion, OrigenEvento
 import pedido_manager
 
+# Inicializamos las tablas al arrancar el módulo
 init_db()
 
 # ==============================================================================
-# # UTILIDAD EXTREMA DE CONVERSIÓN DE TIPOS (Evita el ProgrammingError)
+# # UTILIDAD EXTREMA DE CONVERSIÓN DE TIPOS (A prueba de balas)
 # ==============================================================================
 def _safe_str(value) -> str:
     """
-    Convierte CUALQUIER cosa a string de forma segura para SQLite.
-    Si es un dict, lista o tupla, lo convierte a un string representativo.
+    Convierte ABSOLUTAMENTE CUALQUIER cosa a string de forma segura para SQLite.
+    Nunca retorna un dict, lista, tupla u objeto personalizado.
     """
     if value is None:
         return ""
     if isinstance(value, (str, int, float, bool)):
         return str(value)
     if isinstance(value, dict):
-        # Si es el objeto cliente, intenta sacar el número. Si no, lo convierte a string con json.
-        return str(value.get('numero', '')) if 'numero' in value else str(value)
+        # Intentamos extraer el número de teléfono si existe
+        numero = value.get('numero', None)
+        if numero:
+            return str(numero)
+        # Si no hay número, serializamos el dict completo como string
+        return json.dumps(value)
     if isinstance(value, (list, tuple)):
-        return str(value[0]) if value else ""
-    # Cualquier otro objeto (dataclass, row, etc.)
-    return str(value)
+        # Si es una lista, intentamos tomar el primer elemento seguro
+        if value and isinstance(value[0], (str, int, float, bool)):
+            return str(value[0])
+        # Si no, serializamos la lista
+        return json.dumps(value)
+    # Cualquier otro objeto (dataclasses, sqlite3.Row, etc.)
+    try:
+        return str(value)
+    except Exception:
+        return ""
 
 # ==============================================================================
-# # WRAPPERS DE COMPATIBILIDAD ROBUSTOS
+# # COMPATIBILIDAD CON APP.PY (CORRECCIÓN AL ERROR DE INICIO)
+# ==============================================================================
+def inicializar_base_datos():
+    """
+    Función requerida por el app.py congelado para inicializar la base de datos.
+    """
+    logger_crm.info("🔄 [Compatibilidad] app.py llamó a crm.inicializar_base_datos(). Ejecutando init_db()...")
+    try:
+        init_db()
+        logger_crm.info("✅ Base de datos inicializada exitosamente.")
+    except Exception as e:
+        logger_crm.error(f"❌ Error en inicializar_base_datos: {e}")
+
+# ==============================================================================
+# # WRAPPERS DE CRM (CONVERSIÓN ROBUSTA DE TIPOS)
 # ==============================================================================
 def cargar_cliente(numero):
     telefono = _safe_str(numero)
@@ -36,7 +63,6 @@ def cargar_cliente(numero):
     return {"numero": telefono, "nombre": "Cliente Registrado", "estado": "activo"}
 
 def guardar_mensaje_cliente(cliente_ou_telefono, texto, tipo):
-    # Conversión extrema para evitar el ProgrammingError
     telefono = _safe_str(cliente_ou_telefono)
     logger_crm.info(f"💾 [CRM] Guardando mensaje para {telefono}")
     try:
@@ -48,7 +74,6 @@ def guardar_mensaje_cliente(cliente_ou_telefono, texto, tipo):
     return {"status": "ok", "mensaje_guardado": True}
 
 def cargar_memoria(telefono_ou_cliente, limite: int = 20) -> List[Dict[str, str]]:
-    # Conversión extrema para evitar el ProgrammingError
     telefono = _safe_str(telefono_ou_cliente)
     logger_crm.info(f"🧠 [CRM] Cargando memoria para {telefono}")
     try:
@@ -77,7 +102,6 @@ def registrar_uso_openai(*args, **kwargs):
         pass
 
 def guardar_respuesta(cliente_ou_telefono, respuesta, tipo="texto"):
-    # Conversión extrema
     telefono = _safe_str(cliente_ou_telefono)
     logger_crm.info(f"📤 [CRM] Guardando respuesta para {telefono}")
     try:
@@ -104,6 +128,19 @@ def sincronizar_pedido(*args, **kwargs):
 # ==============================================================================
 # # Capa de Conversación
 # ==============================================================================
+MAPEO_PREGUNTAS = {
+    "producto": "¿Qué producto deseas pedir? (ej. Toalla, Jabón)",
+    "color_toalla": "¿De qué color quieres la toallita?",
+    "color_moño": "¿De qué color quieres el moño?",
+    "tipo_jaboncito": "¿De qué forma quieres el jaboncito? (corazón, flor, osito, etc.)",
+    "nombre_bebe": "¿Cuál es el nombre del bebé para la tarjeta?",
+    "tarjetita": "¿Qué mensaje quieres que pongamos en la tarjetita?",
+    "tipo_entrega": "¿Cómo quieres tu entrega? (Local o Domicilio)",
+    "fecha_entrega": "¿Para qué fecha necesitas el pedido?",
+    "direccion": "¿Cuál es la dirección de entrega?",
+    "municipio": "¿A qué municipio pertenece la dirección de entrega?"
+}
+
 def _detectar_intencion_pedido(texto: str) -> bool:
     return sum(1 for p in ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo"] if p in texto.lower()) >= 2
 
@@ -128,17 +165,3 @@ def manejar_intencion_pedido(cliente, texto: str) -> str:
     except Exception as e:
         logger_crm.error(f"Error en manejar_intencion_pedido: {e}")
         return "❌ Ocurrió un error técnico. Por favor, intenta de nuevo."
-
-# Diccionario de preguntas (para usarse internamente)
-MAPEO_PREGUNTAS = {
-    "producto": "¿Qué producto deseas pedir? (ej. Toalla, Jabón)",
-    "color_toalla": "¿De qué color quieres la toallita?",
-    "color_moño": "¿De qué color quieres el moño?",
-    "tipo_jaboncito": "¿De qué forma quieres el jaboncito? (corazón, flor, osito, etc.)",
-    "nombre_bebe": "¿Cuál es el nombre del bebé para la tarjeta?",
-    "tarjetita": "¿Qué mensaje quieres que pongamos en la tarjetita?",
-    "tipo_entrega": "¿Cómo quieres tu entrega? (Local o Domicilio)",
-    "fecha_entrega": "¿Para qué fecha necesitas el pedido?",
-    "direccion": "¿Cuál es la dirección de entrega?",
-    "municipio": "¿A qué municipio pertenece la dirección de entrega?"
-}

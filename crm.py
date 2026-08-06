@@ -1,100 +1,20 @@
-import datetime
-import logging
-import re
-from typing import Dict, Any, List, Optional
+# ------------------------------------------------------------------------------
+# DEBUG MARKER - IMPORTANTE: Si ves esto en los logs, el parche funcionó.
+# ------------------------------------------------------------------------------
+print("🟢 [DEBUG] CRM PARCHADO CON WRAPPERS DICT/STRING CARGADO CORRECTAMENTE")
+# ------------------------------------------------------------------------------
 
+import re
+import logging
+from typing import Dict, Any, List, Optional
 from database import get_db_connection, init_db
+from constantes import logger_crm, EstadoPedido, ModoAtencion, OrigenEvento
 import pedido_manager
 
+# Inicializamos las tablas (ya están creadas, esto es seguro y no las reinicia)
 init_db()
-logger = logging.getLogger(__name__)
 
-# ==============================================================================
-# # Wrappers de Compatibilidad (Hacia atrás para app.py)
-# ==============================================================================
-def cargar_cliente(numero):
-    logger.info(f"🔎 [CRM] Cliente: {numero}")
-    return {"numero": numero, "nombre": "Cliente Registrado", "estado": "activo"}
-
-def guardar_mensaje_cliente(cliente, texto, tipo):
-    logger.info(f"💾 [CRM] Mensaje para {cliente['numero']}")
-    telefono = cliente['numero']
-    try:
-        with get_db_connection() as conn:
-            conn.execute(
-                "INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)",
-                (telefono, texto, "usuario")
-            )
-            conn.commit()
-    except Exception:
-        pass
-    return {"status": "ok", "mensaje_guardado": True}
-
-def cargar_memoria(telefono: str, limite: int = 20) -> List[Dict[str, str]]:
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT mensaje, emisor FROM historial_chat WHERE telefono = ? ORDER BY timestamp DESC LIMIT ?",
-                (telefono, limite)
-            )
-            rows = cursor.fetchall()
-            historial = []
-            for mensaje, emisor in reversed(rows):
-                role = "user" if emisor == "usuario" else "assistant"
-                historial.append({"role": role, "content": mensaje})
-            return historial
-    except Exception:
-        return []
-
-def registrar_uso_openai(*args, **kwargs):
-    telefono = None
-    if args and args[0]:
-        telefono = args[0]
-        if isinstance(telefono, dict):
-            telefono = telefono.get('numero')
-    try:
-        with get_db_connection() as conn:
-            conn.execute("INSERT INTO uso_openai (telefono) VALUES (?)", (telefono,))
-            conn.commit()
-    except Exception:
-        pass
-
-def guardar_respuesta(cliente, respuesta, tipo="texto"):
-    try:
-        telefono = cliente['numero'] if isinstance(cliente, dict) else cliente
-        with get_db_connection() as conn:
-            conn.execute(
-                "INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)",
-                (telefono, respuesta, "bot")
-            )
-            conn.commit()
-    except Exception:
-        pass
-
-def pedido_para_ram(*args, **kwargs):
-    return {}
-
-def cargar_pedido(pedido_id):
-    return pedido_manager.obtener_pedido(pedido_id)
-
-def sincronizar_pedido(*args, **kwargs):
-    pedido_id = None
-    datos = {}
-    try:
-        if args:
-            pedido_id = args[0]
-            if len(args) > 1:
-                datos = args[1]
-        if pedido_id and datos:
-            pedido_manager.actualizar_pedido(pedido_id, **datos)
-        return cargar_pedido(pedido_id)
-    except Exception:
-        return None
-
-# ==============================================================================
-# # Capa de Conversación (Obs 6: Traduce campo a pregunta)
-# ==============================================================================
+# MAPEO DE PREGUNTAS (Pertenece a la capa de conversación)
 MAPEO_PREGUNTAS = {
     "producto": "¿Qué producto deseas pedir? (ej. Toalla, Jabón)",
     "color_toalla": "¿De qué color quieres la toallita?",
@@ -108,48 +28,127 @@ MAPEO_PREGUNTAS = {
     "municipio": "¿A qué municipio pertenece la dirección de entrega?"
 }
 
+# ==============================================================================
+# # WRAPPERS DE COMPATIBILIDAD ROBUSTOS (Tolerancia a dicts y strings)
+# ==============================================================================
+
+def cargar_cliente(numero):
+    """
+    Si app.py pasa un dict en lugar de un string, lo extraemos.
+    """
+    if isinstance(numero, dict):
+        numero = numero.get('numero')
+    logger_crm.info(f"🔎 [CRM] Cliente: {numero}")
+    return {"numero": numero, "nombre": "Cliente Registrado", "estado": "activo"}
+
+def guardar_mensaje_cliente(cliente_ou_telefono, texto, tipo):
+    """
+    Wrapper tolerante. Recibe el dict o el teléfono y lo normaliza.
+    """
+    telefono = cliente_ou_telefono
+    if isinstance(cliente_ou_telefono, dict):
+        telefono = cliente_ou_telefono.get('numero')
+    
+    logger_crm.info(f"💾 [CRM] Mensaje para {telefono}")
+    try:
+        with get_db_connection() as conn:
+            conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, texto, "usuario"))
+            conn.commit()
+    except Exception as e:
+        logger_crm.error(f"Error guardando mensaje de usuario: {e}")
+    return {"status": "ok", "mensaje_guardado": True}
+
+def cargar_memoria(telefono_ou_cliente, limite: int = 20) -> List[Dict[str, str]]:
+    """
+    Wrapper tolerante. Recibe el dict o el teléfono y lo normaliza para SQLite.
+    """
+    telefono = telefono_ou_cliente
+    if isinstance(telefono_ou_cliente, dict):
+        telefono = telefono_ou_cliente.get('numero')
+    
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT mensaje, emisor FROM historial_chat WHERE telefono = ? ORDER BY timestamp DESC LIMIT ?",
+                (telefono, limite)
+            )
+            rows = cursor.fetchall()
+            return [{"role": "user" if e == "usuario" else "assistant", "content": m} for m, e in reversed(rows)]
+    except Exception as e:
+        logger_crm.error(f"Error cargando memoria: {e}")
+        return []
+
+def registrar_uso_openai(*args, **kwargs):
+    """Wrapper de compatibilidad que acepta 1 o varios argumentos."""
+    telefono = None
+    if args and args[0]:
+        telefono = args[0]
+        if isinstance(telefono, dict):
+            telefono = telefono.get('numero')
+    try:
+        with get_db_connection() as conn:
+            conn.execute("INSERT INTO uso_openai (telefono) VALUES (?)", (telefono,))
+            conn.commit()
+    except Exception:
+        pass
+
+def guardar_respuesta(cliente_ou_telefono, respuesta, tipo="texto"):
+    """
+    Guarda la respuesta del bot en el historial.
+    """
+    telefono = cliente_ou_telefono
+    if isinstance(cliente_ou_telefono, dict):
+        telefono = cliente_ou_telefono.get('numero')
+    
+    try:
+        with get_db_connection() as conn:
+            conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, respuesta, "bot"))
+            conn.commit()
+    except Exception:
+        pass
+
+def pedido_para_ram(*args, **kwargs): return {}
+def cargar_pedido(pedido_id): return pedido_manager.obtener_pedido(pedido_id)
+
+def sincronizar_pedido(*args, **kwargs):
+    pedido_id, datos = None, {}
+    if args:
+        pedido_id = args[0]
+        if len(args) > 1: datos = args[1]
+    elif kwargs.get('pedido_id'):
+        pedido_id, datos = kwargs.get('pedido_id'), kwargs
+    if pedido_id and datos: pedido_manager.actualizar_pedido(pedido_id, **datos)
+    return cargar_pedido(pedido_id)
+
+# ==============================================================================
+# # Capa de Conversación (Lógica de Traducción - SIN CAMBIOS)
+# ==============================================================================
 def _detectar_intencion_pedido(texto: str) -> bool:
-    palabras_clave = ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo"]
-    return sum(1 for palabra in palabras_clave if palabra in texto.lower()) >= 2
+    return sum(1 for p in ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo"] if p in texto.lower()) >= 2
 
 def manejar_intencion_pedido(cliente, texto: str) -> str:
     try:
-        telefono = cliente['numero']
-        cliente_id = cliente.get('id', 0)
-
-        # 1. Crear pedido en BORRADOR
+        telefono, cliente_id = cliente['numero'], cliente.get('id', 0)
         pedido_id = pedido_manager.crear_pedido(cliente_id, telefono)
         
-        # 2. Detectar producto
-        producto_detectado = "Toalla Personalizada"
-        cantidad_detectada = 1
-        precio_unitario = 350.0
-        
+        producto_detectado, cantidad_detectada, precio_unitario = "Toalla Personalizada", 1, 350.0
         match_cantidad = re.search(r'(\d+)\s*(toalla|jabon)', texto.lower())
         if match_cantidad:
             cantidad_detectada = int(match_cantidad.group(1))
-            if 'jabon' in match_cantidad.group(2):
-                producto_detectado = "Jabón Personalizado"
-
-        # 3. Agregar producto
+            if 'jabon' in match_cantidad.group(2): producto_detectado = "Jabón Personalizado"
+        
         pedido_manager.agregar_producto(pedido_id, producto_detectado, cantidad_detectada, precio_unitario)
-        pedido_manager.cambiar_estado(pedido_id, "CAPTURANDO_DATOS")
-
-        # 4. Preguntar por los campos faltantes (La lógica de negocio solo da el campo)
+        pedido_manager.cambiar_estado(pedido_id, EstadoPedido.CAPTURANDO_DATOS.value)
+        
         campos_faltantes = pedido_manager.obtener_campos_faltantes(pedido_id)
-
+        
         if not campos_faltantes:
-            resumen = pedido_manager.generar_resumen(pedido_id)
-            return f"{resumen}\n\n✅ ¡Tu pedido está completo! Para reservarlo, te solicitamos un anticipo de $50 MXN. ¿Te parece bien?"
+            return f"{pedido_manager.generar_resumen(pedido_id)}\n\n✅ ¡Tu pedido está completo! Para reservarlo, te solicitamos un anticipo de $50 MXN. ¿Te parece bien?"
         else:
-            # La capa de conversación (CRM) decide cómo preguntar
-            campo_faltante = max(campos_faltantes, key=lambda x: x['prioridad'])
-            campo = campo_faltante['campo']
-            pregunta = MAPEO_PREGUNTAS.get(campo, f"Por favor, indícanos el dato: {campo}")
-            
-            resumen = pedido_manager.generar_resumen(pedido_id)
-            return f"{resumen}\n\n📝 Para completar tu pedido, necesito un dato más:\n👉 {pregunta}"
-
+            max_campo = max(campos_faltantes, key=lambda x: x['prioridad'])
+            pregunta = MAPEO_PREGUNTAS.get(max_campo['campo'], f"Por favor, indícanos el dato: {max_campo['campo']}")
+            return f"{pedido_manager.generar_resumen(pedido_id)}\n\n📝 Para completar tu pedido, necesito un dato más:\n👉 {pregunta}"
     except Exception as e:
-        logger.error(f"Error en manejar_intencion_pedido: {e}")
-        return "❌ Ocurrió un error técnico procesando tu solicitud. Por favor, intenta de nuevo."
+        logger_crm.error(f"Error en manejar_intencion_pedido: {e}")
+        return "❌ Ocurrió un error técnico. Por favor, intenta de nuevo."

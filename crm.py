@@ -2,8 +2,24 @@ import re
 import logging
 from typing import Dict, Any, List, Optional
 
+from database import init_db
 from constantes import logger_crm, EstadoPedido
 import pedido_manager
+
+# ==============================================================================
+# # COMPATIBILIDAD CON APP.PY (ELIMINA EL ATTRIBUTEERROR)
+# ==============================================================================
+def inicializar_base_datos():
+    """
+    Función requerida por app.py para inicializar la base de datos.
+    Mantiene la compatibilidad hacia atrás. NO contiene lógica de negocio.
+    """
+    logger_crm.warning("🔄 [Compatibilidad] app.py llamó a crm.inicializar_base_datos(). Ejecutando init_db()...")
+    try:
+        init_db()
+        logger_crm.warning("✅ Base de datos inicializada exitosamente desde crm.py.")
+    except Exception as e:
+        logger_crm.error(f"❌ Error en crm.inicializar_base_datos: {e}")
 
 # ==============================================================================
 # # ADAPTADOR DE CRM

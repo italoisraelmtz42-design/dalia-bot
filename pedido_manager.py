@@ -39,13 +39,11 @@ def _registrar_historial(pedido_id: int, campo: str, valor_anterior: str, valor_
 # # PERSISTENCIA DEL CHAT
 # ==============================================================================
 def chat_guardar_mensaje(telefono: str, mensaje: str, emisor: str):
-    """Persiste un mensaje en el historial de chat."""
     with get_db_connection() as conn:
         conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, mensaje, emisor))
         conn.commit()
 
 def chat_cargar_memoria(telefono: str, limite: int = 20) -> List[Dict[str, str]]:
-    """Recupera el historial de chat en formato compatible con OpenAI."""
     with get_db_connection() as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -54,7 +52,6 @@ def chat_cargar_memoria(telefono: str, limite: int = 20) -> List[Dict[str, str]]
         return [{"role": "user" if r['emisor'] == "usuario" else "assistant", "content": r['mensaje']} for r in reversed(rows)]
 
 def uso_registrar_openai(telefono: str):
-    """Registra una llamada a OpenAI en la base de datos."""
     with get_db_connection() as conn:
         conn.execute("INSERT INTO uso_openai (telefono) VALUES (?)", (telefono,))
         conn.commit()
@@ -186,7 +183,6 @@ def agregar_producto(pedido_id: int, producto: str, cantidad: int, precio_unitar
     except Exception as e:
         raise e
 
-# Funciones de cálculo (se mantienen igual)
 def calcular_subtotal(pedido_id: int) -> float:
     with get_db_connection() as conn:
         return conn.cursor().execute("SELECT SUM(subtotal) FROM pedido_items WHERE pedido_id = ?", (pedido_id,)).fetchone()[0] or 0.0

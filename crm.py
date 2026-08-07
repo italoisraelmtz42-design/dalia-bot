@@ -10,10 +10,6 @@ import pedido_manager
 # # COMPATIBILIDAD CON APP.PY (ELIMINA EL ATTRIBUTEERROR)
 # ==============================================================================
 def inicializar_base_datos():
-    """
-    Función requerida por app.py para inicializar la base de datos.
-    Mantiene la compatibilidad hacia atrás. NO contiene lógica de negocio.
-    """
     logger_crm.warning("🔄 [Compatibilidad] app.py llamó a crm.inicializar_base_datos(). Ejecutando init_db()...")
     try:
         init_db()
@@ -60,6 +56,9 @@ def cargar_pedido(cliente):
         return pedido_manager.obtener_pedido(pedido_id)
     return None
 
+# ==============================================================================
+# # CORRECCIÓN DEFINITIVA DE sincronizar_pedido
+# ==============================================================================
 def sincronizar_pedido(*args, **kwargs):
     cliente = args[0] if args else {}
     datos_pedido = args[1] if len(args) > 1 else {}
@@ -71,50 +70,75 @@ def sincronizar_pedido(*args, **kwargs):
         logger_crm.error("sincronizar_pedido invocada sin un objeto cliente válido.")
         return {}
 
+    # 1. Buscar el pedido activo. NO crear uno automáticamente aquí.
     pedido_id = pedido_manager.obtener_pedido_activo(telefono)
-    if not pedido_id:
+    
+    # 2. Si NO hay pedido activo Y el usuario NO ha empezado una compra (no hay producto en la RAM), 
+    # simplemente no hacemos nada con el motor de pedidos.
+    if not pedido_id and not datos_pedido.get('producto'):
+        logger_crm.info("💬 Mensaje de chat sin intención de compra, no se crea pedido.")
+        return {}
+
+    # 3. Si NO hay pedido activo PERO el usuario YA tiene un producto en RAM, 
+    # entonces inició una compra y debemos crear el pedido en el motor.
+    if not pedido_id and datos_pedido.get('producto'):
         cliente_id = cliente.get('id', 0)
-        pedido_id = pedido_manager.crear_pedido(cliente_id, telefono)
-
-    if datos_pedido.get('producto') and datos_pedido.get('cantidad'):
         try:
-            pedido_manager.agregar_producto(
-                pedido_id, 
-                datos_pedido['producto'], 
-                datos_pedido['cantidad'],
-                datos_pedido.get('precio_unitario', 0.0),
-                color_toalla=datos_pedido.get('color_toalla'),
-                color_moño=datos_pedido.get('color_moño'),
-                tipo_jaboncito=datos_pedido.get('tipo_jaboncito'),
-                color_jaboncito=datos_pedido.get('color_jaboncito'),
-                nombre_bebe=datos_pedido.get('nombre_bebe'),
-                tarjetita=datos_pedido.get('tarjetita')
-            )
+            pedido_id = pedido_manager.crear_pedido(cliente_id, telefono)
         except Exception as e:
-            logger_crm.error(f"Error al agregar producto en sincronizar_pedido: {e}")
+            logger_crm.error(f"Error crítico al crear pedido en sincronizar_pedido: {e}")
+            return {}
+    
+    # 4. A PARTIR DE AQUÍ, SÓLO EJECUTAMOS SI TENEMOS UN pedido_id VÁLIDO (distinto de None).
+    if pedido_id:
+        # (Gestión de Productos)
+        if datos_pedido.get('producto') and datos_pedido.get('cantidad'):
+            try:
+                pedido_manager.agregar_producto(
+                    pedido_id, 
+                    datos_pedido['producto'], 
+                    datos_pedido['cantidad'],
+                    datos_pedido.get('precio_unitario', 0.0),
+                    color_toalla=datos_pedido.get('color_toalla'),
+                    color_moño=datos_pedido.get('color_moño'),
+                    tipo_jaboncito=datos_pedido.get('tipo_jaboncito'),
+                    color_jaboncito=datos_pedido.get('color_jaboncito'),
+                    nombre_bebe=datos_pedido.get('nombre_bebe'),
+                    tarjetita=datos_pedido.get('tarjetita')
+                )
+            except Exception as e:
+                logger_crm.error(f"Error al agregar producto: {e}")
 
-    if datos_pedido.get('tipo_entrega'):
-        try:
-            pedido_manager.actualizar_entrega(
-                pedido_id,
-                tipo_entrega=datos_pedido['tipo_entrega'],
-                municipio=datos_pedido.get('municipio'),
-                direccion=datos_pedido.get('direccion'),
-                fecha_entrega=datos_pedido.get('fecha_entrega'),
-                costo_envio=datos_pedido.get('costo_envio', 0.0)
-            )
-        except Exception as e:
-            logger_crm.error(f"Error al actualizar entrega en sincronizar_pedido: {e}")
+        # (Gestión de Entrega)
+        if datos_pedido.get('tipo_entrega'):
+            try:
+                pedido_manager.actualizar_entrega(
+                    pedido_id,
+                    tipo_entrega=datos_pedido['tipo_entrega'],
+                    municipio=datos_pedido.get('municipio'),
+                    direccion=datos_pedido.get('direccion'),
+                    fecha_entrega=datos_pedido.get('fecha_entrega'),
+                    costo_envio=datos_pedido.get('costo_envio', 0.0)
+                )
+            except Exception as e:
+                logger_crm.error(f"Error al actualizar entrega: {e}")
 
-    update_kwargs = {k: v for k, v in datos_pedido.items() if k in ['estado', 'modo_atencion', 'es_urgente']}
-    if update_kwargs:
-        try:
-            pedido_manager.actualizar_pedido(pedido_id, **update_kwargs)
-        except Exception as e:
-            logger_crm.error(f"Error al actualizar estado del pedido en sincronizar_pedido: {e}")
+        # (Gestión de Estados del Pedido)
+        update_kwargs = {k: v for k, v in datos_pedido.items() if k in ['estado', 'modo_atencion', 'es_urgente']}
+        if update_kwargs:
+            try:
+                pedido_manager.actualizar_pedido(pedido_id, **update_kwargs)
+            except Exception as e:
+                logger_crm.error(f"Error al actualizar estado: {e}")
 
-    return pedido_manager.obtener_pedido(pedido_id)
+        # Retornar el pedido actualizado para hidratar la RAM de app.py
+        return pedido_manager.obtener_pedido(pedido_id)
+    
+    return {}
 
+# ==============================================================================
+# # CAPA DE CONVERSACIÓN Y FLUJO DE VENTA
+# ==============================================================================
 def _detectar_intencion_pedido(texto: str) -> bool:
     return sum(1 for p in ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo"] if p in texto.lower()) >= 2
 

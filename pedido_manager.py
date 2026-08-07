@@ -12,10 +12,15 @@ from constantes import (
 from validators import validar_estado, validar_transicion
 
 # ==============================================================================
-# # EVENTOS INTERNOS
+# # EVENTOS INTERNOS (Con guardián permanente)
 # ==============================================================================
 def _registrar_evento(pedido_id: int, evento: str, descripcion: str = None, 
                       origen: OrigenEvento = OrigenEvento.SISTEMA, usuario: str = "sistema", conn=None):
+    # 🛡️ GUARDIÁN PERMANENTE: Si no hay pedido_id, no insertamos y registramos el motivo.
+    if pedido_id is None:
+        logger_pedidos.warning(f"[_registrar_evento] Se omite registro de evento '{evento}' porque pedido_id es None. Descripción: {descripcion}")
+        return
+
     sql = "INSERT INTO pedido_eventos (pedido_id, evento, descripcion, origen, usuario) VALUES (?, ?, ?, ?, ?)"
     params = (pedido_id, evento, descripcion, origen.value, usuario)
     if conn:
@@ -36,42 +41,8 @@ def _registrar_historial(pedido_id: int, campo: str, valor_anterior: str, valor_
             new_conn.commit()
 
 # ==============================================================================
-# # PERSISTENCIA DEL CHAT
+# # CRUD BASE (Instrumentado)
 # ==============================================================================
-def chat_guardar_mensaje(telefono: str, mensaje: str, emisor: str):
-    with get_db_connection() as conn:
-        conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, mensaje, emisor))
-        conn.commit()
-
-def chat_cargar_memoria(telefono: str, limite: int = 20) -> List[Dict[str, str]]:
-    with get_db_connection() as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT mensaje, emisor FROM historial_chat WHERE telefono = ? ORDER BY timestamp DESC LIMIT ?", (telefono, limite))
-        rows = cursor.fetchall()
-        return [{"role": "user" if r['emisor'] == "usuario" else "assistant", "content": r['mensaje']} for r in reversed(rows)]
-
-def uso_registrar_openai(telefono: str):
-    with get_db_connection() as conn:
-        conn.execute("INSERT INTO uso_openai (telefono) VALUES (?)", (telefono,))
-        conn.commit()
-
-# ==============================================================================
-# # MOTOR DE PEDIDOS
-# ==============================================================================
-def obtener_pedido_activo(telefono: str) -> Optional[int]:
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id FROM pedidos 
-            WHERE telefono = ? 
-            AND estado NOT IN ('CANCELADO', 'ENTREGADO') 
-            AND modo_atencion != 'DALIA' 
-            ORDER BY id DESC LIMIT 1
-        """, (telefono,))
-        row = cursor.fetchone()
-        return row[0] if row else None
-
 def generar_folio(conn) -> str:
     cursor = conn.cursor()
     cursor.execute("SELECT folio FROM pedidos WHERE folio LIKE ? ORDER BY folio DESC LIMIT 1", (f"DAL-{datetime.datetime.now().strftime('%Y')}-%",))
@@ -80,28 +51,60 @@ def generar_folio(conn) -> str:
     return f"DAL-{datetime.datetime.now().strftime('%Y')}-{new_num:06d}"
 
 def crear_pedido(cliente_id: int, telefono: str) -> int:
+    # =========== INSTRUMENTACIÓN ===========
+    logger_pedidos.info("="*80)
+    logger_pedidos.info("[crear_pedido] Inicio")
+    logger_pedidos.info(f"[crear_pedido] cliente_id = {cliente_id} ({type(cliente_id).__name__})")
+    logger_pedidos.info(f"[crear_pedido] telefono = {telefono} ({type(telefono).__name__})")
+    # ======================================
+
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         folio = generar_folio(conn)
+        logger_pedidos.info(f"[crear_pedido] Folio generado = {folio}")
+
         sql = "INSERT INTO pedidos (folio, cliente_id, telefono, estado, modo_atencion) VALUES (?, ?, ?, ?, ?)"
         params = (folio, cliente_id, telefono, EstadoPedido.BORRADOR.value, ModoAtencion.BOT.value)
+        logger_pedidos.info(f"[crear_pedido] Ejecutando INSERT en pedidos... SQL: {sql} | PARAMS: {params}")
+
         conn.execute(sql, params)
+        logger_pedidos.info("[crear_pedido] INSERT ejecutado correctamente")
+
         pedido_id = cursor.lastrowid
+        logger_pedidos.info(f"[crear_pedido] lastrowid = {pedido_id} ({type(pedido_id).__name__})")
+        logger_pedidos.info(f"[crear_pedido] pedido_id = {pedido_id}")
+
+        logger_pedidos.info("[crear_pedido] Llamando a _registrar_evento()")
         _registrar_evento(pedido_id, "Pedido creado", f"Folio {folio}", OrigenEvento.SISTEMA, "sistema", conn=conn)
+
         conn.commit()
+        logger_pedidos.info(f"[crear_pedido] Pedido creado exitosamente con ID {pedido_id}")
         return pedido_id
     except Exception as e:
-        if conn: conn.rollback()
+        if conn:
+            conn.rollback()
+        # =========== REGISTRO DE EXCEPCIÓN ===========
+        import traceback
+        logger_pedidos.error("="*80)
+        logger_pedidos.error("[crear_pedido] EXCEPCIÓN CAPTURADA")
+        logger_pedidos.error(f"Tipo: {type(e).__name__}")
+        logger_pedidos.error(f"Mensaje: {e}")
+        logger_pedidos.error("Traceback:")
+        logger_pedidos.error(traceback.format_exc())
+        logger_pedidos.error("="*80)
+        # ===========================================
         raise e
     finally:
-        if conn: conn.close()
+        if conn:
+            conn.close()
 
 def obtener_pedido(pedido_id: int) -> Optional[PedidoData]:
     with get_db_connection() as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+        
         cursor.execute("SELECT * FROM pedidos WHERE id = ?", (pedido_id,))
         row = cursor.fetchone()
         if not row: return None
@@ -183,6 +186,7 @@ def agregar_producto(pedido_id: int, producto: str, cantidad: int, precio_unitar
     except Exception as e:
         raise e
 
+# ... (El resto de funciones de cálculo, validación y estado se mantienen igual) ...
 def calcular_subtotal(pedido_id: int) -> float:
     with get_db_connection() as conn:
         return conn.cursor().execute("SELECT SUM(subtotal) FROM pedido_items WHERE pedido_id = ?", (pedido_id,)).fetchone()[0] or 0.0

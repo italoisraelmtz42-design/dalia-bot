@@ -2,145 +2,161 @@ import re
 import logging
 from typing import Dict, Any, List, Optional
 
-from database import get_db_connection, init_db
-from constantes import logger_crm, EstadoPedido, ModoAtencion, OrigenEvento
+from constantes import logger_crm, EstadoPedido
 import pedido_manager
 
-init_db()
+# ==============================================================================
+# # ADAPTADOR DE CRM (PUENTE ENTRE APP.PY Y EL MOTOR)
+# ==============================================================================
 
-def inicializar_base_datos():
-    logger_crm.warning("🔄 [Compatibilidad] app.py llamó a crm.inicializar_base_datos(). Ejecutando init_db()...")
-    try:
-        init_db()
-        logger_crm.warning("✅ Base de datos inicializada exitosamente.")
-    except Exception as e:
-        logger_crm.error(f"❌ Error en crm.inicializar_base_datos: {e}")
-
-# -------------------------------------------------------------
-# WRAPPERS ORIGINALES (CRM)
-# -------------------------------------------------------------
 def cargar_cliente(numero):
+    """
+    Normaliza el argumento recibido y retorna un diccionario de cliente estándar.
+    """
     if isinstance(numero, dict): numero = numero.get('numero')
     return {"numero": numero, "nombre": "Cliente Registrado", "estado": "activo"}
 
 def guardar_mensaje_cliente(cliente, texto, tipo):
-    telefono = cliente
-    if isinstance(cliente, dict): telefono = cliente.get('numero')
-    try:
-        with get_db_connection() as conn:
-            conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, texto, "usuario"))
-            conn.commit()
-    except Exception as e:
-        logger_crm.error(f"Error guardando mensaje de usuario: {e}")
+    """
+    Traduce el mensaje entrante a un comando de persistencia para el motor.
+    """
+    telefono = cliente['numero'] if isinstance(cliente, dict) else cliente
+    pedido_manager.chat_guardar_mensaje(telefono, texto, "usuario")
     return {"status": "ok", "mensaje_guardado": True}
 
 def cargar_memoria(cliente, limite: int = 20) -> List[Dict[str, str]]:
-    telefono = cliente
-    if isinstance(cliente, dict): telefono = cliente.get('numero')
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT mensaje, emisor FROM historial_chat WHERE telefono = ? ORDER BY timestamp DESC LIMIT ?", (telefono, limite))
-            rows = cursor.fetchall()
-            return [{"role": "user" if e == "usuario" else "assistant", "content": m} for m, e in reversed(rows)]
-    except Exception as e:
-        logger_crm.error(f"Error cargando memoria: {e}")
-        return []
+    """
+    Traduce la solicitud de memoria al motor.
+    """
+    telefono = cliente['numero'] if isinstance(cliente, dict) else cliente
+    return pedido_manager.chat_cargar_memoria(telefono, limite)
 
 def registrar_uso_openai(*args, **kwargs):
+    """
+    Traduce el registro de uso al motor.
+    """
     telefono = None
     if args and args[0]:
         telefono = args[0]
-        if isinstance(telefono, dict): telefono = telefono.get('numero')
-    try:
-        with get_db_connection() as conn:
-            conn.execute("INSERT INTO uso_openai (telefono) VALUES (?)", (telefono,))
-            conn.commit()
-    except Exception: pass
+        if isinstance(telefono, dict):
+            telefono = telefono.get('numero')
+    if telefono:
+        pedido_manager.uso_registrar_openai(telefono)
 
 def guardar_respuesta(cliente, respuesta, tipo="texto"):
-    telefono = cliente
-    if isinstance(cliente, dict): telefono = cliente.get('numero')
-    try:
-        with get_db_connection() as conn:
-            conn.execute("INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)", (telefono, respuesta, "bot"))
-            conn.commit()
-    except Exception: pass
+    """
+    Traduce la respuesta del bot al motor.
+    """
+    telefono = cliente['numero'] if isinstance(cliente, dict) else cliente
+    pedido_manager.chat_guardar_mensaje(telefono, respuesta, "bot")
 
 def pedido_para_ram(*args, **kwargs): return {}
-def cargar_pedido(pedido_id): return pedido_manager.obtener_pedido(pedido_id)
 
-# -------------------------------------------------------------
-# 🔥 LA CORRECCIÓN FINAL Y EL GUARDIÁN DE SEGURIDAD 🔥
-# -------------------------------------------------------------
+def cargar_pedido(cliente):
+    """
+    Adaptador que recibe el cliente y busca el pedido activo en SQLite.
+    """
+    telefono = cliente['numero'] if isinstance(cliente, dict) else cliente
+    pedido_id = pedido_manager.obtener_pedido_activo(telefono)
+    if pedido_id:
+        return pedido_manager.obtener_pedido(pedido_id)
+    return None
+
+# ==============================================================================
+# # sincronizar_pedido() - EL ADAPTADOR CORREGIDO
+# ==============================================================================
 def sincronizar_pedido(*args, **kwargs):
-    # =====================================================================
-    # 1. INSTRUMENTACIÓN CON PRINT (GARANTIZADO QUE SE VEA EN RENDER)
-    # =====================================================================
-    print("="*80)
-    print("=== ENTRADA sincronizar_pedido (DEBUG) ===")
-    print(f"args = {args}")
-    print(f"kwargs = {kwargs}")
-    for i, a in enumerate(args):
-        print(f"args[{i}] = {type(a).__name__} -> {a}")
-    print("="*80)
-    # =====================================================================
+    """
+    Adaptador principal.
+    Recibe (cliente, sesion["pedido"]) desde app.py.
+    Extrae el teléfono, obtiene/crea el pedido_id, y traduce la sesión RAM en comandos atómicos.
+    """
+    # 1. Extraer argumentos del contrato de app.py
+    cliente = args[0] if args else {}
+    datos_pedido = args[1] if len(args) > 1 else {}
+    
+    # Si los datos vinieron como kwargs, los unificamos
+    if kwargs:
+        datos_pedido.update(kwargs)
 
-    # 2. GUARDIÁN DE SEGURIDAD: Detecta el dict en args[0] y lo anula
-    pedido_id = None
-    datos = {}
+    # 2. Validación mínima del contrato
+    telefono = cliente.get('numero')
+    if not telefono:
+        logger_crm.error("sincronizar_pedido invocada sin un objeto cliente válido.")
+        return {}
 
-    if args:
-        # 🚨 ¡EL ASESINO! Si args[0] es un dict, es el CLIENTE. Lo ignoramos.
-        if isinstance(args[0], dict):
-            print("⚠️ [GUARDIÁN] Detectado dict en args[0] (Cliente). Ignorando.")
-            if len(args) > 1:
-                if isinstance(args[1], int):
-                    pedido_id = args[1]
-                elif isinstance(args[1], dict):
-                    datos = args[1]
-        else:
-            # args[0] no es dict, entonces es el pedido_id
-            pedido_id = args[0]
-            if len(args) > 1:
-                datos = args[1]
+    # 3. Buscar o crear el pedido activo en SQLite
+    pedido_id = pedido_manager.obtener_pedido_activo(telefono)
+    if not pedido_id:
+        # Si no existe pedido activo, creamos uno en BORRADOR
+        cliente_id = cliente.get('id', 0)
+        pedido_id = pedido_manager.crear_pedido(cliente_id, telefono)
 
-    # 3. Buscar en kwargs si no lo encontramos
-    if not pedido_id and kwargs.get('pedido_id'):
-        pedido_id = kwargs.get('pedido_id')
-        datos = kwargs
-        datos.pop('pedido_id', None)
+    # 4. Traducción del diccionario de RAM a comandos atómicos del negocio
+    # (Gestión de Productos)
+    if datos_pedido.get('producto') and datos_pedido.get('cantidad'):
+        try:
+            pedido_manager.agregar_producto(
+                pedido_id, 
+                datos_pedido['producto'], 
+                datos_pedido['cantidad'],
+                datos_pedido.get('precio_unitario', 0.0),
+                color_toalla=datos_pedido.get('color_toalla'),
+                color_moño=datos_pedido.get('color_moño'),
+                tipo_jaboncito=datos_pedido.get('tipo_jaboncito'),
+                color_jaboncito=datos_pedido.get('color_jaboncito'),
+                nombre_bebe=datos_pedido.get('nombre_bebe'),
+                tarjetita=datos_pedido.get('tarjetita')
+            )
+        except Exception as e:
+            logger_crm.error(f"Error al agregar producto en sincronizar_pedido: {e}")
 
-    # Limpieza final
-    if datos and isinstance(datos, dict):
-        datos.pop('_req_id', None)
+    # (Gestión de Entrega)
+    if datos_pedido.get('tipo_entrega'):
+        try:
+            pedido_manager.actualizar_entrega(
+                pedido_id,
+                tipo_entrega=datos_pedido['tipo_entrega'],
+                municipio=datos_pedido.get('municipio'),
+                direccion=datos_pedido.get('direccion'),
+                fecha_entrega=datos_pedido.get('fecha_entrega'),
+                costo_envio=datos_pedido.get('costo_envio', 0.0)
+            )
+        except Exception as e:
+            logger_crm.error(f"Error al actualizar entrega en sincronizar_pedido: {e}")
 
-    # 4. Ejecutar SOLO SI pedido_id es un entero válido
-    if pedido_id and isinstance(pedido_id, int):
-        print(f"✅ sincronizar_pedido: Actualizando pedido {pedido_id}")
-        pedido_manager.actualizar_pedido(pedido_id, **datos)
-    elif pedido_id:
-        print(f"❌ sincronizar_pedido: pedido_id no es un entero ({type(pedido_id).__name__})")
-    else:
-        print(f"ℹ️ sincronizar_pedido: No se encontró pedido_id válido.")
+    # (Gestión de Estados del Pedido - Solo las columnas de la tabla `pedidos`)
+    update_kwargs = {k: v for k, v in datos_pedido.items() if k in ['estado', 'modo_atencion', 'es_urgente']}
+    if update_kwargs:
+        try:
+            pedido_manager.actualizar_pedido(pedido_id, **update_kwargs)
+        except Exception as e:
+            logger_crm.error(f"Error al actualizar estado del pedido en sincronizar_pedido: {e}")
 
-    return cargar_pedido(pedido_id) if isinstance(pedido_id, int) else {}
+    # 5. Retornar el pedido actualizado desde SQLite para que app.py pueda usar el dict en RAM si lo desea
+    return pedido_manager.obtener_pedido(pedido_id)
 
-# ... Resto de funciones sin cambios ...
+# ==============================================================================
+# # CAPA DE CONVERSACIÓN Y FLUJO DE VENTA (Se mantiene igual)
+# ==============================================================================
 def _detectar_intencion_pedido(texto: str) -> bool:
     return sum(1 for p in ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo"] if p in texto.lower()) >= 2
 
 def manejar_intencion_pedido(cliente, texto: str) -> str:
     try:
         telefono, cliente_id = cliente['numero'], cliente.get('id', 0)
+        # El adaptador sincronizará y creará el pedido si no existe
         pedido_id = pedido_manager.crear_pedido(cliente_id, telefono)
+        
         producto_detectado, cantidad_detectada, precio_unitario = "Toalla Personalizada", 1, 350.0
         match_cantidad = re.search(r'(\d+)\s*(toalla|jabon)', texto.lower())
         if match_cantidad:
             cantidad_detectada = int(match_cantidad.group(1))
             if 'jabon' in match_cantidad.group(2): producto_detectado = "Jabón Personalizado"
+        
         pedido_manager.agregar_producto(pedido_id, producto_detectado, cantidad_detectada, precio_unitario)
         pedido_manager.cambiar_estado(pedido_id, EstadoPedido.CAPTURANDO_DATOS.value)
+        
         campos_faltantes = pedido_manager.obtener_campos_faltantes(pedido_id)
         if not campos_faltantes:
             return f"{pedido_manager.generar_resumen(pedido_id)}\n\n✅ ¡Tu pedido está completo! Para reservarlo, te solicitamos un anticipo de $50 MXN. ¿Te parece bien?"

@@ -17,17 +17,17 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-print(f"PHONE_NUMBER_ID = '{os.getenv('PHONE_NUMBER_ID')}'")
-print(f"WHATSAPP_TOKEN = '{os.getenv('WHATSAPP_TOKEN')[:10]}...'")
 
 # --- CONFIGURACIÓN DE API ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
+
+# 🔥 CORRECCIÓN DE ESTABILIDAD: Si la variable de entorno es None, usa este ID como fallback.
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "1256708880860678")
+
 WHATSAPP_API_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
 # --- INICIALIZACIÓN DEL SISTEMA ---
-# Esto mantiene las tablas actualizadas sin romper nada
 try:
     init_db()
     logger.info("🚀 Bases de datos inicializadas correctamente.")
@@ -78,6 +78,7 @@ def procesar_con_gpt(telefono, texto, historial=None):
     # client = OpenAI(api_key=OPENAI_API_KEY)
     # response = client.chat.completions.create(...)
     
+    # NOTA: Asegúrate de importar OpenAI en la parte superior si lo usas
     return f"Respuesta generada por el sistema original de OpenAI a: '{texto}'"
 
 # ==============================================================================

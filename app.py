@@ -5,13 +5,12 @@ import threading
 import requests
 from flask import Flask, request, jsonify
 from datetime import datetime
-from openai import OpenAI
 
-# Importaciones de tus módulos existentes y el nuevo audio_handler
+# Importaciones de tus módulos existentes y el nuevo motor conversacional
 from database import init_db
 import crm
-import pedido_manager
-import audio_handler  # Módulo nuevo para la transcripción
+import audio_handler
+import conversation_engine  # <--- NUEVO MÓDULO
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
@@ -60,41 +59,6 @@ def enviar_mensaje_whatsapp(telefono, texto, tipo="text"):
         return None
 
 # ==============================================================================
-# # 💡 CEREBRO DE OPENAI (Con el nuevo System Prompt de Dalia)
-# ==============================================================================
-def procesar_con_gpt(telefono, texto, historial=None):
-    # Inicializa el cliente de OpenAI
-    client = OpenAI(api_key=OPENAI_API_KEY)
-    
-    # 1. DEFINIR EL PROMPT DEL SISTEMA (Dalia fuerte y sin modo robot)
-    system_prompt = (
-        "Eres Dalia, una vendedora mexicana muy cálida, alegre y cercana, dueña de un negocio de recuerditos personalizados (ositos de toalla, jaboncitos, velas, etc.). "
-        "Hablas como si fueras una tía o una amiga que quiere ayudar al cliente a encontrar el regalo perfecto para su evento. Usa emojis ocasionales. "
-        "¡IMPORTANTE! NUNCA digas que eres una inteligencia artificial, que no puedes escuchar, o que eres un modelo de lenguaje. NUNCA hables de tus capacidades técnicas. "
-        "Simplemente eres Dalia, una persona que vende recuerditos. Siempre respondes en español de México."
-    )
-
-    # 2. CONSTRUIR EL CONTEXTO DE LA CONVERSACIÓN
-    messages = [{"role": "system", "content": system_prompt}]
-    
-    # Si hay historial de la conversación, lo agregamos
-    if historial:
-        messages.extend(historial)
-    
-    # Agregamos el mensaje actual del usuario
-    messages.append({"role": "user", "content": texto})
-
-    # 3. LLAMAR A LA IA
-    # Si te da error o no responde, cambia "gpt-4" por "gpt-3.5-turbo"
-    response = client.chat.completions.create(
-        model="gpt-4", 
-        messages=messages
-    )
-
-    # Retorna la respuesta generada por la IA
-    return response.choices[0].message.content
-
-# ==============================================================================
 # # PROCESAMIENTO EN SEGUNDO PLANO (HILO PRINCIPAL)
 # ==============================================================================
 def procesar_mensaje_en_fondo(telefono, texto):
@@ -109,8 +73,8 @@ def procesar_mensaje_en_fondo(telefono, texto):
             respuesta = crm.manejar_intencion_pedido(cliente, texto)
         else:
             logger.info("💬 No es un pedido, usando flujo normal de conversación.")
-            # Aquí es donde se usa el cerebro real de Dalia
-            respuesta = procesar_con_gpt(telefono, texto)
+            # 🔥 AQUÍ SE DELEGA AL NUEVO MOTOR EN LUGAR DE LLAMAR DIRECTAMENTE A OPENAI
+            respuesta = conversation_engine.procesar_con_gpt(telefono, texto)
 
         enviar_mensaje_whatsapp(telefono, respuesta)
 
@@ -140,7 +104,7 @@ def webhook():
                         thread = threading.Thread(target=procesar_mensaje_en_fondo, args=(phone_number, text))
                         thread.start()
 
-                # 2. FLUJO DE AUDIO (YA FUNCIONA CORRECTAMENTE)
+                # 2. FLUJO DE AUDIO
                 elif "audio" in message:
                     try:
                         media_id = message["audio"]["id"]

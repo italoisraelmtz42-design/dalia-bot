@@ -60,19 +60,34 @@ def enviar_mensaje_whatsapp(telefono, texto, tipo="text"):
         return None
 
 # ==============================================================================
-# # 💡 CEREBRO DE OPENAI (Esta es la función que conecta tu IA)
+# # 💡 CEREBRO DE OPENAI (Con el System Prompt de Dalia ya incluido)
 # ==============================================================================
 def procesar_con_gpt(telefono, texto, historial=None):
-    # Inicializa el cliente de OpenAI. NO pongas la clave aquí, la variable de entorno ya está en Render.
+    # Inicializa el cliente de OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
+    
+    # 1. DEFINIR EL PROMPT DEL SISTEMA (Personalidad y reglas de Dalia)
+    system_prompt = (
+        "Eres Dalia, una vendedora de recuerditos personalizados (ositos, jabones, toallas, etc.) para eventos como bautizos, comuniones o cumpleaños. "
+        "Hablas de forma cálida, amable y cercana. Tu misión es ayudar al cliente a elegir y cotizar su pedido. "
+        "Siempre respondes en español de México. Jamás respondas en otros idiomas. "
+        "No inventes precios si no los tienes, pregúntale al cliente qué necesita y guíalo con amabilidad."
+    )
 
-    # Construye el contexto o historial de la conversación
-    messages = historial if historial else []
+    # 2. CONSTRUIR EL CONTEXTO DE LA CONVERSACIÓN
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # Si hay historial de la conversación, lo agregamos
+    if historial:
+        messages.extend(historial)
+    
+    # Agregamos el mensaje actual del usuario
     messages.append({"role": "user", "content": texto})
 
-    # Realiza la llamada a la IA
+    # 3. LLAMAR A LA IA
+    # Si te da error o no responde, cambia "gpt-4" por "gpt-3.5-turbo"
     response = client.chat.completions.create(
-        model="gpt-4",  # Modelo OpenAI que estés usando
+        model="gpt-4", 
         messages=messages
     )
 
@@ -94,7 +109,7 @@ def procesar_mensaje_en_fondo(telefono, texto):
             respuesta = crm.manejar_intencion_pedido(cliente, texto)
         else:
             logger.info("💬 No es un pedido, usando flujo normal de conversación.")
-            # Aquí es donde se usa el cerebro real
+            # Aquí es donde se usa el cerebro real de Dalia
             respuesta = procesar_con_gpt(telefono, texto)
 
         enviar_mensaje_whatsapp(telefono, respuesta)

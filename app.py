@@ -5,6 +5,7 @@ import threading
 import requests
 from flask import Flask, request, jsonify
 from datetime import datetime
+from openai import OpenAI
 
 # Importaciones de tus módulos existentes y el nuevo audio_handler
 from database import init_db
@@ -59,23 +60,24 @@ def enviar_mensaje_whatsapp(telefono, texto, tipo="text"):
         return None
 
 # ==============================================================================
-# # 🔴 CORREGIR AQUÍ: CONECTAR EL CEREBRO REAL
+# # 💡 CEREBRO DE OPENAI (Esta es la función que conecta tu IA)
 # ==============================================================================
 def procesar_con_gpt(telefono, texto, historial=None):
-    """
-    ¡ESTA ES LA FUNCIÓN QUE DEBES CORREGIR!
-    Aquí debe ir tu código real de conexión con OpenAI.
-    Actualmente tiene un texto de prueba.
-    """
-    
-    # ------- ELIMINA ESTO Y PEGA TU CÓDIGO DE OPENAI AQUÍ ABAJO -------
-    return f"Respuesta generada por el sistema original de OpenAI a: '{texto}'"
-    # -------------------------------------------------------------------
-    
-    # EJEMPLO DE LO QUE DEBERÍA IR (Reemplaza con tu lógica original):
-    # client = OpenAI(api_key=OPENAI_API_KEY)
-    # response = client.chat.completions.create(...)
-    # return response.choices[0].message.content
+    # Inicializa el cliente de OpenAI. NO pongas la clave aquí, la variable de entorno ya está en Render.
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    # Construye el contexto o historial de la conversación
+    messages = historial if historial else []
+    messages.append({"role": "user", "content": texto})
+
+    # Realiza la llamada a la IA
+    response = client.chat.completions.create(
+        model="gpt-4",  # Modelo OpenAI que estés usando
+        messages=messages
+    )
+
+    # Retorna la respuesta generada por la IA
+    return response.choices[0].message.content
 
 # ==============================================================================
 # # PROCESAMIENTO EN SEGUNDO PLANO (HILO PRINCIPAL)
@@ -92,7 +94,7 @@ def procesar_mensaje_en_fondo(telefono, texto):
             respuesta = crm.manejar_intencion_pedido(cliente, texto)
         else:
             logger.info("💬 No es un pedido, usando flujo normal de conversación.")
-            # Llamada a la función que vamos a corregir
+            # Aquí es donde se usa el cerebro real
             respuesta = procesar_con_gpt(telefono, texto)
 
         enviar_mensaje_whatsapp(telefono, respuesta)

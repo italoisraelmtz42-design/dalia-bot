@@ -12,7 +12,7 @@ from constantes import (
 from validators import validar_estado, validar_transicion
 
 # ==============================================================================
-# # EVENTOS INTERNOS (Persistencia de trazas)
+# # EVENTOS INTERNOS
 # ==============================================================================
 def _registrar_evento(pedido_id: int, evento: str, descripcion: str = None, 
                       origen: OrigenEvento = OrigenEvento.SISTEMA, usuario: str = "sistema", conn=None):
@@ -36,7 +36,7 @@ def _registrar_historial(pedido_id: int, campo: str, valor_anterior: str, valor_
             new_conn.commit()
 
 # ==============================================================================
-# # FUNCIONES PÚBLICAS DE PERSISTENCIA DEL CHAT (Reemplazan el SQL de crm.py)
+# # PERSISTENCIA DEL CHAT
 # ==============================================================================
 def chat_guardar_mensaje(telefono: str, mensaje: str, emisor: str):
     """Persiste un mensaje en el historial de chat."""
@@ -60,13 +60,9 @@ def uso_registrar_openai(telefono: str):
         conn.commit()
 
 # ==============================================================================
-# # FUNCIONES PÚBLICAS DEL MOTOR DE PEDIDOS
+# # MOTOR DE PEDIDOS
 # ==============================================================================
 def obtener_pedido_activo(telefono: str) -> Optional[int]:
-    """
-    Busca el ID del pedido activo más reciente para un teléfono dado.
-    Excluye pedidos cancelados, entregados o transferidos a Dalia.
-    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -125,10 +121,6 @@ def obtener_pedido(pedido_id: int) -> Optional[PedidoData]:
         return PedidoData(**pedido_dict, items=items, pagos=pagos, entrega=entrega)
 
 def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
-    """
-    Actualiza únicamente los campos de la tabla 'pedidos'.
-    El adaptador (crm.py) se encarga de enviar las claves correctas.
-    """
     if not kwargs: return
     if any(k not in COLUMNAS_PERMITIDAS_PEDIDOS for k in kwargs):
         raise ValueError("Intento de actualizar columna no permitida en la tabla pedidos.")
@@ -158,9 +150,6 @@ def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
         if conn: conn.close()
 
 def actualizar_entrega(pedido_id: int, tipo_entrega: str, municipio: str = None, direccion: str = None, fecha_entrega: str = None, costo_envio: float = 0.0):
-    """
-    Inserta o actualiza los datos de entrega del pedido en la tabla 'entregas'.
-    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT pedido_id FROM entregas WHERE pedido_id = ?", (pedido_id,))
@@ -197,7 +186,7 @@ def agregar_producto(pedido_id: int, producto: str, cantidad: int, precio_unitar
     except Exception as e:
         raise e
 
-# Funciones de cálculo (Se mantienen igual)
+# Funciones de cálculo (se mantienen igual)
 def calcular_subtotal(pedido_id: int) -> float:
     with get_db_connection() as conn:
         return conn.cursor().execute("SELECT SUM(subtotal) FROM pedido_items WHERE pedido_id = ?", (pedido_id,)).fetchone()[0] or 0.0

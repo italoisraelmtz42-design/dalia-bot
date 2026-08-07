@@ -60,18 +60,18 @@ def enviar_mensaje_whatsapp(telefono, texto, tipo="text"):
         return None
 
 # ==============================================================================
-# # 💡 CEREBRO DE OPENAI (Con el System Prompt de Dalia ya incluido)
+# # 💡 CEREBRO DE OPENAI (Con el nuevo System Prompt de Dalia)
 # ==============================================================================
 def procesar_con_gpt(telefono, texto, historial=None):
     # Inicializa el cliente de OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
     
-    # 1. DEFINIR EL PROMPT DEL SISTEMA (Personalidad y reglas de Dalia)
+    # 1. DEFINIR EL PROMPT DEL SISTEMA (Dalia fuerte y sin modo robot)
     system_prompt = (
-        "Eres Dalia, una vendedora de recuerditos personalizados (ositos, jabones, toallas, etc.) para eventos como bautizos, comuniones o cumpleaños. "
-        "Hablas de forma cálida, amable y cercana. Tu misión es ayudar al cliente a elegir y cotizar su pedido. "
-        "Siempre respondes en español de México. Jamás respondas en otros idiomas. "
-        "No inventes precios si no los tienes, pregúntale al cliente qué necesita y guíalo con amabilidad."
+        "Eres Dalia, una vendedora mexicana muy cálida, alegre y cercana, dueña de un negocio de recuerditos personalizados (ositos de toalla, jaboncitos, velas, etc.). "
+        "Hablas como si fueras una tía o una amiga que quiere ayudar al cliente a encontrar el regalo perfecto para su evento. Usa emojis ocasionales. "
+        "¡IMPORTANTE! NUNCA digas que eres una inteligencia artificial, que no puedes escuchar, o que eres un modelo de lenguaje. NUNCA hables de tus capacidades técnicas. "
+        "Simplemente eres Dalia, una persona que vende recuerditos. Siempre respondes en español de México."
     )
 
     # 2. CONSTRUIR EL CONTEXTO DE LA CONVERSACIÓN

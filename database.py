@@ -17,7 +17,6 @@ def init_order_tables():
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # Verificar versión de esquema
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
             if not cursor.fetchone():
                 current_version = 0
@@ -26,7 +25,6 @@ def init_order_tables():
                 row = cursor.fetchone()
                 current_version = row[0] if row else 0
             
-            # Crear tablas con IF NOT EXISTS
             cursor.execute("""CREATE TABLE IF NOT EXISTS pedidos (id INTEGER PRIMARY KEY AUTOINCREMENT, folio TEXT UNIQUE NOT NULL, cliente_id INTEGER, telefono TEXT NOT NULL, estado TEXT NOT NULL, modo_atencion TEXT NOT NULL DEFAULT 'BOT', es_urgente INTEGER DEFAULT 0, porcentaje_completitud INTEGER DEFAULT 0, fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP, fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
             cursor.execute("""CREATE TABLE IF NOT EXISTS pedido_items (id INTEGER PRIMARY KEY AUTOINCREMENT, pedido_id INTEGER NOT NULL, producto TEXT NOT NULL, cantidad INTEGER NOT NULL, precio_unitario REAL NOT NULL, subtotal REAL NOT NULL, color_toalla TEXT, color_moño TEXT, tipo_jaboncito TEXT, color_jaboncito TEXT, nombre_bebe TEXT, tarjetita TEXT, FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE)""")
             cursor.execute("""CREATE TABLE IF NOT EXISTS pagos (id INTEGER PRIMARY KEY AUTOINCREMENT, pedido_id INTEGER NOT NULL, tipo TEXT NOT NULL, monto REAL NOT NULL, metodo TEXT NOT NULL, comprobante TEXT, confirmado INTEGER DEFAULT 0, fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE)""")
@@ -55,5 +53,4 @@ def init_db():
         raise
 
 # 🔥 INICIALIZACIÓN AUTOMÁTICA AL IMPORTAR EL MÓDULO
-# Esto garantiza que las tablas existan antes de que cualquier operación las use.
 init_db()

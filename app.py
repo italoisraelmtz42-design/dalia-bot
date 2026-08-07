@@ -17,6 +17,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+print(f"PHONE_NUMBER_ID = '{os.getenv('PHONE_NUMBER_ID')}'")
+print(f"WHATSAPP_TOKEN = '{os.getenv('WHATSAPP_TOKEN')[:10]}...'")
 
 # --- CONFIGURACIÓN DE API ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")

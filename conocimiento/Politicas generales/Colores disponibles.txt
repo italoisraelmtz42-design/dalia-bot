@@ -5,6 +5,7 @@ COLORES DISPONIBLES UNICAMENTE PARA TOALLITAS, JABÓN Y O MOÑO / LISTÓN
 *si el cliente solicita color rosa, aclarar siempre si se refiere al tono rosa palo o rosa pastel. (esto es importante)
 *si el cliente escoge color azul, aclararle que el color disponible es el azul rey. solo confirmar el dato al cliente para evitar confusiones futuras.
 *(no manejamos otros colores)
+*durante la conversación de colores, aprovechar para que el cliente indique de una vez el color de toalla, moño y jaboncito.
 
 Turquesa
 Azul Rey
@@ -16,5 +17,3 @@ Rosa Palo
 Rosa Pastel
 Café Claro
 Amarillo
-
-

@@ -7,9 +7,6 @@ from constantes import logger_crm, EstadoPedido
 import pedido_manager
 import conversation_engine
 
-# ==============================================================================
-# # COMPATIBILIDAD CON APP.PY
-# ==============================================================================
 def inicializar_base_datos():
     logger_crm.warning("🔄 [Compatibilidad] app.py llamó a crm.inicializar_base_datos(). Ejecutando init_db()...")
     try:
@@ -18,9 +15,6 @@ def inicializar_base_datos():
     except Exception as e:
         logger_crm.error(f"❌ Error en crm.inicializar_base_datos: {e}")
 
-# ==============================================================================
-# # ADAPTADOR DE CRM
-# ==============================================================================
 def cargar_cliente(numero):
     if isinstance(numero, dict): numero = numero.get('numero')
     return {"numero": numero, "nombre": "Cliente Registrado", "estado": "activo"}
@@ -38,8 +32,7 @@ def registrar_uso_openai(*args, **kwargs):
     telefono = None
     if args and args[0]:
         telefono = args[0]
-        if isinstance(telefono, dict):
-            telefono = telefono.get('numero')
+        if isinstance(telefono, dict): telefono = telefono.get('numero')
     if telefono:
         pedido_manager.uso_registrar_openai(telefono)
 
@@ -48,6 +41,7 @@ def guardar_respuesta(cliente, respuesta, tipo="texto"):
     pedido_manager.chat_guardar_mensaje(telefono, respuesta, "bot")
 
 def pedido_para_ram(*args, **kwargs): return {}
+
 def cargar_pedido(cliente):
     telefono = cliente['numero'] if isinstance(cliente, dict) else cliente
     pedido_id = pedido_manager.obtener_pedido_activo(telefono)
@@ -56,102 +50,65 @@ def cargar_pedido(cliente):
     return None
 
 # ==============================================================================
-# # CORRECCIÓN DE sincronizar_pedido() (PASOS 1, 2 y 3)
+# # NUEVO sincronizar_pedido (Ya NO crea pedidos sin anticipo)
 # ==============================================================================
 def sincronizar_pedido(*args, **kwargs):
     cliente = args[0] if args else {}
     datos_pedido = args[1] if len(args) > 1 else {}
-    if kwargs:
-        datos_pedido.update(kwargs)
+    if kwargs: datos_pedido.update(kwargs)
 
     telefono = cliente.get('numero')
     if not telefono:
         logger_crm.error("sincronizar_pedido invocada sin un objeto cliente válido.")
         return {}
 
-    logger_crm.info("="*60)
-    logger_crm.info("===== SINCRONIZANDO PEDIDO =====")
-    logger_crm.info(f"Telefono: {telefono}")
-    logger_crm.info(f"Pedido RAM: {datos_pedido}")
-
-    # 1. Buscar el pedido activo
+    # 1. Buscar si existe un pedido OFICIAL activo
     pedido_id = pedido_manager.obtener_pedido_activo(telefono)
-    
-    # 2. Si no hay pedido y el usuario tiene producto en RAM, crearlo
-    if not pedido_id and datos_pedido.get('producto'):
+
+    # 2. Si NO hay pedido oficial PERO el cliente tiene un anticipo confirmado, CREAMOS el pedido ahora.
+    if not pedido_id and datos_pedido.get('anticipo_confirmado') is True:
         cliente_id = cliente.get('id', 0)
         try:
             pedido_id = pedido_manager.crear_pedido(cliente_id, telefono)
+            logger_crm.info(f"🆕 Pedido oficial creado tras la confirmación del anticipo. ID: {pedido_id}")
+            # Después de crear el pedido, guardamos los items y la entrega
+            if datos_pedido.get('producto') and datos_pedido.get('cantidad'):
+                try:
+                    pedido_manager.agregar_producto(pedido_id, datos_pedido['producto'], datos_pedido['cantidad'], datos_pedido.get('precio_unitario', 0.0),
+                        color_toalla=datos_pedido.get('color_toalla'), color_moño=datos_pedido.get('color_moño'),
+                        tipo_jaboncito=datos_pedido.get('tipo_jaboncito'), color_jaboncito=datos_pedido.get('color_jaboncito'),
+                        nombre_bebe=datos_pedido.get('nombre_bebe'), tarjetita=datos_pedido.get('tarjetita'))
+                except Exception as e: logger_crm.error(f"Error al agregar producto al pedido oficial: {e}")
+            if datos_pedido.get('tipo_entrega'):
+                try:
+                    pedido_manager.actualizar_entrega(pedido_id, tipo_entrega=datos_pedido['tipo_entrega'],
+                        municipio=datos_pedido.get('municipio'), direccion=datos_pedido.get('direccion'),
+                        fecha_entrega=datos_pedido.get('fecha_entrega'), costo_envio=datos_pedido.get('costo_envio', 0.0))
+                except Exception as e: logger_crm.error(f"Error al actualizar entrega del pedido oficial: {e}")
         except Exception as e:
-            logger_crm.error(f"Error crítico al crear pedido en sincronizar_pedido: {e}")
-            return {}
+            logger_crm.error(f"Error creando pedido oficial por anticipo: {e}")
 
+    # 3. Si YA existía un pedido oficial (o se acaba de crear), actualizamos sus datos
     if pedido_id:
-        # (Gestión de Productos)
         if datos_pedido.get('producto') and datos_pedido.get('cantidad'):
             try:
-                pedido_manager.agregar_producto(
-                    pedido_id, 
-                    datos_pedido['producto'], 
-                    datos_pedido['cantidad'],
-                    datos_pedido.get('precio_unitario', 0.0),
-                    color_toalla=datos_pedido.get('color_toalla'),
-                    color_moño=datos_pedido.get('color_moño'),
-                    tipo_jaboncito=datos_pedido.get('tipo_jaboncito'),
-                    color_jaboncito=datos_pedido.get('color_jaboncito'),
-                    nombre_bebe=datos_pedido.get('nombre_bebe'),
-                    tarjetita=datos_pedido.get('tarjetita')
-                )
-            except Exception as e:
-                logger_crm.error(f"Error al agregar producto: {e}")
-
-        # (Gestión de Entrega)
+                pedido_manager.agregar_producto(pedido_id, datos_pedido['producto'], datos_pedido['cantidad'], datos_pedido.get('precio_unitario', 0.0),
+                    color_toalla=datos_pedido.get('color_toalla'), color_moño=datos_pedido.get('color_moño'),
+                    tipo_jaboncito=datos_pedido.get('tipo_jaboncito'), color_jaboncito=datos_pedido.get('color_jaboncito'),
+                    nombre_bebe=datos_pedido.get('nombre_bebe'), tarjetita=datos_pedido.get('tarjetita'))
+            except Exception as e: logger_crm.error(f"Error al agregar producto: {e}")
         if datos_pedido.get('tipo_entrega'):
             try:
-                pedido_manager.actualizar_entrega(
-                    pedido_id,
-                    tipo_entrega=datos_pedido['tipo_entrega'],
-                    municipio=datos_pedido.get('municipio'),
-                    direccion=datos_pedido.get('direccion'),
-                    fecha_entrega=datos_pedido.get('fecha_entrega'),
-                    costo_envio=datos_pedido.get('costo_envio', 0.0)
-                )
-            except Exception as e:
-                logger_crm.error(f"Error al actualizar entrega: {e}")
-
-        # (Gestión de Estados del Pedido)
+                pedido_manager.actualizar_entrega(pedido_id, tipo_entrega=datos_pedido['tipo_entrega'],
+                    municipio=datos_pedido.get('municipio'), direccion=datos_pedido.get('direccion'),
+                    fecha_entrega=datos_pedido.get('fecha_entrega'), costo_envio=datos_pedido.get('costo_envio', 0.0))
+            except Exception as e: logger_crm.error(f"Error al actualizar entrega: {e}")
         update_kwargs = {k: v for k, v in datos_pedido.items() if k in ['estado', 'modo_atencion', 'es_urgente']}
         if update_kwargs:
-            try:
-                pedido_manager.actualizar_pedido(pedido_id, **update_kwargs)
-            except Exception as e:
-                logger_crm.error(f"Error al actualizar estado: {e}")
-
-        # ==========================================================================
-        # PASO 3: VERIFICACIÓN INMEDIATA DESPUÉS DE GUARDAR
-        # ==========================================================================
-        logger_crm.info("="*60)
-        logger_crm.info("🔄 Verificando persistencia inmediata...")
-        try:
-            pedido_verificado = pedido_manager.obtener_pedido_activo(telefono)
-            if pedido_verificado:
-                logger_crm.info("✅ Pedido sincronizado correctamente.")
-                logger_crm.info(f"🆔 Pedido ID: {pedido_verificado}")
-                logger_crm.info(f"📱 Cliente: {telefono}")
-                # Recuperamos el objeto completo para obtener el estado
-                pedido_obj = pedido_manager.obtener_pedido(pedido_verificado)
-                if pedido_obj:
-                    logger_crm.info(f"📌 Estado: {pedido_obj.estado}")
-            else:
-                logger_crm.error("❌ ¡ERROR! El pedido se guardó pero NO se pudo recuperar con obtener_pedido_activo() inmediatamente.")
-        except Exception as e:
-            logger_crm.error(f"❌ Excepción durante la verificación inmediata: {e}")
-        logger_crm.info("="*60)
-        # ==========================================================================
-
+            try: pedido_manager.actualizar_pedido(pedido_id, **update_kwargs)
+            except Exception as e: logger_crm.error(f"Error al actualizar estado: {e}")
         return pedido_manager.obtener_pedido(pedido_id)
-    
-    logger_crm.info("ℹ️ No se realizó ninguna acción de sincronización de pedido.")
+
     return {}
 
 def _detectar_intencion_pedido(texto: str) -> bool:
@@ -166,16 +123,13 @@ def manejar_intencion_pedido(cliente, texto: str) -> str:
     try:
         telefono, cliente_id = cliente['numero'], cliente.get('id', 0)
         pedido_id = pedido_manager.crear_pedido(cliente_id, telefono)
-        
         producto_detectado, cantidad_detectada, precio_unitario = "Toalla Personalizada", 1, 350.0
         match_cantidad = re.search(r'(\d+)\s*(toalla|jabon)', texto.lower())
         if match_cantidad:
             cantidad_detectada = int(match_cantidad.group(1))
             if 'jabon' in match_cantidad.group(2): producto_detectado = "Jabón Personalizado"
-        
         pedido_manager.agregar_producto(pedido_id, producto_detectado, cantidad_detectada, precio_unitario)
         pedido_manager.cambiar_estado(pedido_id, EstadoPedido.CAPTURANDO_DATOS.value)
-        
         campos_faltantes = pedido_manager.obtener_campos_faltantes(pedido_id)
         if not campos_faltantes:
             return f"{pedido_manager.generar_resumen(pedido_id)}\n\n✅ ¡Tu pedido está completo! Para reservarlo, te solicitamos un anticipo de $50 MXN. ¿Te parece bien?"

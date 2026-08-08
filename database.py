@@ -4,7 +4,6 @@ import logging
 
 logger_db = logging.getLogger('database')
 
-# Leer la ruta de la variable de entorno
 DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
 
 db_dir = os.path.dirname(DB_PATH)
@@ -35,16 +34,87 @@ def init_order_tables():
                 current_version = row[0] if row else 0
             
             # Tablas existentes
-            cursor.execute("""CREATE TABLE IF NOT EXISTS pedidos (id INTEGER PRIMARY KEY AUTOINCREMENT, folio TEXT UNIQUE NOT NULL, cliente_id INTEGER, telefono TEXT NOT NULL, estado TEXT NOT NULL, modo_atencion TEXT NOT NULL DEFAULT 'BOT', es_urgente INTEGER DEFAULT 0, porcentaje_completitud INTEGER DEFAULT 0, fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP, fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS pedido_items (id INTEGER PRIMARY KEY AUTOINCREMENT, pedido_id INTEGER NOT NULL, producto TEXT NOT NULL, cantidad INTEGER NOT NULL, precio_unitario REAL NOT NULL, subtotal REAL NOT NULL, color_toalla TEXT, color_moño TEXT, tipo_jaboncito TEXT, color_jaboncito TEXT, nombre_bebe TEXT, tarjetita TEXT, FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE)""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS pagos (id INTEGER PRIMARY KEY AUTOINCREMENT, pedido_id INTEGER NOT NULL, tipo TEXT NOT NULL, monto REAL NOT NULL, metodo TEXT NOT NULL, comprobante TEXT, confirmado INTEGER DEFAULT 0, fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE)""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS entregas (pedido_id INTEGER PRIMARY KEY, tipo_entrega TEXT NOT NULL, municipio TEXT, direccion TEXT, fecha_entrega TIMESTAMP, costo_envio REAL DEFAULT 0.0, FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE)""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS pedido_historial (id INTEGER PRIMARY KEY AUTOINCREMENT, pedido_id INTEGER NOT NULL, campo TEXT NOT NULL, valor_anterior TEXT, valor_nuevo TEXT, usuario TEXT, fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE)""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS pedido_eventos (id INTEGER PRIMARY KEY AUTOINCREMENT, pedido_id INTEGER NOT NULL, evento TEXT NOT NULL, descripcion TEXT, origen TEXT NOT NULL DEFAULT 'SISTEMA', usuario TEXT, fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE)""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS historial_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, telefono TEXT NOT NULL, mensaje TEXT NOT NULL, emisor TEXT NOT NULL, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS uso_openai (id INTEGER PRIMARY KEY AUTOINCREMENT, telefono TEXT NOT NULL, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
-
-            # 🔥 NUEVA TABLA: BORRADORES DE PEDIDO
+            cursor.execute("""CREATE TABLE IF NOT EXISTS pedidos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                folio TEXT UNIQUE NOT NULL,
+                cliente_id INTEGER,
+                telefono TEXT NOT NULL,
+                estado TEXT NOT NULL,
+                modo_atencion TEXT NOT NULL DEFAULT 'BOT',
+                es_urgente INTEGER DEFAULT 0,
+                porcentaje_completitud INTEGER DEFAULT 0,
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS pedido_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pedido_id INTEGER NOT NULL,
+                producto TEXT NOT NULL,
+                cantidad INTEGER NOT NULL,
+                precio_unitario REAL NOT NULL,
+                subtotal REAL NOT NULL,
+                color_toalla TEXT,
+                color_moño TEXT,
+                tipo_jaboncito TEXT,
+                color_jaboncito TEXT,
+                nombre_bebe TEXT,
+                tarjetita TEXT,
+                FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
+            )""")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS pagos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pedido_id INTEGER NOT NULL,
+                tipo TEXT NOT NULL,
+                monto REAL NOT NULL,
+                metodo TEXT NOT NULL,
+                comprobante TEXT,
+                confirmado INTEGER DEFAULT 0,
+                fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
+            )""")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS entregas (
+                pedido_id INTEGER PRIMARY KEY,
+                tipo_entrega TEXT NOT NULL,
+                municipio TEXT,
+                direccion TEXT,
+                fecha_entrega TIMESTAMP,
+                costo_envio REAL DEFAULT 0.0,
+                FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
+            )""")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS pedido_historial (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pedido_id INTEGER NOT NULL,
+                campo TEXT NOT NULL,
+                valor_anterior TEXT,
+                valor_nuevo TEXT,
+                usuario TEXT,
+                fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
+            )""")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS pedido_eventos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pedido_id INTEGER NOT NULL,
+                evento TEXT NOT NULL,
+                descripcion TEXT,
+                origen TEXT NOT NULL DEFAULT 'SISTEMA',
+                usuario TEXT,
+                fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
+            )""")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS historial_chat (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telefono TEXT NOT NULL,
+                mensaje TEXT NOT NULL,
+                emisor TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS uso_openai (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telefono TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+            
+            # 🔥 Nueva tabla para borradores
             cursor.execute("""CREATE TABLE IF NOT EXISTS borradores_pedido (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telefono TEXT NOT NULL UNIQUE,

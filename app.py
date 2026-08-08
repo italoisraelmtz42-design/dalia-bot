@@ -373,6 +373,11 @@ def obtener_sesion(numero):
                 "imagenes_enviadas": set(),
                 "lock": threading.Lock(),
             }
+        
+        # 🔥 SIEMPRE recargamos el borrador desde SQLite al inicio de cada mensaje
+        borrador = pedido_manager.cargar_borrador_pedido(numero)
+        if borrador:
+            sesiones[numero]["pedido"] = borrador
         return sesiones[numero]
 
 
@@ -669,7 +674,16 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
 
 def ejecutar_tool_call(tool_call, sesion, numero, pedido):
     if tool_call.function.name == "actualizar_pedido":
+        # 1. Mutar el estado en la memoria RAM
         aplicar_actualizacion_pedido(pedido, tool_call.function.arguments)
+        
+        # 🔥 CAMBIO CLAVE: PERSISTIR INMEDIATAMENTE EL BORRADOR EN SQLite
+        try:
+            pedido_manager.guardar_borrador_pedido(numero, pedido)
+            print(f"💾 Estado de borrador sincronizado exitosamente en SQLite para {numero}")
+        except Exception as e:
+            print(f"⚠️ Error al persistir el borrador en la BD: {e}")
+
         return "ok"
 
     if tool_call.function.name == "mostrar_foto_producto":
@@ -701,6 +715,17 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
     pedido = sesion["pedido"]
     info_enviada = sesion["info_enviada"]
     pedido_id = sesion.get("pedido_id")
+
+    # ================================================================
+    # 🔥 CAMBIO CLAVE: LOGS DE CONTEXTO ANTES DE OPENAI
+    # ================================================================
+    print("\n" + "=" * 70)
+    print("===== CONTEXTO OPENAI =====")
+    print(f"Mensajes recuperados: {len(historial)}")
+    print(f"Pedido borrador: {json.dumps(pedido, ensure_ascii=False, default=str)}")
+    print(f"Historial enviado (últimos 5): {json.dumps(historial[-5:], ensure_ascii=False, default=str)}")
+    print(f"Mensaje nuevo: {texto_cliente}")
+    print("=" * 70)
 
     if imagen_base64:
         contenido_usuario = [
@@ -760,6 +785,16 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
 
         texto = mensaje.content or "Disculpa, ¿me repites tu mensaje? 🙂"
         historial.append({"role": "assistant", "content": texto})
+
+        # ================================================================
+        # 🔥 CAMBIO CLAVE: LOGS DESPUÉS DEL TOOL
+        # ================================================================
+        print("\n" + "=" * 70)
+        print("===== DESPUÉS DEL TOOL =====")
+        print(f"Campos modificados: {list(args.keys()) if mensaje.tool_calls else 'Ninguno'}")
+        print(f"Borrador actualizado: {json.dumps(pedido, ensure_ascii=False, default=str)}")
+        print(f"Persistencia SQLite: OK (guardado inmediato)")
+        print("=" * 70)
 
         detectado = detectar_info_enviada(texto)
         for clave, se_envio in detectado.items():

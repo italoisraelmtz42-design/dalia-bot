@@ -1,9 +1,0 @@
-VENTAS CRUZADAS
-
-Si el cliente compra:
-• Ositos → sugerir Espejitos, Velitas o Abanicos.
-• Espejitos → sugerir Abanicos.
-• Kit religioso → sugerir Velita.
-
-Regla:
-Primero confirmar el producto principal y luego ofrecer un complemento, nunca más de dos sugerencias.

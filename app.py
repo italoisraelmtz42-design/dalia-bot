@@ -24,11 +24,13 @@ import pedido_manager
 # ===========================
 # CONFIGURACIÓN
 # ===========================
+
 load_dotenv()
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Crea las tablas de SQLite si no existen
 try:
     crm.inicializar_base_datos()
     print("✅ Base de datos (SQLite) lista")
@@ -48,7 +50,7 @@ CARPETA = BASE / "conocimiento"
 CARPETA_IMAGENES = BASE / "imagenes"
 CARPETA_CATALOGO = BASE / "catalogo"
 CARPETA_NOTAS = BASE / "notas"
-CARPETA_NOTAS.mkdir(exist_ok=True)
+CARPETA_NOTAS.mkdir(exist_ok=True)  # Asegura que la carpeta exista
 
 MODELO = "gpt-4.1-mini"
 MAX_TURNOS_HISTORIAL = 20
@@ -58,7 +60,9 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://dalia-bot.onrender.com")
 # ===========================
 # CATÁLOGO DE FOTOS DE PRODUCTO
 # ===========================
+
 EXTENSIONES_IMAGEN_VALIDAS = {".jpg", ".jpeg", ".png", ".webp"}
+
 
 def cargar_catalogo_imagenes():
     catalogo = {}
@@ -83,11 +87,13 @@ def cargar_catalogo_imagenes():
     print("=" * 60 + "\n")
     return catalogo
 
+
 CATALOGO_IMAGENES = cargar_catalogo_imagenes()
 
 # ===========================
 # CATÁLOGO GENERAL EN PDF
 # ===========================
+
 def encontrar_catalogo_pdf():
     if not CARPETA_CATALOGO.exists():
         print(f"⚠️ No existe la carpeta {CARPETA_CATALOGO}, no habrá link de catálogo")
@@ -99,10 +105,12 @@ def encontrar_catalogo_pdf():
     print(f"✅ Catálogo PDF encontrado: {pdfs[0].name}")
     return pdfs[0].name
 
+
 NOMBRE_CATALOGO_PDF = encontrar_catalogo_pdf()
 URL_CATALOGO_PDF = (
     f"{PUBLIC_BASE_URL}/catalogo/{NOMBRE_CATALOGO_PDF}" if NOMBRE_CATALOGO_PDF else None
 )
+
 
 def url_imagen_producto(clave_producto):
     info = CATALOGO_IMAGENES.get(clave_producto)
@@ -110,10 +118,107 @@ def url_imagen_producto(clave_producto):
         return None
     return f"{PUBLIC_BASE_URL}/imagenes/{info['archivo']}"
 
+
 # ===========================
-# CARGAR BASE DE CONOCIMIENTO Y VARIABLES DE CONTEXTO
+# CARGAR BASE DE CONOCIMIENTO (RECURSIVO CON OS.WALK Y DIAGNÓSTICO)
 # ===========================
+
+def cargar_conocimiento():
+    knowledge = ""
+    
+    print("\n" + "=" * 60)
+    print("CARGANDO BASE DE CONOCIMIENTO...")
+    print("=" * 60)
+
+    # 1. Ruta absoluta y diagnóstico de la carpeta
+    ruta_absoluta = CARPETA.resolve()
+    print(f"Ruta absoluta de conocimiento: {ruta_absoluta}")
+    print(f"¿Existe?: {ruta_absoluta.exists()}")
+
+    # 2. Variables para conteo y listado
+    encontrados_txt = []
+    carpetas_encontradas = set()
+    archivos_encontrados = []
+
+    # 3. Recorrer recursivamente la carpeta con os.walk() para obtener estructura
+    if ruta_absoluta.exists():
+        for root, dirs, files in os.walk(str(ruta_absoluta)):
+            root_path = Path(root)
+            rel_root = root_path.relative_to(ruta_absoluta) if root_path != ruta_absoluta else Path('.')
+            # Guardamos la ruta de la carpeta relativa para listarla
+            if str(rel_root) != '.':
+                carpetas_encontradas.add(str(rel_root))
+            
+            for file in files:
+                if file.lower().endswith('.txt'):
+                    full_path = root_path / file
+                    encontrados_txt.append(full_path)
+                    archivos_encontrados.append(str(full_path.relative_to(ruta_absoluta)))
+
+        # 4. Imprimir listado de carpetas
+        print("\nListado de carpetas encontradas:")
+        if not carpetas_encontradas:
+            print("  (Solo la raíz)")
+        for carpeta in sorted(carpetas_encontradas):
+            print(f"  📁 {carpeta}")
+
+        # 5. Imprimir listado de archivos
+        print("\nListado de archivos encontrados:")
+        for archivo in sorted(archivos_encontrados):
+            print(f"  📄 {archivo}")
+
+        print(f"\nTOTAL TXT ENCONTRADOS: {len(encontrados_txt)}")
+
+        # 6. Si no encuentra nada, imprime la estructura completa del árbol y aborta
+        if len(encontrados_txt) == 0:
+            print("\n🟡 ADVERTENCIA: NO SE ENCONTRARON ARCHIVOS .TXT. ESTRUCTURA COMPLETA DEL DIRECTORIO:")
+            for root, dirs, files in os.walk(str(ruta_absoluta)):
+                nivel = root.replace(str(ruta_absoluta), '').count(os.sep)
+                indent = ' ' * (nivel * 2)
+                print(f"{indent}📁 {Path(root).name}/")
+                for file in files:
+                    print(f"{indent}   📄 {file}")
+            return ""  # No cargar nada si hay 0 archivos
+
+    else:
+        print(f"❌ ERROR: La carpeta '{ruta_absoluta}' NO EXISTE.")
+        return ""
+
+    # 7. Cargar recursivamente los archivos .txt encontrados (insensible a mayúsculas)
+    print("=" * 60)
+    for full_path in sorted(encontrados_txt):
+        rel_path = full_path.relative_to(ruta_absoluta)
+        try:
+            contenido = full_path.read_text(encoding="utf-8", errors="ignore")
+            bloque = f"""
+
+==================================================
+ARCHIVO: {rel_path}
+==================================================
+
+{contenido}
+
+==================================================
+FIN DEL ARCHIVO
+==================================================
+
+"""
+            knowledge += bloque
+            CONOCIMIENTO_POR_ARCHIVO[str(rel_path)] = bloque
+        except Exception as e:
+            print(f"❌ Error leyendo {rel_path}: {e}")
+
+    print("\n" + "=" * 60)
+    print(f"TOTAL TXT CARGADOS: {len(CONOCIMIENTO_POR_ARCHIVO)}")
+    print("TOTAL CARACTERES  :", len(knowledge))
+    print("=" * 60 + "\n")
+
+    return knowledge
+
+
 CONOCIMIENTO_POR_ARCHIVO = {}
+KNOWLEDGE = cargar_conocimiento()
+
 ARCHIVOS_CONOCIMIENTO_SIEMPRE = {
     "04_REGLAS_GENERALES.txt",
     "033_Reglas_Conversacion.txt",
@@ -123,59 +228,6 @@ ARCHIVOS_CONOCIMIENTO_SIEMPRE = {
     "050_Saludos_Humanos.txt",
 }
 
-def cargar_conocimiento():
-    global CONOCIMIENTO_POR_ARCHIVO
-    knowledge = ""
-    
-    print("\n" + "=" * 60)
-    print("CARGANDO BASE DE CONOCIMIENTO...")
-    print("=" * 60)
-
-    ruta_absoluta = CARPETA.resolve()
-    print(f"Ruta absoluta de conocimiento: {ruta_absoluta}")
-    print(f"¿Existe?: {ruta_absoluta.exists()}")
-
-    if not ruta_absoluta.exists():
-        print("❌ ERROR: La carpeta 'conocimiento' NO EXISTE.")
-        return ""
-
-    encontrados_txt = []
-    for root, dirs, files in os.walk(str(ruta_absoluta)):
-        for file in files:
-            if file.lower().endswith('.txt'):
-                full_path = Path(root) / file
-                encontrados_txt.append(full_path)
-
-    if not encontrados_txt:
-        print("⚠️ No se encontraron archivos .txt.")
-        return ""
-
-    print("=" * 60)
-    for full_path in sorted(encontrados_txt):
-        rel_path = full_path.relative_to(ruta_absoluta)
-        try:
-            contenido = full_path.read_text(encoding="utf-8", errors="ignore")
-            bloque = f"""
-==================================================
-ARCHIVO: {rel_path}
-==================================================
-{contenido}
-==================================================
-FIN DEL ARCHIVO
-==================================================
-"""
-            knowledge += bloque
-            CONOCIMIENTO_POR_ARCHIVO[str(rel_path)] = bloque
-        except Exception as e:
-            print(f"❌ Error leyendo {rel_path}: {e}")
-
-    print("\n" + "=" * 60)
-    print(f"TOTAL TXT ENCONTRADOS: {len(encontrados_txt)}")
-    print("TOTAL CARACTERES  :", len(knowledge))
-    print("=" * 60 + "\n")
-    return knowledge
-
-KNOWLEDGE = cargar_conocimiento()
 
 def seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=None, top_k=16):
     if not CONOCIMIENTO_POR_ARCHIVO:
@@ -209,229 +261,689 @@ def seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=None, t
         if nombre in CONOCIMIENTO_POR_ARCHIVO
     )
 
+
 # ===========================
-# SESIONES POR CLIENTE (CACHÉ LIGERA - SQLite es la fuente de verdad)
+# SESIONES POR CLIENTE
 # ===========================
+
 sesiones = {}
 sesiones_lock = threading.Lock()
 
+mensajes_procesados = set()
+orden_mensajes_procesados = []
+mensajes_procesados_lock = threading.Lock()
+MAX_MENSAJES_PROCESADOS = 2000
+
+
+def ya_fue_procesado(mensaje_id):
+    if not mensaje_id:
+        return False
+    with mensajes_procesados_lock:
+        if mensaje_id in mensajes_procesados:
+            return True
+        mensajes_procesados.add(mensaje_id)
+        orden_mensajes_procesados.append(mensaje_id)
+        if len(orden_mensajes_procesados) > MAX_MENSAJES_PROCESADOS:
+            mas_viejo = orden_mensajes_procesados.pop(0)
+            mensajes_procesados.discard(mas_viejo)
+        return False
+
+
+def verificar_firma_webhook(payload_bytes, firma_header):
+    if not WHATSAPP_APP_SECRET:
+        print("⚠️ WHATSAPP_APP_SECRET no configurado: el webhook NO está verificando su origen")
+        return True
+
+    if not firma_header or not firma_header.startswith("sha256="):
+        return False
+
+    firma_esperada = hmac.new(
+        WHATSAPP_APP_SECRET.encode("utf-8"), payload_bytes, hashlib.sha256
+    ).hexdigest()
+    firma_recibida = firma_header.split("sha256=", 1)[1]
+
+    return hmac.compare_digest(firma_esperada, firma_recibida)
+
+
+def pedido_vacio():
+    return {
+        "producto": None,
+        "cantidad": None,
+        "evento": None,
+        "fecha_evento": None,
+        "color_toalla": None,
+        "color_mono": None,
+        "color_velita": None,
+        "datos_tarjeta": None,
+        "tipo_entrega": None,
+        "direccion": None,
+        "anticipo_confirmado": None,
+        "municipio": None,
+        "tipo_jaboncito": None,
+        "color_jaboncito": None,
+        "nombre_bebe": None,
+        "tarjetita": None,
+        "notas": None,
+    }
+
+
+def info_enviada_vacia():
+    return {
+        "datos_pago": False,
+        "colores_disponibles": False,
+        "ubicacion_local": False,
+        "catalogo_pdf": False,
+    }
+
+
+# ==============================================================================
+# 🔴 CAMBIO CLAVE 1: HIDRATACIÓN DE SESIÓN DESDE BORRADOR
+# ==============================================================================
 def obtener_sesion(numero):
     with sesiones_lock:
         if numero not in sesiones:
-            mensajes_previos = pedido_manager.chat_cargar_memoria(numero, limite=MAX_TURNOS_HISTORIAL)
-            pedido_id = pedido_manager.obtener_pedido_activo(numero)
+            mensajes_previos = []
             pedido_previo = None
-            if pedido_id:
-                pedido_obj = pedido_manager.obtener_pedido(pedido_id)
-                pedido_previo = pedido_obj
-            else:
-                borrador = pedido_manager.cargar_borrador_pedido(numero)
-                if borrador:
-                    pedido_previo = borrador
-                    print(f"♻️ Borrador persistente cargado desde SQLite para {numero}")
-            if mensajes_previos or pedido_previo:
-                print(f"♻️ Sesión de {numero} hidratada desde SQLite ({len(mensajes_previos)} mensajes previos, pedido ID {pedido_id})")
+            pedido_id = None
+            try:
+                cliente = crm.cargar_cliente(numero)
+                mensajes_previos = crm.cargar_memoria(cliente, limite=MAX_TURNOS_HISTORIAL)
+                pedido_db = crm.cargar_pedido(cliente)
+                pedido_previo = crm.pedido_para_ram(pedido_db)
+                if pedido_db:
+                    pedido_id = pedido_db.id
+                
+                # Si no hay pedido oficial, intentamos cargar el BORRADOR persistente
+                if not pedido_previo or not any(pedido_previo.values()):
+                    borrador = pedido_manager.cargar_borrador_pedido(numero)
+                    if borrador:
+                        pedido_previo = borrador
+                        print(f"♻️ Borrador persistente cargado desde SQLite para {numero}")
+                
+                if mensajes_previos or (pedido_previo and any(pedido_previo.values())):
+                    print(f"♻️ Sesión de {numero} hidratada desde SQLite ({len(mensajes_previos)} mensajes previos, pedido ID {pedido_id})")
+            except Exception as e:
+                print(f"⚠️ No se pudo hidratar sesión de {numero} desde SQLite, arranca en blanco: {repr(e)}")
+
             sesiones[numero] = {
                 "messages": mensajes_previos,
-                "pedido": pedido_previo,
+                "pedido": pedido_previo or pedido_vacio(),
                 "pedido_id": pedido_id,
+                "info_enviada": info_enviada_vacia(),
+                "imagenes_enviadas": set(),
                 "lock": threading.Lock(),
             }
         return sesiones[numero]
 
-# ===========================
-# SYSTEM PROMPT Y TOOLS
-# ===========================
-def construir_system_prompt(estado_resumen, conocimiento=None):
+
+def resumen_info_enviada(info_enviada):
+    ya_enviados = [k for k in info_enviada if info_enviada[k]]
+    if not ya_enviados:
+        return "Nada de esto se ha enviado todavía."
+    etiquetas = {
+        "datos_pago": "Datos bancarios para el anticipo",
+        "colores_disponibles": "Lista de colores disponibles",
+        "ubicacion_local": "Ubicación del local (link de Maps)",
+        "catalogo_pdf": "Link del catálogo completo en PDF",
+    }
+    return "\n".join(f"- {etiquetas[k]}: YA SE ENVIÓ, no lo repitas" for k in ya_enviados)
+
+
+def detectar_info_enviada(texto_respuesta):
+    texto = texto_respuesta.lower()
+    detectado = {
+        "datos_pago": ("5579 0701 5291 2153" in texto_respuesta) or ("clabe" in texto),
+        "colores_disponibles": ("turquesa" in texto and "rosa palo" in texto),
+        "ubicacion_local": "maps.app.goo.gl" in texto,
+        "catalogo_pdf": bool(URL_CATALOGO_PDF) and (URL_CATALOGO_PDF.lower() in texto),
+    }
+    return detectado
+
+
+def seccion_fotos_producto(catalogo_imagenes):
+    if not catalogo_imagenes:
+        return ""
+
+    lista = "\n".join(
+        f"- \"{clave}\" -> {info['nombre_mostrar']}"
+        for clave, info in catalogo_imagenes.items()
+    )
+    return f"""
+Cuando el cliente muestre interés claro en ver cómo se ve un producto
+específico (pregunta "cómo se ve", "tienes foto", muestra intención de
+comprar ese producto, o es la primera vez que pregunta por ese producto en
+la conversación), llama a la función mostrar_foto_producto con la clave del
+producto correspondiente. No la llames en cada mensaje ni para productos que
+el cliente no mencionó. Si ya le mandaste la foto de ese producto antes en
+esta conversación, no la vuelvas a mandar salvo que el cliente la pida de
+nuevo explícitamente.
+
+FOTOS DE PRODUCTO DISPONIBLES (clave -> producto):
+{lista}
+
+Solo puedes mostrar fotos de estas claves. Si el cliente pregunta por un
+producto que no está en esta lista, no llames la función; simplemente
+indícale que por ahora no tienes foto de ese producto.
+"""
+
+
+def sumar_dias_habiles(fecha_inicio, dias_habiles):
+    fecha = fecha_inicio
+    dias_sumados = 0
+    while dias_sumados < dias_habiles:
+        fecha += timedelta(days=1)
+        if fecha.weekday() != 6:
+            dias_sumados += 1
+    return fecha
+
+
+def seccion_catalogo_pdf():
+    if not URL_CATALOGO_PDF:
+        return ""
+
+    return f"""
+Si el cliente pide ver el CATÁLOGO COMPLETO, todos los productos, o el
+catálogo general (no un producto específico), comparte este link donde
+puede verlo completo en PDF:
+
+{URL_CATALOGO_PDF}
+
+No mandes el catálogo completo si el cliente solo pregunta por UN producto
+en específico (para eso usa mostrar_foto_producto). No repitas este link si
+ya se lo compartiste antes en esta conversación, salvo que lo pida de nuevo
+explícitamente.
+"""
+
+
+def construir_system_prompt(pedido_id, info_enviada, conocimiento=None):
     if conocimiento is None:
         conocimiento = KNOWLEDGE
+
+    resumen = pedido_manager.generar_resumen(pedido_id) if pedido_id else "Sin pedido activo."
+
     ahora = datetime.now(ZONA_HORARIA_NEGOCIO)
     fecha = ahora.strftime("%d/%m/%Y")
     hora = ahora.strftime("%H:%M")
+
     dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     dia_semana = dias[ahora.weekday()]
+
+    fecha_minima = sumar_dias_habiles(ahora.date(), 4)
+    fecha_maxima = sumar_dias_habiles(ahora.date(), 6)
+    dia_semana_minima = dias[fecha_minima.weekday()]
+
     return f"""
 Eres DALIA, asesora de ventas de Recuerditos Dalia.
 
 Hoy es {dia_semana} {fecha}.
 La hora actual es {hora} (hora de Monterrey, México).
 
+Toda la información oficial está en la Base de Conocimiento.
+
 REGLAS:
 - Usa únicamente la Base de Conocimiento.
 - Nunca inventes datos.
+- Nunca inventes productos, precios o políticas.
 - Si algo no existe en la Base de Conocimiento, indícalo.
-- Responde de forma amable y natural.
+- Responde como una asesora humana por WhatsApp.
+- Sé amable, natural y orientada a cerrar ventas.
+- Responde PRIMERO y de forma directa a lo que el cliente pidió en su último
+  mensaje. No antepongas información que el cliente no pidió (ej. no repitas
+  colores si el cliente está hablando de forma de entrega).
+- Si el cliente dice que ya le diste cierta información antes ("ya me la
+  pasaste", "otra vez?"), discúlpate en una sola frase breve y NO la repitas.
 
-ESTADO ACTUAL DEL PEDIDO (desde base de datos):
-{estado_resumen}
+REGLAS DE FECHAS Y PEDIDOS URGENTES (usa SIEMPRE la fecha de hoy de arriba,
+{dia_semana} {fecha}, para todo cálculo; nunca calcules fechas por tu cuenta):
+
+- El tiempo normal de elaboración de un pedido es de 4 a 6 días hábiles.
+- La fecha de entrega MÁS PRÓXIMA posible para un pedido NORMAL (no urgente)
+  es el {dia_semana_minima} {fecha_minima.strftime('%d/%m/%Y')}. Un pedido
+  normal podría tardar hasta el {fecha_maxima.strftime('%d/%m/%Y')}.
+- Si el cliente pide una fecha de entrega ANTES de {fecha_minima.strftime('%d/%m/%Y')},
+  eso es un PEDIDO URGENTE. Para pedidos urgentes aplican estas restricciones:
+  - Solo se puede entregar EN EL LOCAL (nunca a domicilio ni en puntos de entrega).
+  - No se aceptan pedidos urgentes los días sábado.
+  - No se aceptan pedidos urgentes para entregarse en domingo (no abrimos domingos).
+  - Avisa al cliente de estas restricciones ANTES de confirmar el pedido, de
+    forma amable, y no confirmes un pedido urgente con entrega a domicilio o
+    en punto de entrega bajo ninguna circunstancia.
+- Nunca confirmes una fecha de entrega sin haber verificado si es un pedido
+  normal o urgente según las reglas de arriba.
+
+ESTADO ACTUAL DEL PEDIDO DE ESTE CLIENTE (desde base de datos):
+
+{resumen}
+
+No vuelvas a preguntar datos ya confirmados.
+Pregunta únicamente los datos faltantes.
+
+Cada vez que el cliente confirme o mencione un dato nuevo del pedido
+(producto, cantidad, evento, fecha, colores, tipo de entrega o dirección),
+llama a la función actualizar_pedido con los campos correspondientes para
+guardarlo. Puedes llamarla varias veces en la conversación conforme se vayan
+confirmando más datos. No llames la función con datos que el cliente no ha
+confirmado todavía.
+
+{seccion_fotos_producto(catalogo_imagenes=CATALOGO_IMAGENES)}
+
+{seccion_catalogo_pdf()}
+
+RECEPCIÓN DE IMÁGENES DEL CLIENTE (Vision):
+Cuando el cliente te mande una imagen, clasifícala primero en una de estas
+categorías y actúa según corresponda:
+
+1. COMPROBANTE DE PAGO (pantalla de banco, ticket, captura de transferencia
+   o depósito): confirma amablemente que lo recibiste, menciona el monto
+   si lo puedes leer con claridad, agradece, y llama a actualizar_pedido
+   con anticipo_confirmado=true. Avísale que en breve le confirman su
+   pedido. Si el monto no se alcanza a leer bien, dile que no se ve claro
+   y pide que lo reenvíe o confirme el monto por texto — no inventes un
+   monto que no puedas leer con seguridad.
+2. REFERENCIA DE COLOR (foto de un color/tela/objeto que el cliente manda
+   para pedir "quiero este color"): compáralo con los colores disponibles
+   en la Base de Conocimiento y dile cuál de los tuyos se parece más. No
+   asumas un color exacto que no tengas.
+3. EJEMPLO O REFERENCIA DE PRODUCTO (foto de un recuerdito de otro lado
+   que el cliente manda como inspiración): coméntale con naturalidad qué
+   tan parecido es a lo que ustedes manejan, sin prometer una réplica
+   exacta si no la tienen.
+4. OTRA IMAGEN (no encaja en ninguna de las anteriores): coméntalo con
+   naturalidad y sigue la conversación normal, sin asumir que es un pago.
+
+INFORMACIÓN QUE YA SE LE ENVIÓ A ESTE CLIENTE EN MENSAJES ANTERIORES
+(no la repitas salvo que el cliente la pida explícitamente de nuevo):
+
+{resumen_info_enviada(info_enviada)}
 
 BASE DE CONOCIMIENTO:
+
 {conocimiento}
+
+===========================================================
+🚨 REGLA DE SEGURIDAD Y CIERRE AUTOMÁTICO (LEE ESTO CON ATENCIÓN):
+===========================================================
+Cuando el cliente CONFIRME explícitamente su pedido (diciendo "sí", "confirmo", "está bien", etc.) 
+o cuando ENVÍE UN COMPROBANTE DE PAGO (imagen de transferencia o depósito),
+DEBES llamar INMEDIATAMENTE a la función actualizar_pedido con todos los datos confirmados 
+(anticipo_confirmado=true, producto, cantidad, colores, fecha, entrega, etc.) para guardar 
+el pedido en la base de datos. No dejes el pedido en la RAM. Si el cliente ya confirmó todo,
+la llamada a actualizar_pedido debe ejecutarse SIN que el cliente tenga que pedírtelo de nuevo.
+
+El cliente NO debe saber que estás llamando a una herramienta. Solo actúa con normalidad.
+===========================================================
 """
+
+
+# ===========================
+# HERRAMIENTA (function calling)
+# ===========================
 
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "actualizar_pedido",
-            "description": "Actualiza el borrador del pedido. Si se incluye anticipo_confirmado=true, crea el pedido oficial.",
+            "description": (
+                "Guarda o actualiza los datos del pedido del cliente que ya "
+                "quedaron confirmados en la conversación. Llama esta función "
+                "cada vez que el cliente confirme un dato nuevo. Solo incluye "
+                "los campos que el cliente confirmó en este mensaje o que "
+                "cambiaron; no hace falta mandar todos los campos cada vez."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "producto": {"type": "string"},
-                    "cantidad": {"type": "integer"},
-                    "evento": {"type": "string"},
-                    "fecha_evento": {"type": "string"},
+                    "producto": {"type": "string", "description": "Producto pedido, ej. 'ositos con jaboncito'"},
+                    "cantidad": {"type": "integer", "description": "Cantidad de piezas pedidas"},
+                    "evento": {"type": "string", "description": "Tipo de evento, ej. 'baby shower', 'XV años'"},
+                    "fecha_evento": {"type": "string", "description": "Fecha o día de entrega acordado"},
                     "color_toalla": {"type": "string"},
-                    "color_moño": {"type": "string"},
-                    "tipo_entrega": {"type": "string", "enum": ["local", "domicilio"]},
-                    "direccion": {"type": "string"},
-                    "municipio": {"type": "string"},
-                    "anticipo_confirmado": {"type": "boolean"},
-                    "nombre_bebe": {"type": "string"},
-                    "tarjetita": {"type": "string"},
-                    "notas": {"type": "string"},
+                    "color_mono": {"type": "string"},
+                    "color_velita": {"type": "string"},
+                    "tipo_entrega": {
+                        "type": "string",
+                        "description": "Uno de: 'local', 'punto_de_entrega', 'domicilio'",
+                    },
+                    "direccion": {"type": "string", "description": "Dirección o municipio para envío a domicilio"},
+                    "anticipo_confirmado": {
+                        "type": "boolean",
+                        "description": (
+                            "Márcalo como true cuando el cliente mande una imagen que sea "
+                            "claramente un comprobante de pago o transferencia del anticipo."
+                        ),
+                    },
+                    "municipio": {"type": "string", "description": "Municipio para envío a domicilio"},
+                    "tipo_jaboncito": {"type": "string", "description": "Tipo de jaboncito (ej. 'lavanda', 'vainilla')"},
+                    "color_jaboncito": {"type": "string", "description": "Color del jaboncito"},
+                    "nombre_bebe": {"type": "string", "description": "Nombre del bebé para personalizar"},
+                    "tarjetita": {"type": "string", "description": "Texto o diseño de la tarjetita"},
+                    "notas": {"type": "string", "description": "Notas adicionales del cliente"},
                 },
             },
         },
     },
 ]
+
 if CATALOGO_IMAGENES:
     TOOLS.append({
         "type": "function",
         "function": {
             "name": "mostrar_foto_producto",
-            "description": "Envía una foto de producto.",
+            "description": (
+                "Manda por WhatsApp la foto de un producto del catálogo. "
+                "Úsala cuando el cliente muestre interés claro en ver un "
+                "producto específico. No la llames repetidamente para el "
+                "mismo producto en la misma conversación."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {"producto": {"type": "string", "enum": list(CATALOGO_IMAGENES.keys())}},
-                "required": ["producto"]
-            }
-        }
+                "properties": {
+                    "producto": {
+                        "type": "string",
+                        "enum": list(CATALOGO_IMAGENES.keys()),
+                        "description": "Clave del producto del que se debe mandar la foto",
+                    },
+                },
+                "required": ["producto"],
+            },
+        },
     })
 
+
 # ===========================
-# ENVIAR MENSAJES
+# LLAMADA A OPENAI
 # ===========================
-def enviar_whatsapp(numero, texto):
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto}}
+
+def aplicar_actualizacion_pedido(pedido, argumentos_json):
     try:
-        r = requests.post(GRAPH_URL, headers=headers, json=payload, timeout=15)
-        if r.status_code != 200:
-            print(f"⚠️ Error enviando WhatsApp: {r.text}")
+        datos = json.loads(argumentos_json) if argumentos_json else {}
+    except (json.JSONDecodeError, TypeError):
+        print("⚠️ No se pudo parsear argumentos de actualizar_pedido:", argumentos_json)
+        return
+    for campo, valor in datos.items():
+        if campo in pedido and valor not in (None, ""):
+            pedido[campo] = valor
+    print("📝 Pedido actualizado en RAM:", pedido)
+
+
+def ejecutar_tool_call(tool_call, sesion, numero, pedido):
+    if tool_call.function.name == "actualizar_pedido":
+        aplicar_actualizacion_pedido(pedido, tool_call.function.arguments)
+        return "ok"
+
+    if tool_call.function.name == "mostrar_foto_producto":
+        try:
+            args = json.loads(tool_call.function.arguments or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        clave = args.get("producto")
+        imagenes_enviadas = sesion["imagenes_enviadas"]
+
+        if clave in imagenes_enviadas:
+            return "ya se le mandó esta foto antes en la conversación, no la repitas"
+
+        url_imagen = url_imagen_producto(clave)
+        if not url_imagen:
+            return f"no hay foto disponible para '{clave}', no ofrezcas una foto de esto"
+
+        nombre_mostrar = CATALOGO_IMAGENES[clave]["nombre_mostrar"]
+        enviar_whatsapp_imagen(numero, url_imagen, caption=nombre_mostrar)
+        imagenes_enviadas.add(clave)
+        return "imagen enviada correctamente"
+
+    return "función desconocida"
+
+
+def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
+    sesion = obtener_sesion(numero)
+    historial = sesion["messages"]
+    pedido = sesion["pedido"]
+    info_enviada = sesion["info_enviada"]
+    pedido_id = sesion.get("pedido_id")
+
+    if imagen_base64:
+        contenido_usuario = [
+            {"type": "text", "text": texto_cliente or "(El cliente mandó una imagen sin texto)"},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{imagen_mime};base64,{imagen_base64}"},
+            },
+        ]
+    else:
+        contenido_usuario = texto_cliente
+
+    historial.append({"role": "user", "content": contenido_usuario})
+
+    conocimiento_relevante = seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=historial)
+
+    system_prompt = construir_system_prompt(pedido_id, info_enviada, conocimiento=conocimiento_relevante)
+    mensajes_completos = [{"role": "system", "content": system_prompt}] + historial
+
+    if len(mensajes_completos) > MAX_TURNOS_HISTORIAL + 1:
+        mensajes_completos = [mensajes_completos[0]] + mensajes_completos[-MAX_TURNOS_HISTORIAL:]
+        sesion["messages"] = mensajes_completos[1:]
+        historial = sesion["messages"]
+
+    MAX_ITERACIONES_HERRAMIENTAS = 4
+    for _ in range(MAX_ITERACIONES_HERRAMIENTAS):
+        r = client.chat.completions.create(
+            model=MODELO,
+            messages=mensajes_completos,
+            tools=TOOLS,
+            temperature=0.4,
+            top_p=0.9,
+            max_tokens=600,
+        )
+
+        choice = r.choices[0]
+        mensaje = choice.message
+
+        if choice.finish_reason == "length":
+            print("⚠️ Respuesta cortada por max_tokens, considera subirlo más")
+
+        if mensaje.tool_calls:
+            mensajes_completos.append(mensaje.model_dump(exclude_none=True))
+
+            for tool_call in mensaje.tool_calls:
+                resultado = ejecutar_tool_call(tool_call, sesion, numero, pedido)
+                mensajes_completos.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": resultado,
+                })
+
+            mensajes_completos[0]["content"] = construir_system_prompt(
+                pedido_id, info_enviada, conocimiento=conocimiento_relevante
+            )
+            continue
+
+        texto = mensaje.content or "Disculpa, ¿me repites tu mensaje? 🙂"
+        historial.append({"role": "assistant", "content": texto})
+
+        detectado = detectar_info_enviada(texto)
+        for clave, se_envio in detectado.items():
+            if se_envio:
+                info_enviada[clave] = True
+
+        try:
+            uso = getattr(r, "usage", None)
+            if uso is not None:
+                crm.registrar_uso_openai(
+                    numero, MODELO,
+                    getattr(uso, "prompt_tokens", None),
+                    getattr(uso, "completion_tokens", None),
+                )
+        except Exception as e:
+            print("⚠️ No se pudo registrar uso de OpenAI:", repr(e))
+
+        return texto
+
+    texto = "Disculpa, dame un segundo y te confirmo 🙂"
+    historial.append({"role": "assistant", "content": texto})
+    return texto
+
+
+# ===========================
+# ENVIAR MENSAJE POR WHATSAPP
+# ===========================
+
+def enviar_whatsapp(numero, texto):
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": numero,
+        "type": "text",
+        "text": {"body": texto},
+    }
+    try:
+        r = requests.post(GRAPH_URL, headers=headers, json=data, timeout=15)
+        print("=" * 60)
+        print("STATUS:", r.status_code)
+        print("BODY:")
+        print(r.text)
+        print("=" * 60)
         return r
-    except Exception as e:
-        print(f"⚠️ Excepción enviando WhatsApp: {e}")
+    except requests.RequestException as e:
+        print("⚠️ Excepción enviando WhatsApp:", e)
         return None
 
+
 def enviar_whatsapp_imagen(numero, image_url, caption=""):
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp", "to": numero, "type": "image", "image": {"link": image_url, "caption": caption}}
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": numero,
+        "type": "image",
+        "image": {"link": image_url, "caption": caption},
+    }
     try:
-        r = requests.post(GRAPH_URL, headers=headers, json=payload, timeout=15)
+        r = requests.post(GRAPH_URL, headers=headers, json=data, timeout=15)
         if r.status_code >= 400:
-            print(f"⚠️ Error enviando imagen: {r.text}")
+            print("⚠️ Error enviando imagen por WhatsApp:", r.status_code, r.text)
+        else:
+            print(f"📤 Imagen enviada a {numero}: {image_url}")
         return r
-    except Exception as e:
-        print(f"⚠️ Excepción enviando imagen: {e}")
+    except requests.RequestException as e:
+        print("⚠️ Excepción enviando imagen por WhatsApp:", e)
         return None
+
+
+def enviar_whatsapp_documento(numero, url_documento, nombre_archivo, caption=""):
+    """
+    Envía un documento (PDF) por WhatsApp.
+    Esta función se usa desde nota_generator.py para enviar la nota de pedido.
+    """
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": numero,
+        "type": "document",
+        "document": {
+            "link": url_documento,
+            "caption": caption,
+            "filename": nombre_archivo,
+        },
+    }
+    try:
+        r = requests.post(GRAPH_URL, headers=headers, json=data, timeout=15)
+        if r.status_code >= 400:
+            print("⚠️ Error enviando documento por WhatsApp:", r.status_code, r.text)
+        else:
+            print(f"📄 Documento enviado a {numero}: {nombre_archivo}")
+        return r
+    except requests.RequestException as e:
+        print("⚠️ Excepción enviando documento:", e)
+        return None
+
 
 def descargar_imagen_whatsapp(media_id):
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
     try:
         r = requests.get(f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}", headers=headers, timeout=15)
         if r.status_code >= 400:
-            print(f"⚠️ Error obteniendo URL del medio: {r.text}")
+            print("⚠️ Error obteniendo URL del medio:", r.status_code, r.text)
             return None, None
+
         info = r.json()
         url_medio = info.get("url")
         mime_type = info.get("mime_type", "image/jpeg")
         if not url_medio:
-            print("⚠️ La respuesta de Meta no trajo URL del medio.")
+            print("⚠️ La respuesta de Meta no trajo URL del medio:", info)
             return None, None
+
         r2 = requests.get(url_medio, headers=headers, timeout=20)
         if r2.status_code >= 400:
-            print(f"⚠️ Error descargando el archivo del medio: {r2.status_code}")
+            print("⚠️ Error descargando el archivo del medio:", r2.status_code)
             return None, None
+
         return r2.content, mime_type
-    except Exception as e:
-        print(f"⚠️ Excepción descargando imagen: {e}")
+    except requests.RequestException as e:
+        print("⚠️ Excepción descargando imagen de WhatsApp:", e)
         return None, None
 
-# ===========================
-# PREGUNTAR A OPENAI
-# ===========================
-def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
-    sesion = obtener_sesion(numero)
-    historial = sesion["messages"]
-    pedido_cache = sesion["pedido"]
-    pedido_id = sesion["pedido_id"]
-
-    # Construir estado del pedido
-    estado_resumen = "Sin pedido activo."
-    if pedido_id:
-        pedido_db = pedido_manager.obtener_pedido(pedido_id)
-        if pedido_db:
-            estado_resumen = f"Pedido oficial: Folio {pedido_db.folio}, {pedido_db.estado}"
-    elif pedido_cache:
-        estado_resumen = f"Borrador actual: {json.dumps(pedido_cache, ensure_ascii=False)}"
-
-    system_prompt = construir_system_prompt(estado_resumen)
-    mensajes = [{"role": "system", "content": system_prompt}] + historial
-
-    if imagen_base64:
-        contenido_usuario = [
-            {"type": "text", "text": texto_cliente or "(El cliente mandó una imagen)"},
-            {"type": "image_url", "image_url": {"url": f"data:{imagen_mime};base64,{imagen_base64}"}}
-        ]
-    else:
-        contenido_usuario = texto_cliente
-    mensajes.append({"role": "user", "content": contenido_usuario})
-
-    response = client.chat.completions.create(
-        model=MODELO,
-        messages=mensajes,
-        tools=TOOLS,
-        temperature=0.4,
-        top_p=0.9,
-        max_tokens=600
-    )
-
-    choice = response.choices[0]
-    mensaje = choice.message
-
-    # Procesar herramientas
-    if mensaje.tool_calls:
-        for tool_call in mensaje.tool_calls:
-            args = json.loads(tool_call.function.arguments)
-            if tool_call.function.name == "actualizar_pedido":
-                # 🔥 Aplicar los cambios al caché de la sesión
-                if not pedido_cache or isinstance(pedido_cache, dict):
-                    if not pedido_cache:
-                        pedido_cache = {}
-                    pedido_cache.update({k: v for k, v in args.items() if v is not None})
-                else:
-                    # Si es PedidoData, lo convertimos a dict y actualizamos
-                    pedido_cache = {k: v for k, v in vars(pedido_cache).items() if v is not None}
-                    pedido_cache.update({k: v for k, v in args.items() if v is not None})
-                sesion["pedido"] = pedido_cache
-            elif tool_call.function.name == "mostrar_foto_producto":
-                clave = args.get("producto")
-                url = url_imagen_producto(clave)
-                if url:
-                    enviar_whatsapp_imagen(numero, url, caption=CATALOGO_IMAGENES[clave]["nombre_mostrar"])
-        respuesta = mensaje.content or "He actualizado tu pedido."
-    else:
-        respuesta = mensaje.content or "Disculpa, ¿me repites?"
-
-    # Guardar la respuesta del bot en SQLite
-    pedido_manager.chat_guardar_mensaje(numero, respuesta, "bot")
-    return respuesta
 
 # ===========================
-# PROCESAMIENTO DE MENSAJES
+# SERVIR ARCHIVOS ESTÁTICOS
 # ===========================
+
+@app.route("/imagenes/<path:nombre_archivo>")
+def servir_imagen_producto(nombre_archivo):
+    return send_from_directory(CARPETA_IMAGENES, nombre_archivo)
+
+
+@app.route("/catalogo/<path:nombre_archivo>")
+def servir_catalogo_pdf(nombre_archivo):
+    return send_from_directory(CARPETA_CATALOGO, nombre_archivo)
+
+
+@app.route("/notas/<path:nombre_archivo>")
+def servir_nota_pdf(nombre_archivo):
+    """Sirve las notas de pedido generadas en PDF."""
+    return send_from_directory(CARPETA_NOTAS, nombre_archivo)
+
+
+# ===========================
+# WEBHOOK: VERIFICACIÓN (Meta)
+# ===========================
+
+@app.route("/webhook", methods=["GET"])
+def verify_webhook():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return challenge, 200
+    return "Error, verificación fallida", 403
+
+
+# ===========================
+# WEBHOOK: MENSAJES ENTRANTES
+# ===========================
+
+def registrar_entrada_cliente(numero, texto_para_guardar, tipo="texto"):
+    cliente = crm.cargar_cliente(numero)
+    crm.guardar_mensaje_cliente(cliente, texto_para_guardar, tipo=tipo)
+    return cliente
+
+
+def procesar_mensaje_no_soportado(numero, tipo):
+    cliente = registrar_entrada_cliente(numero, f"[mensaje no soportado: {tipo}]", tipo=tipo)
+    respuesta = "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?"
+    crm.guardar_respuesta(cliente, respuesta)
+    enviar_whatsapp(numero, respuesta)
+
+
 def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
     print("=" * 70)
     print(f"🚀 Procesando mensaje de {numero}")
@@ -439,76 +951,81 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
 
     imagen_base64 = None
     imagen_mime = None
+    tipo_para_crm = "texto"
     if media_id_imagen:
         print("🖼️ El cliente mandó una imagen (Vision), descargándola...")
         contenido, mime = descargar_imagen_whatsapp(media_id_imagen)
         if contenido:
             imagen_base64 = base64.b64encode(contenido).decode("utf-8")
             imagen_mime = mime
+            tipo_para_crm = "imagen"
             print(f"✅ Imagen descargada ({len(contenido)} bytes, {mime})")
         else:
-            print("❌ No se pudo descargar la imagen del cliente, se sigue solo con el texto")
+            print("❌ No se pudo descargar la imagen del cliente, se sigue solo con el texto (si había)")
 
-    # Guardar mensaje del cliente en SQLite (historial)
-    pedido_manager.chat_guardar_mensaje(numero, texto_cliente or "(imagen sin texto)", "usuario")
+    texto_para_guardar = texto_cliente or ("(imagen sin texto)" if media_id_imagen else "")
+    cliente = registrar_entrada_cliente(numero, texto_para_guardar, tipo=tipo_para_crm)
 
-    # Consultar a OpenAI
-    try:
-        print("🧠 Consultando OpenAI...")
-        respuesta = preguntar_ia(numero, texto_cliente, imagen_base64=imagen_base64, imagen_mime=imagen_mime)
-        print("✅ Respuesta generada")
-        print(respuesta[:300])
-    except Exception as e:
-        print(f"❌ Error llamando a OpenAI: {e}")
-        respuesta = "Disculpa, tuve un problema técnico. ¿Me puedes repetir tu mensaje? 🙂"
+    sesion = obtener_sesion(numero)
+    with sesion["lock"]:
+        try:
+            print("🧠 Consultando OpenAI...")
+            respuesta = preguntar_ia(numero, texto_cliente, imagen_base64=imagen_base64, imagen_mime=imagen_mime)
+            print("✅ Respuesta generada")
+            print(respuesta[:300])
+        except Exception as e:
+            print("❌ Error llamando a OpenAI:", repr(e))
+            respuesta = "Disculpa, tuve un problema técnico. ¿Me puedes repetir tu mensaje? 🙂"
 
-    # Sincronizar con SQLite (el borrador o pedido se actualizará en crm.sincronizar_pedido)
-    try:
-        # Extraemos cliente y sesión
-        cliente = crm.cargar_cliente(numero)
-        datos_sesion = sesiones.get(numero, {}).get("pedido", {})
-        crm.sincronizar_pedido(cliente, datos_sesion)
-    except Exception as e:
-        print(f"⚠️ Error guardando en CRM (el bot sigue funcionando con RAM): {e}")
+        try:
+            crm.guardar_respuesta(cliente, respuesta)
+            
+            # ==========================================================================
+            # 🔴 CAMBIO CLAVE 2: GUARDAR BORRADOR EN CADA MENSAJE (ANTES DE SINCRONIZAR)
+            # ==========================================================================
+            pedido_manager.guardar_borrador_pedido(numero, sesion["pedido"])
+            
+            crm.sincronizar_pedido(cliente, sesion["pedido"])
+            pedido_db = crm.cargar_pedido(cliente)
+            sesion["pedido_id"] = pedido_db.id if pedido_db else None
+        except Exception as e:
+            print("⚠️ Error guardando en CRM (el bot sigue funcionando con RAM):", repr(e))
 
-    # Enviar respuesta
-    print("📤 Enviando respuesta a WhatsApp...")
-    enviar_whatsapp(numero, respuesta)
+        time.sleep(random.uniform(2, 4))
+        print("📤 Enviando respuesta a WhatsApp...")
+        r = enviar_whatsapp(numero, respuesta)
+        if r is not None:
+            print(f"📨 WhatsApp respondió: {r.status_code}")
+        else:
+            print("❌ enviar_whatsapp devolvió None")
+
     print("🏁 Fin procesamiento")
     print("=" * 70)
 
-# ===========================
-# WEBHOOKS
-# ===========================
-@app.route("/webhook", methods=["GET"])
-def verify_webhook():
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        return challenge, 200
-    return "Error, verificación fallida", 403
 
 @app.route("/webhook", methods=["POST"])
 def handle_message():
     firma = request.headers.get("X-Hub-Signature-256", "")
     if not verificar_firma_webhook(request.get_data(), firma):
-        print("🚫 Webhook rechazado: la firma no coincide")
+        print("🚫 Webhook rechazado: la firma no coincide (el request no parece venir de Meta)")
         return jsonify({"status": "firma inválida"}), 403
 
     data = request.get_json(silent=True) or {}
+
     try:
         entry = data["entry"][0]
         cambio = entry["changes"][0]
         valor = cambio["value"]
         mensajes = valor.get("messages")
+
         if not mensajes:
             return jsonify({"status": "sin mensajes nuevos"}), 200
-        
+
         mensaje = mensajes[0]
         numero = mensaje["from"]
         tipo = mensaje.get("type")
         mensaje_id = mensaje.get("id")
+
         if ya_fue_procesado(mensaje_id):
             print(f"🔁 Mensaje duplicado ignorado: {mensaje_id}")
             return jsonify({"status": "duplicado ignorado"}), 200
@@ -516,42 +1033,37 @@ def handle_message():
         if tipo == "image":
             media_id = mensaje["image"]["id"]
             caption = mensaje["image"].get("caption", "")
-            threading.Thread(target=procesar_mensaje_en_fondo, args=(numero, caption), kwargs={"media_id_imagen": media_id}, daemon=True).start()
+            threading.Thread(
+                target=procesar_mensaje_en_fondo,
+                args=(numero, caption),
+                kwargs={"media_id_imagen": media_id},
+                daemon=True,
+            ).start()
             return jsonify({"status": "ok"}), 200
 
         if tipo != "text":
-            threading.Thread(target=procesar_mensaje_no_soportado, args=(numero, tipo), daemon=True).start()
-            return jsonify({"status": "ok"}), 200
+            threading.Thread(
+                target=procesar_mensaje_no_soportado,
+                args=(numero, tipo),
+                daemon=True,
+            ).start()
+            return jsonify({"status": "tipo de mensaje no soportado"}), 200
 
         texto_cliente = mensaje["text"]["body"]
-        threading.Thread(target=procesar_mensaje_en_fondo, args=(numero, texto_cliente), daemon=True).start()
-    except Exception as e:
+
+        threading.Thread(
+            target=procesar_mensaje_en_fondo,
+            args=(numero, texto_cliente),
+            daemon=True,
+        ).start()
+
+    except (KeyError, IndexError, TypeError) as e:
         print("Evento sin mensaje de texto reconocible:", e)
+
     return jsonify({"status": "ok"}), 200
 
-def verificar_firma_webhook(payload_bytes, firma_header):
-    if not WHATSAPP_APP_SECRET:
-        print("⚠️ WHATSAPP_APP_SECRET no configurado: el webhook NO está verificando su origen")
-        return True
-    if not firma_header or not firma_header.startswith("sha256="):
-        return False
-    firma_esperada = hmac.new(WHATSAPP_APP_SECRET.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
-    firma_recibida = firma_header.split("sha256=", 1)[1]
-    return hmac.compare_digest(firma_esperada, firma_recibida)
 
-def ya_fue_procesado(mensaje_id):
-    # Deduplicación básica de mensajes
-    return False
-
-def procesar_mensaje_no_soportado(numero, tipo):
-    respuesta = "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?"
-    pedido_manager.chat_guardar_mensaje(numero, f"[mensaje no soportado: {tipo}]", "usuario")
-    pedido_manager.chat_guardar_mensaje(numero, respuesta, "bot")
-    enviar_whatsapp(numero, respuesta)
-
-# ===========================
-# ARRANQUE
-# ===========================
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
+    puerto = int(os.getenv("PORT", 5000))
+    app.run(port=puerto, debug=debug_mode)

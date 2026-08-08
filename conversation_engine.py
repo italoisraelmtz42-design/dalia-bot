@@ -1,91 +1,82 @@
 import os
-import glob
+import logging
 from openai import OpenAI
+
+# Configuración de logging para que los mensajes aparezcan en los logs de Render
+logger = logging.getLogger(__name__)
 
 def encontrar_carpeta_conocimiento() -> str:
     """
-    Busca la carpeta 'conocimiento' en la raíz del proyecto.
+    Busca la carpeta 'conocimiento' en las ubicaciones probables.
     """
-    # En Render, el código está en /opt/render/project/src/
-    # Como 'conocimiento' está en el mismo nivel que app.py, está en src/
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    ruta_candidata = os.path.join(base_path, 'conocimiento')
+    base_path = os.path.dirname(os.path.abspath(__file__))  # src/
+    rutas_candidatas = [
+        os.path.join(base_path, 'conocimiento'),
+        os.path.join(os.path.dirname(base_path), 'conocimiento'),  # raíz del proyecto
+        os.getcwd(),
+    ]
     
-    if os.path.isdir(ruta_candidata):
-        return ruta_candidata
+    for ruta in rutas_candidatas:
+        if os.path.isdir(ruta):
+            logger.info(f"✅ Carpeta 'conocimiento' encontrada en: {ruta}")
+            return ruta
     
-    # Fallback a la raíz del proyecto (si alguna vez cambia la estructura)
-    project_root = os.path.dirname(base_path)
-    ruta_candidata_2 = os.path.join(project_root, 'conocimiento')
-    if os.path.isdir(ruta_candidata_2):
-        return ruta_candidata_2
-    
+    logger.error("❌ No se encontró la carpeta 'conocimiento' en ninguna ubicación.")
     return None
 
 def cargar_base_conocimiento() -> str:
     """
-    Lee TODOS los archivos .txt (sin importar mayúsculas/minúsculas) de la carpeta conocimiento/ y sus subcarpetas.
+    Recorre recursivamente la carpeta conocimiento/ usando os.walk,
+    carga todos los archivos .txt (insensible a mayúsculas) y devuelve el contenido concatenado.
     """
     knowledge_text = ""
     
     print("="*60)
     print("CARGANDO BASE DE CONOCIMIENTO...")
     
-    # 1. Buscar la carpeta
     knowledge_dir = encontrar_carpeta_conocimiento()
-    
     if not knowledge_dir:
-        print(f"❌ ERROR: No se encontró la carpeta 'conocimiento'.")
-        print("   Asegúrate de que la carpeta 'conocimiento' esté en el mismo nivel que 'app.py'.")
         print("="*60)
         return ""
 
-    print(f"✅ Carpeta encontrada en: {os.path.abspath(knowledge_dir)}")
-    
-    # 2. Buscar recursivamente archivos .txt y .TXT (insensible a mayúsculas)
-    try:
-        # Buscamos tanto .txt como .TXT para cubrir el caso de Linux
-        files_txt = glob.glob(os.path.join(knowledge_dir, '**', '*.txt'), recursive=True)
-        files_TXT = glob.glob(os.path.join(knowledge_dir, '**', '*.TXT'), recursive=True)
-        
-        # Combinamos las listas y eliminamos duplicados (por si acaso)
-        files = list(set(files_txt + files_TXT))
-        files.sort()
-        
-        total_archivos = len(files)
-        total_caracteres = 0
-        
-        if total_archivos == 0:
-            print(f"⚠️ La carpeta '{os.path.abspath(knowledge_dir)}' existe, pero no contiene archivos .txt o .TXT.")
-            print("   Verifica que dentro de las subcarpetas haya archivos con estas extensiones.")
-            print("="*60)
-            return ""
+    total_archivos = 0
+    total_caracteres = 0
+    archivos_encontrados = []
 
-        # 3. Procesar cada archivo y mostrar detalles
-        for file_path in files:
+    # Recorremos recursivamente el directorio
+    for root, dirs, files in os.walk(knowledge_dir):
+        for file in files:
+            # Filtramos solo archivos con extensión .txt (sin importar mayúsculas/minúsculas)
+            if file.lower().endswith('.txt'):
+                full_path = os.path.join(root, file)
+                archivos_encontrados.append(full_path)
+
+    archivos_encontrados.sort()  # Orden alfabético para consistencia
+
+    if not archivos_encontrados:
+        print(f"⚠️ La carpeta '{knowledge_dir}' contiene subcarpetas, pero no se encontraron archivos .txt.")
+        print("   Verifica que los archivos tengan extensión '.txt' (no '.TXT', ni '.txt~', etc.).")
+        print("="*60)
+        return ""
+
+    # Procesamos cada archivo
+    for file_path in archivos_encontrados:
+        try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
                 total_caracteres += len(content)
                 relative_path = os.path.relpath(file_path, knowledge_dir)
                 print(f"✅ {relative_path}  ({len(content)} caracteres)")
-
-        print(f"\nTOTAL DE ARCHIVOS : {total_archivos}")
-        print(f"TOTAL CARACTERES  : {total_caracteres}")
-        print("="*60)
-        
-        # 4. Construir el texto completo para la IA
-        for file_path in files:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read().strip()
-                relative_path = os.path.relpath(file_path, knowledge_dir)
                 knowledge_text += f"\n--- INFORMACIÓN DEL ARCHIVO '{relative_path}' ---\n{content}\n"
-                
-        return knowledge_text.strip()
-        
-    except Exception as e:
-        print(f"❌ ERROR al leer los archivos: {e}")
-        print("="*60)
-        return ""
+                total_archivos += 1
+        except Exception as e:
+            print(f"❌ Error leyendo {file_path}: {e}")
+
+    print(f"\nTOTAL DE ARCHIVOS : {total_archivos}")
+    print(f"TOTAL CARACTERES  : {total_caracteres}")
+    print("="*60)
+
+    return knowledge_text.strip() if knowledge_text else ""
 
 def procesar_con_gpt(telefono, texto, historial=None):
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))

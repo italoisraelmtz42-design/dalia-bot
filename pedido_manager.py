@@ -13,6 +13,11 @@ from constantes import (
 from validators import validar_estado, validar_transicion
 
 # ==============================================================================
+# 🟢 [DEBUG] FOQUITO VERDE DE DEPURACIÓN
+# ==============================================================================
+print("🟢 [DEBUG] Cargando nueva versión de pedido_manager.py con obtener_pedido()")
+
+# ==============================================================================
 # # EVENTOS INTERNOS
 # ==============================================================================
 def _registrar_evento(pedido_id: int, evento: str, descripcion: str = None,

@@ -1,5 +1,7 @@
 ===== ANTICIPOS =====
 
+SOLO SE AGENDAN PEDIDOS CON ANTICIPO
+
 Desde $50 pesos.
 
 
@@ -24,8 +26,4 @@ Reglas
 
 DALIA debe responder:
 'Con gusto. Para iniciar tu pedido solicitamos un anticipo desde $50 MXN. 😊'
-
-
-
-
 

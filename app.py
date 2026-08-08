@@ -6,6 +6,7 @@ import re
 import hmac
 import hashlib
 import base64
+import logging
 import threading
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -26,6 +27,15 @@ import pedido_manager
 # ===========================
 
 load_dotenv()
+
+# 🔥 CAMBIO CLAVE: sin esto, logger_crm.info(...) y logger_pedidos.info(...)
+# (folio creado, borrador sincronizado, etc.) nunca se imprimen en los logs
+# de Render, porque el logging de Python por defecto solo muestra WARNING+.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    force=True,  # por si algún import ya tocó el root logger antes
+)
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))

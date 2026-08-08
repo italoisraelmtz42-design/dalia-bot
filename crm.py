@@ -51,16 +51,18 @@ def cargar_pedido(cliente):
         return pedido_manager.obtener_pedido(pedido_id)
     return None
 
+# ==============================================================================
+# 🔧 sincronizar_pedido CORREGIDO (tolera string y dict)
+# ==============================================================================
 def sincronizar_pedido(*args, **kwargs):
-    """
-    Esta función ya NO guarda en RAM. Solo actualiza el borrador en SQLite.
-    Si detecta que el cliente confirma o envía anticipo, llama a crear_pedido_desde_borrador.
-    """
     cliente = args[0] if args else {}
     datos_pedido = args[1] if len(args) > 1 else {}
     if kwargs:
         datos_pedido.update(kwargs)
 
+    # 🔥 Normalizar cliente: si es string, convertirlo a dict con 'numero'
+    if isinstance(cliente, str):
+        cliente = {"numero": cliente}
     telefono = cliente.get('numero')
     if not telefono:
         logger_crm.error("sincronizar_pedido invocada sin un objeto cliente válido.")
@@ -68,34 +70,36 @@ def sincronizar_pedido(*args, **kwargs):
 
     # 1. Cargar borrador actual desde SQLite (si existe)
     borrador = pedido_manager.cargar_borrador_pedido(telefono) or {}
-    # 2. Fusionar con los nuevos datos
-    borrador.update({k: v for k, v in datos_pedido.items() if v is not None})
+    # 2. Fusionar con los nuevos datos (datos_pedido puede ser dict o PedidoData)
+    if isinstance(datos_pedido, dict):
+        borrador.update({k: v for k, v in datos_pedido.items() if v is not None})
+    else:
+        # si es PedidoData, lo convertimos a dict (usando vars() o __dict__)
+        borrador.update({k: v for k, v in vars(datos_pedido).items() if v is not None})
 
     # 3. Comprobar si debemos crear el pedido oficial
     debe_crear = (
-        datos_pedido.get('anticipo_confirmado') is True or
-        datos_pedido.get('confirmado') is True
+        datos_pedido.get('anticipo_confirmado') is True if isinstance(datos_pedido, dict) else False
     )
     if debe_crear:
-        # Verificar si ya existe pedido activo
         pedido_id = pedido_manager.obtener_pedido_activo(telefono)
         if not pedido_id:
-            # Crear pedido oficial a partir del borrador
             cliente_id = cliente.get('id', 0)
             pedido_id = pedido_manager.crear_pedido_desde_borrador(telefono, cliente_id, borrador)
             logger_crm.info(f"🆕 Pedido oficial creado desde borrador. ID: {pedido_id}")
-            # Retornar el pedido recién creado
             return pedido_manager.obtener_pedido(pedido_id)
         else:
             logger_crm.info("ℹ️ Ya existe un pedido oficial, no se crea otro.")
-            # Podríamos actualizar el pedido existente con los nuevos datos, pero eso se haría en otra función
     else:
         # Guardar/actualizar borrador
         pedido_manager.guardar_borrador_pedido(telefono, borrador)
         logger_crm.info(f"📝 Borrador actualizado para el teléfono {telefono}")
 
-    return None  # No hay pedido oficial todavía
+    return None
 
+# ==============================================================================
+# El resto de funciones se mantienen sin cambios
+# ==============================================================================
 def _detectar_intencion_pedido(texto: str) -> bool:
     return sum(1 for p in ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo"] if p in texto.lower()) >= 2
 
@@ -105,11 +109,8 @@ def generar_respuesta_conversacional(cliente, texto: str) -> str:
     return conversation_engine.procesar_con_gpt(telefono, texto, historial)
 
 def manejar_intencion_pedido(cliente, texto: str) -> str:
-    # Esta función ya no se usa para crear pedidos automáticamente; se mantiene por compatibilidad
-    # pero ahora solo crea el borrador (opcionalmente)
     try:
         telefono, cliente_id = cliente['numero'], cliente.get('id', 0)
-        # Crear borrador si no existe
         borrador = pedido_manager.cargar_borrador_pedido(telefono) or {}
         if not borrador.get('producto'):
             borrador['producto'] = "Toalla Personalizada"

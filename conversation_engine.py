@@ -2,32 +2,41 @@ import os
 import logging
 from openai import OpenAI
 
-# Configuración de logging para que los mensajes aparezcan en los logs de Render
 logger = logging.getLogger(__name__)
 
 def encontrar_carpeta_conocimiento() -> str:
     """
-    Busca la carpeta 'conocimiento' en las ubicaciones probables.
+    Busca la carpeta 'conocimiento' en las ubicaciones probables y muestra el contenido.
     """
     base_path = os.path.dirname(os.path.abspath(__file__))  # src/
     rutas_candidatas = [
-        os.path.join(base_path, 'conocimiento'),
-        os.path.join(os.path.dirname(base_path), 'conocimiento'),  # raíz del proyecto
-        os.getcwd(),
+        os.path.join(base_path, 'conocimiento'),                # src/conocimiento
+        os.path.join(os.path.dirname(base_path), 'conocimiento'), # raíz del proyecto
+        os.getcwd(),                                             # directorio de trabajo
     ]
     
+    print("="*60)
+    print("🔍 DIAGNÓSTICO DE LA CARPETA DE CONOCIMIENTO")
     for ruta in rutas_candidatas:
+        print(f"   Probando: {ruta}")
         if os.path.isdir(ruta):
-            logger.info(f"✅ Carpeta 'conocimiento' encontrada en: {ruta}")
+            print(f"   ✅ Carpeta encontrada: {ruta}")
+            # Listar contenido de la carpeta y subcarpetas
+            for root, dirs, files in os.walk(ruta):
+                nivel = root.replace(ruta, '').count(os.sep)
+                indent = ' ' * (nivel * 2)
+                print(f"{indent}📁 {os.path.basename(root)}/")
+                for f in files:
+                    print(f"{indent}   📄 {f}")
             return ruta
     
-    logger.error("❌ No se encontró la carpeta 'conocimiento' en ninguna ubicación.")
+    print("❌ No se encontró la carpeta 'conocimiento' en ninguna ubicación.")
+    print("="*60)
     return None
 
 def cargar_base_conocimiento() -> str:
     """
-    Recorre recursivamente la carpeta conocimiento/ usando os.walk,
-    carga todos los archivos .txt (insensible a mayúsculas) y devuelve el contenido concatenado.
+    Recorre recursivamente la carpeta conocimiento/ y carga archivos .txt (insensible a mayúsculas).
     """
     knowledge_text = ""
     
@@ -51,11 +60,12 @@ def cargar_base_conocimiento() -> str:
                 full_path = os.path.join(root, file)
                 archivos_encontrados.append(full_path)
 
-    archivos_encontrados.sort()  # Orden alfabético para consistencia
+    archivos_encontrados.sort()
 
     if not archivos_encontrados:
-        print(f"⚠️ La carpeta '{knowledge_dir}' contiene subcarpetas, pero no se encontraron archivos .txt.")
-        print("   Verifica que los archivos tengan extensión '.txt' (no '.TXT', ni '.txt~', etc.).")
+        print(f"⚠️ La carpeta '{knowledge_dir}' existe, pero no contiene archivos .txt.")
+        print("   Revisa el diagnóstico anterior para ver qué archivos hay realmente.")
+        print("   Asegúrate de que los archivos tengan extensión '.txt' (no '.TXT', '.txt~', '.md', etc.).")
         print("="*60)
         return ""
 

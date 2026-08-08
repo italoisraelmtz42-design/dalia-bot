@@ -6,70 +6,75 @@ logger = logging.getLogger(__name__)
 
 def encontrar_carpeta_conocimiento() -> str:
     """
-    Busca la carpeta 'conocimiento' en las ubicaciones probables y muestra el contenido.
+    Busca la carpeta 'conocimiento' en las ubicaciones más probables.
+    Retorna la ruta si la encuentra, si no None.
     """
-    base_path = os.path.dirname(os.path.abspath(__file__))  # src/
+    base_path = os.path.dirname(os.path.abspath(__file__))  # carpeta src
     rutas_candidatas = [
-        os.path.join(base_path, 'conocimiento'),                # src/conocimiento
-        os.path.join(os.path.dirname(base_path), 'conocimiento'), # raíz del proyecto
-        os.getcwd(),                                             # directorio de trabajo
+        os.path.join(base_path, 'conocimiento'),          # src/conocimiento
+        os.path.join(os.path.dirname(base_path), 'conocimiento'),  # raíz del proyecto
+        os.getcwd(),                                      # directorio de trabajo
+        '/opt/render/project/src/conocimiento',           # ruta hardcodeada para Render
+        '/opt/render/project/conocimiento',               # ruta hardcodeada alternativa
     ]
     
-    print("="*60)
-    print("🔍 DIAGNÓSTICO DE LA CARPETA DE CONOCIMIENTO")
     for ruta in rutas_candidatas:
-        print(f"   Probando: {ruta}")
         if os.path.isdir(ruta):
-            print(f"   ✅ Carpeta encontrada: {ruta}")
-            # Listar contenido de la carpeta y subcarpetas
-            for root, dirs, files in os.walk(ruta):
-                nivel = root.replace(ruta, '').count(os.sep)
-                indent = ' ' * (nivel * 2)
-                print(f"{indent}📁 {os.path.basename(root)}/")
-                for f in files:
-                    print(f"{indent}   📄 {f}")
+            logger.info(f"✅ Carpeta 'conocimiento' encontrada en: {ruta}")
             return ruta
     
-    print("❌ No se encontró la carpeta 'conocimiento' en ninguna ubicación.")
-    print("="*60)
+    logger.error("❌ No se encontró la carpeta 'conocimiento' en ninguna ubicación.")
     return None
 
 def cargar_base_conocimiento() -> str:
     """
-    Recorre recursivamente la carpeta conocimiento/ y carga archivos .txt (insensible a mayúsculas).
+    Recorre recursivamente la carpeta conocimiento/ usando os.walk,
+    imprime la estructura de directorios y archivos,
+    y carga todos los archivos .txt (insensible a mayúsculas).
     """
-    knowledge_text = ""
-    
     print("="*60)
     print("CARGANDO BASE DE CONOCIMIENTO...")
+    print("="*60)
     
     knowledge_dir = encontrar_carpeta_conocimiento()
     if not knowledge_dir:
-        print("="*60)
+        print("⚠️ No se encontró la carpeta. Verifica que 'conocimiento' esté en la raíz junto a 'src'.")
         return ""
-
+    
+    print(f"🔍 Contenido de la carpeta '{knowledge_dir}':")
+    
     total_archivos = 0
     total_caracteres = 0
     archivos_encontrados = []
-
+    
     # Recorremos recursivamente el directorio
     for root, dirs, files in os.walk(knowledge_dir):
+        nivel = root.replace(knowledge_dir, '').count(os.sep)
+        indent = ' ' * (nivel * 2)
+        if nivel == 0:
+            print(f"📁 {os.path.basename(root)}/")
+        else:
+            print(f"{indent}📁 {os.path.basename(root)}/")
         for file in files:
-            # Filtramos solo archivos con extensión .txt (sin importar mayúsculas/minúsculas)
+            # Filtramos solo archivos .txt (insensible a mayúsculas/minúsculas)
             if file.lower().endswith('.txt'):
                 full_path = os.path.join(root, file)
                 archivos_encontrados.append(full_path)
-
+                print(f"{indent}   📄 {file} → seleccionado para carga")
+            else:
+                print(f"{indent}   📄 {file} → ignorado (extensión no .txt)")
+    
     archivos_encontrados.sort()
-
+    
     if not archivos_encontrados:
-        print(f"⚠️ La carpeta '{knowledge_dir}' existe, pero no contiene archivos .txt.")
-        print("   Revisa el diagnóstico anterior para ver qué archivos hay realmente.")
-        print("   Asegúrate de que los archivos tengan extensión '.txt' (no '.TXT', '.txt~', '.md', etc.).")
+        print("⚠️ No se encontraron archivos .txt en la carpeta conocimiento/ ni sus subcarpetas.")
+        print("   Asegúrate de que los archivos tengan extensión '.txt' (no '.TXT' ni otros).")
         print("="*60)
         return ""
-
-    # Procesamos cada archivo
+    
+    print("="*60)
+    print("CARGANDO ARCHIVOS...")
+    
     for file_path in archivos_encontrados:
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -81,11 +86,11 @@ def cargar_base_conocimiento() -> str:
                 total_archivos += 1
         except Exception as e:
             print(f"❌ Error leyendo {file_path}: {e}")
-
+    
     print(f"\nTOTAL DE ARCHIVOS : {total_archivos}")
     print(f"TOTAL CARACTERES  : {total_caracteres}")
     print("="*60)
-
+    
     return knowledge_text.strip() if knowledge_text else ""
 
 def procesar_con_gpt(telefono, texto, historial=None):

@@ -120,25 +120,28 @@ def url_imagen_producto(clave_producto):
 
 
 # ===========================
-# CARGAR BASE DE CONOCIMIENTO
+# CARGAR BASE DE CONOCIMIENTO (CORREGIDO: RECURSIVO)
 # ===========================
 
 def cargar_conocimiento():
     knowledge = ""
-    archivos = sorted(CARPETA.glob("*.txt"))
+    # Buscamos recursivamente todos los archivos .txt usando rglob (recursive glob)
+    archivos = sorted(CARPETA.rglob("*.txt"))
 
     print("\n" + "=" * 60)
     print("CARGANDO BASE DE CONOCIMIENTO...")
     print("=" * 60)
 
     for i, archivo in enumerate(archivos, start=1):
-        print(f"[{i:02}/{len(archivos)}] ✅ {archivo.name}")
+        # Mostramos la ruta relativa para identificar de qué subcarpeta viene
+        rel_path = archivo.relative_to(CARPETA)
+        print(f"[{i:02}/{len(archivos)}] ✅ {rel_path}")
         try:
             contenido = archivo.read_text(encoding="utf-8", errors="ignore")
             bloque = f"""
 
 ==================================================
-ARCHIVO: {archivo.name}
+ARCHIVO: {rel_path}
 ==================================================
 
 {contenido}
@@ -149,9 +152,10 @@ FIN DEL ARCHIVO
 
 """
             knowledge += bloque
-            CONOCIMIENTO_POR_ARCHIVO[archivo.name] = bloque
+            # Guardamos con clave = ruta relativa para evitar colisiones
+            CONOCIMIENTO_POR_ARCHIVO[str(rel_path)] = bloque
         except Exception as e:
-            print(f"❌ Error leyendo {archivo.name}: {e}")
+            print(f"❌ Error leyendo {rel_path}: {e}")
 
     print("\n" + "=" * 60)
     print("TOTAL DE ARCHIVOS :", len(archivos))
@@ -983,4 +987,3 @@ if __name__ == "__main__":
     debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     puerto = int(os.getenv("PORT", 5000))
     app.run(port=puerto, debug=debug_mode)
-

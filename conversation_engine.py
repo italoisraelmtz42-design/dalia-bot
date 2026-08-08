@@ -2,35 +2,52 @@ import os
 import glob
 from openai import OpenAI
 
+def encontrar_carpeta_conocimiento() -> str:
+    """
+    Busca la carpeta 'conocimiento' en las 3 ubicaciones más probables del contenedor.
+    Retorna la ruta absoluta de la carpeta si la encuentra y tiene archivos .txt.
+    """
+    # Candidatas: 1. directorio actual (src), 2. junto a este script, 3. raíz del proyecto
+    base_paths = [
+        os.getcwd(),                            # /opt/render/project/src
+        os.path.dirname(os.path.abspath(__file__)), # /opt/render/project/src
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # /opt/render/project
+    ]
+    
+    # Eliminar duplicados y probar cada una
+    for base in base_paths:
+        ruta_candidata = os.path.join(base, 'conocimiento')
+        if os.path.isdir(ruta_candidata):
+            # Verificar si tiene archivos .txt
+            archivos = glob.glob(os.path.join(ruta_candidata, '**', '*.txt'), recursive=True)
+            if archivos:
+                print(f"✅ ENCONTRADA: Carpeta 'conocimiento' en {ruta_candidata}")
+                return ruta_candidata
+            else:
+                print(f"⚠️ Encontrada carpeta '{ruta_candidata}', pero está vacía de archivos .txt.")
+    
+    # Si no la encuentra, retorna None
+    print("❌ No se encontró la carpeta 'conocimiento' en ninguna ubicación común.")
+    return None
+
 def cargar_base_conocimiento() -> str:
     """
-    Lee TODOS los archivos .txt de la carpeta conocimiento/ y sus subcarpetas,
-    ubicada en la raíz del proyecto (junto a src/).
+    Lee TODOS los archivos .txt de la carpeta conocimiento/ y sus subcarpetas.
     """
     knowledge_text = ""
-    # 1. Calcular la ruta base del proyecto (un nivel arriba de la carpeta src)
-    # __file__ es la ruta de este script (conversation_engine.py, que está en src/)
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    knowledge_dir = os.path.join(project_root, 'conocimiento')
     
-    # 2. Diagnóstico: imprimir ruta absoluta
     print("="*60)
     print("CARGANDO BASE DE CONOCIMIENTO...")
-    print(f"Ruta de la carpeta conocimiento: {os.path.abspath(knowledge_dir)}")
     
-    # 3. Verificar si la carpeta existe
-    if not os.path.exists(knowledge_dir):
-        print(f"❌ ERROR: La carpeta '{knowledge_dir}' NO EXISTE.")
-        print("   Verifica que la carpeta 'conocimiento' esté en el mismo nivel que 'src' (es decir, en la raíz del proyecto).")
-        print("="*60)
-        return ""
+    # 1. Buscar la carpeta
+    knowledge_dir = encontrar_carpeta_conocimiento()
     
-    if not os.path.isdir(knowledge_dir):
-        print(f"❌ ERROR: '{knowledge_dir}' no es un directorio.")
+    if not knowledge_dir:
+        print("   Verifica que la carpeta 'conocimiento' esté en la raíz del proyecto (junto a 'src').")
         print("="*60)
         return ""
 
-    # 4. Buscar recursivamente en todas las subcarpetas (**/*.txt)
+    # 2. Buscar recursivamente en todas las subcarpetas (**/*.txt)
     try:
         files = glob.glob(os.path.join(knowledge_dir, '**', '*.txt'), recursive=True)
         files.sort()
@@ -39,12 +56,11 @@ def cargar_base_conocimiento() -> str:
         total_caracteres = 0
         
         if total_archivos == 0:
-            print(f"⚠️ No se encontraron archivos .txt en: {os.path.abspath(knowledge_dir)}")
-            print("   Posibles causas: la carpeta está vacía, o los archivos tienen otra extensión.")
+            print(f"⚠️ La carpeta '{knowledge_dir}' está vacía o no tiene archivos .txt.")
             print("="*60)
             return ""
 
-        # 5. Procesar cada archivo y mostrar detalles
+        # 3. Procesar cada archivo y mostrar detalles
         for file_path in files:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
@@ -56,7 +72,7 @@ def cargar_base_conocimiento() -> str:
         print(f"TOTAL CARACTERES  : {total_caracteres}")
         print("="*60)
         
-        # 6. Construir el texto completo para la IA
+        # 4. Construir el texto completo para la IA
         for file_path in files:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
@@ -93,7 +109,6 @@ def procesar_con_gpt(telefono, texto, historial=None):
     
     messages.append({"role": "user", "content": texto})
 
-    # Cambia "gpt-4" por "gpt-4o-mini" si te da errores de límites de tokens (429)
     response = client.chat.completions.create(
         model="gpt-4", 
         messages=messages

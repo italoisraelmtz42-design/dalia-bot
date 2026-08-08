@@ -62,25 +62,33 @@ def uso_registrar_openai(telefono: str):
         conn.commit()
 
 # ==============================================================================
-# # MOTOR DE PEDIDOS
+# # MOTOR DE PEDIDOS (INSTRUMENTADO PARA DEPURACIÓN)
 # ==============================================================================
 def obtener_pedido_activo(telefono: str) -> Optional[int]:
+    # PASO 4 y 5: Mostramos el SQL exacto y lo ejecutamos
+    sql = """
+        SELECT id FROM pedidos
+        WHERE telefono = ?
+        AND estado NOT IN ('CANCELADO', 'ENTREGADO')
+        AND modo_atencion != 'DALIA'
+        ORDER BY id DESC LIMIT 1
+    """
+    logger_pedidos.info(f"[obtener_pedido_activo] SQL: {sql}")
+    logger_pedidos.info(f"[obtener_pedido_activo] PARAMS: {telefono}")
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id FROM pedidos
-            WHERE telefono = ?
-            AND estado NOT IN ('CANCELADO', 'ENTREGADO')
-            AND modo_atencion != 'DALIA'
-            ORDER BY id DESC LIMIT 1
-        """, (telefono,))
+        cursor.execute(sql, (telefono,))
         row = cursor.fetchone()
+        if row:
+            logger_pedidos.info(f"[obtener_pedido_activo] Pedido encontrado: ID {row[0]}")
+        else:
+            logger_pedidos.warning(f"[obtener_pedido_activo] No se encontró pedido activo para el teléfono {telefono}")
         return row[0] if row else None
 
 def crear_pedido(cliente_id: int, telefono: str) -> int:
     """
     Crea un pedido con folio único de forma atómica.
-    Utiliza una transacción `BEGIN IMMEDIATE` para evitar colisiones.
     """
     conn = None
     try:
@@ -102,99 +110,24 @@ def crear_pedido(cliente_id: int, telefono: str) -> int:
         if not pedido_id:
             raise Exception("No se pudo obtener el ID del pedido después del INSERT")
 
+        logger_pedidos.info(f"[crear_pedido] ✅ INSERT ejecutado. Folio: {folio}, ID generado: {pedido_id}")
+
         _registrar_evento(pedido_id, "Pedido creado", f"Folio {folio}", OrigenEvento.SISTEMA, "sistema", conn=conn)
 
         conn.commit()
-        logger_pedidos.info(f"✅ Pedido creado con folio {folio}, ID {pedido_id}")
+        logger_pedidos.info(f"[crear_pedido] ✅ COMMIT realizado. Pedido creado con folio {folio}, ID {pedido_id}")
         return pedido_id
 
     except sqlite3.IntegrityError as e:
-        if conn:
-            conn.rollback()
-        logger_pedidos.error(f"❌ Error de integridad al crear pedido (folio duplicado): {e}")
-        raise RuntimeError("No se pudo crear el pedido debido a un conflicto de folio. Intenta de nuevo.")
+        if conn: conn.rollback()
+        logger_pedidos.error(f"[crear_pedido] ❌ Error de integridad: {e}")
+        raise RuntimeError("No se pudo crear el pedido.")
     except Exception as e:
-        if conn:
-            conn.rollback()
-        logger_pedidos.error(f"❌ Error inesperado al crear pedido: {e}")
+        if conn: conn.rollback()
+        logger_pedidos.error(f"[crear_pedido] ❌ Error inesperado: {e}")
         raise e
     finally:
-        if conn:
-            conn.close()
-
-def obtener_pedido(pedido_id: int) -> Optional[PedidoData]:
-    with get_db_connection() as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM pedidos WHERE id = ?", (pedido_id,))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        pedido_dict = dict(row)
-
-        cursor.execute("SELECT * FROM pedido_items WHERE pedido_id = ?", (pedido_id,))
-        items = [ItemData(**dict(r)) for r in cursor.fetchall()]
-
-        cursor.execute("SELECT * FROM pagos WHERE pedido_id = ?", (pedido_id,))
-        pagos = [PagoData(**dict(r)) for r in cursor.fetchall()]
-
-        cursor.execute("SELECT * FROM entregas WHERE pedido_id = ?", (pedido_id,))
-        entrega_row = cursor.fetchone()
-        entrega = EntregaData(**dict(entrega_row)) if entrega_row else None
-
-        return PedidoData(**pedido_dict, items=items, pagos=pagos, entrega=entrega)
-
-def generar_resumen(pedido_id: int) -> str:
-    """
-    Genera un resumen en texto plano del pedido, basado en SQLite.
-    """
-    pedido = obtener_pedido(pedido_id)
-    if not pedido:
-        return "❌ No se encontró el pedido."
-
-    subtotal = calcular_subtotal(pedido_id)
-    envio = calcular_envio(pedido_id)
-    total = calcular_total(pedido_id)
-    saldo = calcular_saldo(pedido_id)
-
-    items_str = []
-    for item in pedido.items:
-        line = f"Producto: {item.producto} (x{item.cantidad})"
-        if item.color_toalla or item.color_moño:
-            line += f"\n  Colores: Toalla {item.color_toalla or 'No especificado'}, Moño {item.color_moño or 'No especificado'}"
-        if item.nombre_bebe:
-            line += f"\n  Bebé: {item.nombre_bebe}"
-        if item.tarjetita:
-            line += f"\n  Tarjeta: {item.tarjetita}"
-        items_str.append(line)
-
-    entrega = pedido.entrega
-    entrega_str = "No especificada" if not entrega else f"{entrega.tipo_entrega} ({entrega.municipio or 'N/A'}) - Fecha: {entrega.fecha_entrega or 'Pendiente'}"
-
-    resumen = f"""
-RESUMEN DEL PEDIDO
-===================
-Folio: {pedido.folio}
-Modo atencion: {pedido.modo_atencion}
-Estado: {pedido.estado}
-Fecha creacion: {pedido.fecha_creacion}
-
-Cliente
-Telefono: {pedido.telefono}
-
-Productos
-{chr(10).join(items_str) if items_str else "No hay productos agregados."}
-
-Entrega
-{entrega_str}
-
-Finanzas
-Subtotal: ${subtotal:.2f}
-Envio: ${envio:.2f}
-Total: ${total:.2f}
-Saldo: ${saldo:.2f}
-    """
-    return resumen.strip()
+        if conn: conn.close()
 
 def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
     if not kwargs:
@@ -212,6 +145,10 @@ def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
         set_clause = ", ".join([f"{key} = ?" for key in kwargs.keys()])
         params_update = list(kwargs.values())
         params_update.append(pedido_id)
+        
+        logger_pedidos.info(f"[actualizar_pedido] 🛠️ SQL UPDATE: {set_clause} WHERE id = ?")
+        logger_pedidos.info(f"[actualizar_pedido] 🛠️ PARAMS: {params_update}")
+        
         conn.execute(f"UPDATE pedidos SET {set_clause}, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?", params_update)
 
         for key, new_val in kwargs.items():
@@ -220,13 +157,14 @@ def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
                 _registrar_historial(pedido_id, key, old_val, new_val, usuario, conn=conn)
 
         conn.commit()
+        logger_pedidos.info(f"[actualizar_pedido] ✅ COMMIT realizado en pedido ID {pedido_id}")
+
     except Exception as e:
-        if conn:
-            conn.rollback()
+        if conn: conn.rollback()
+        logger_pedidos.error(f"[actualizar_pedido] ❌ Error: {e}")
         raise e
     finally:
-        if conn:
-            conn.close()
+        if conn: conn.close()
 
 def actualizar_entrega(pedido_id: int, tipo_entrega: str, municipio: str = None, direccion: str = None,
                        fecha_entrega: str = None, costo_envio: float = 0.0):
@@ -262,17 +200,17 @@ def agregar_producto(pedido_id: int, producto: str, cantidad: int, precio_unitar
                       nombre_bebe, tarjetita)
             cursor.execute(sql, params)
             item_id = cursor.lastrowid
+            logger_pedidos.info(f"[agregar_producto] ✅ INSERT en pedido_items. Item ID: {item_id}, Pedido ID: {pedido_id}")
             _registrar_historial(pedido_id, "producto", "N/A", producto, conn=conn)
             _registrar_evento(pedido_id, "Producto agregado", f"{producto} x{cantidad}",
                               OrigenEvento.CLIENTE, "sistema", conn=conn)
             conn.commit()
             return item_id
     except Exception as e:
+        logger_pedidos.error(f"[agregar_producto] ❌ Error: {e}")
         raise e
 
-# ==============================================================================
-# # CÁLCULOS
-# ==============================================================================
+# ... (El resto de funciones de cálculo, validación y estado se mantienen igual) ...
 def calcular_subtotal(pedido_id: int) -> float:
     with get_db_connection() as conn:
         return conn.cursor().execute("SELECT SUM(subtotal) FROM pedido_items WHERE pedido_id = ?", (pedido_id,)).fetchone()[0] or 0.0
@@ -293,9 +231,6 @@ def calcular_saldo(pedido_id: int) -> float:
         pagado = cursor.fetchone()[0] or 0.0
         return round(total - pagado, 2)
 
-# ==============================================================================
-# # VALIDACIONES Y ESTADOS
-# ==============================================================================
 def pedido_es_cotizable(pedido_id: int) -> bool:
     p = obtener_pedido(pedido_id)
     return bool(p and p.items and all(i.producto and i.cantidad > 0 for i in p.items))

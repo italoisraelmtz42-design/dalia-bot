@@ -5,11 +5,13 @@ from openai import OpenAI
 def cargar_base_conocimiento() -> str:
     """
     Lee TODOS los archivos .txt de la carpeta conocimiento/ y sus subcarpetas,
-    ubicada en la raíz del proyecto (junto a app.py).
+    ubicada en la raíz del proyecto (junto a src/).
     """
     knowledge_text = ""
-    # 1. Definir el directorio base como el directorio de trabajo actual (donde está app.py)
-    knowledge_dir = os.path.join(os.getcwd(), 'conocimiento')
+    # 1. Calcular la ruta base del proyecto (un nivel arriba de la carpeta src)
+    # __file__ es la ruta de este script (conversation_engine.py, que está en src/)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    knowledge_dir = os.path.join(project_root, 'conocimiento')
     
     # 2. Diagnóstico: imprimir ruta absoluta
     print("="*60)
@@ -19,7 +21,7 @@ def cargar_base_conocimiento() -> str:
     # 3. Verificar si la carpeta existe
     if not os.path.exists(knowledge_dir):
         print(f"❌ ERROR: La carpeta '{knowledge_dir}' NO EXISTE.")
-        print("   Verifica que la carpeta 'conocimiento' esté en el mismo nivel que app.py.")
+        print("   Verifica que la carpeta 'conocimiento' esté en el mismo nivel que 'src' (es decir, en la raíz del proyecto).")
         print("="*60)
         return ""
     

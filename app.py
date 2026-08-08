@@ -111,9 +111,20 @@ def url_imagen_producto(clave_producto):
     return f"{PUBLIC_BASE_URL}/imagenes/{info['archivo']}"
 
 # ===========================
-# CARGAR BASE DE CONOCIMIENTO (RECURSIVO)
+# CARGAR BASE DE CONOCIMIENTO Y VARIABLES DE CONTEXTO
 # ===========================
+CONOCIMIENTO_POR_ARCHIVO = {}
+ARCHIVOS_CONOCIMIENTO_SIEMPRE = {
+    "04_REGLAS_GENERALES.txt",
+    "033_Reglas_Conversacion.txt",
+    "027_Pagos_y_Anticipos.txt",
+    "028_Colores_Disponibles.txt",
+    "029_Flujo_de_Venta.txt",
+    "050_Saludos_Humanos.txt",
+}
+
 def cargar_conocimiento():
+    global CONOCIMIENTO_POR_ARCHIVO
     knowledge = ""
     
     print("\n" + "=" * 60)
@@ -154,6 +165,7 @@ FIN DEL ARCHIVO
 ==================================================
 """
             knowledge += bloque
+            CONOCIMIENTO_POR_ARCHIVO[str(rel_path)] = bloque
         except Exception as e:
             print(f"❌ Error leyendo {rel_path}: {e}")
 
@@ -164,27 +176,41 @@ FIN DEL ARCHIVO
     return knowledge
 
 KNOWLEDGE = cargar_conocimiento()
-CONOCIMIENTO_POR_ARCHIVO = {f"archivo_{i}": block for i, block in enumerate(knowledge.split('==================================================\nARCHIVO:')) if block}
-ARCHIVOS_CONOCIMIENTO_SIEMPRE = set()
 
 def seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=None, top_k=16):
-    palabras_clave = {p for p in re.findall(r"[a-záéíóúñ0-9]+", (texto_cliente or "").lower()) if len(p) > 3}
+    if not CONOCIMIENTO_POR_ARCHIVO:
+        return KNOWLEDGE
+
+    texto_relevancia = texto_cliente or ""
     if historial_reciente:
-        historial_text = " ".join(m.get("content", "") for m in historial_reciente[-4:] if isinstance(m.get("content"), str))
-        palabras_clave |= {p for p in re.findall(r"[a-záéíóúñ0-9]+", historial_text.lower()) if len(p) > 3}
+        texto_relevancia += " " + " ".join(
+            m.get("content", "") for m in historial_reciente[-4:]
+            if isinstance(m.get("content"), str)
+        )
+
+    palabras_clave = {
+        p for p in re.findall(r"[a-záéíóúñ0-9]+", texto_relevancia.lower())
+        if len(p) > 3
+    }
 
     puntajes = []
     for nombre, bloque in CONOCIMIENTO_POR_ARCHIVO.items():
         bloque_lower = bloque.lower()
         puntaje = sum(1 for palabra in palabras_clave if palabra in bloque_lower)
         puntajes.append((puntaje, nombre))
+
     puntajes.sort(key=lambda x: x[0], reverse=True)
     seleccionados = {nombre for _, nombre in puntajes[:top_k]}
     seleccionados |= ARCHIVOS_CONOCIMIENTO_SIEMPRE
-    return "".join(CONOCIMIENTO_POR_ARCHIVO[nombre] for nombre in sorted(seleccionados) if nombre in CONOCIMIENTO_POR_ARCHIVO)
+
+    return "".join(
+        CONOCIMIENTO_POR_ARCHIVO[nombre]
+        for nombre in sorted(seleccionados)
+        if nombre in CONOCIMIENTO_POR_ARCHIVO
+    )
 
 # ===========================
-# SESIONES POR CLIENTE (CACHÉ LIGERA)
+# SESIONES POR CLIENTE (CACHÉ LIGERA - SQLite es la fuente de verdad)
 # ===========================
 sesiones = {}
 sesiones_lock = threading.Lock()
@@ -382,10 +408,8 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
             if tool_call.function.name == "actualizar_pedido":
                 # 🔥 Aplicar los cambios al caché de la sesión
                 if not pedido_cache or isinstance(pedido_cache, dict):
-                    # Si es un dict, actualizamos directamente
                     if not pedido_cache:
                         pedido_cache = {}
-                    # Fusionamos los argumentos
                     pedido_cache.update({k: v for k, v in args.items() if v is not None})
                 else:
                     # Si es PedidoData, lo convertimos a dict y actualizamos
@@ -440,8 +464,10 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
 
     # Sincronizar con SQLite (el borrador o pedido se actualizará en crm.sincronizar_pedido)
     try:
+        # Extraemos cliente y sesión
         cliente = crm.cargar_cliente(numero)
-        crm.sincronizar_pedido(cliente, sesion["pedido"] if numero in sesiones else {})
+        datos_sesion = sesiones.get(numero, {}).get("pedido", {})
+        crm.sincronizar_pedido(cliente, datos_sesion)
     except Exception as e:
         print(f"⚠️ Error guardando en CRM (el bot sigue funcionando con RAM): {e}")
 
@@ -514,7 +540,7 @@ def verificar_firma_webhook(payload_bytes, firma_header):
     return hmac.compare_digest(firma_esperada, firma_recibida)
 
 def ya_fue_procesado(mensaje_id):
-    # (Deduplicación básica)
+    # Deduplicación básica de mensajes
     return False
 
 def procesar_mensaje_no_soportado(numero, tipo):

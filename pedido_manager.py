@@ -62,7 +62,7 @@ def uso_registrar_openai(telefono: str):
         conn.commit()
 
 # ==============================================================================
-# # MOTOR DE PEDIDOS (CORREGIDO: MISMO CURSOR PARA INSERT Y LASTROWID)
+# # MOTOR DE PEDIDOS
 # ==============================================================================
 def obtener_pedido_activo(telefono: str) -> Optional[int]:
     with get_db_connection() as conn:
@@ -80,30 +80,24 @@ def obtener_pedido_activo(telefono: str) -> Optional[int]:
 def crear_pedido(cliente_id: int, telefono: str) -> int:
     """
     Crea un pedido con folio único de forma atómica.
-    Utiliza una transacción `BEGIN IMMEDIATE` y el mismo cursor
-    para ejecutar el INSERT y obtener el lastrowid.
+    Utiliza una transacción `BEGIN IMMEDIATE` para evitar colisiones.
     """
     conn = None
     try:
         conn = get_db_connection()
-        # Inicia transacción exclusiva
         conn.execute("BEGIN IMMEDIATE")
 
-        # Obtener el siguiente número secuencial basado en el ID máximo existente
         cursor = conn.cursor()
         cursor.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM pedidos")
         next_seq = cursor.fetchone()[0]
 
-        # Generar folio con el año actual y el número secuencial
         current_year = datetime.datetime.now().strftime("%Y")
         folio = f"DAL-{current_year}-{next_seq:06d}"
 
-        # Insertar el pedido usando el MISMO cursor
         sql = "INSERT INTO pedidos (folio, cliente_id, telefono, estado, modo_atencion) VALUES (?, ?, ?, ?, ?)"
         params = (folio, cliente_id, telefono, EstadoPedido.BORRADOR.value, ModoAtencion.BOT.value)
         cursor.execute(sql, params)
 
-        # Obtener el ID generado desde el mismo cursor
         pedido_id = cursor.lastrowid
         if not pedido_id:
             raise Exception("No se pudo obtener el ID del pedido después del INSERT")
@@ -149,6 +143,58 @@ def obtener_pedido(pedido_id: int) -> Optional[PedidoData]:
         entrega = EntregaData(**dict(entrega_row)) if entrega_row else None
 
         return PedidoData(**pedido_dict, items=items, pagos=pagos, entrega=entrega)
+
+def generar_resumen(pedido_id: int) -> str:
+    """
+    Genera un resumen en texto plano del pedido, basado en SQLite.
+    """
+    pedido = obtener_pedido(pedido_id)
+    if not pedido:
+        return "❌ No se encontró el pedido."
+
+    subtotal = calcular_subtotal(pedido_id)
+    envio = calcular_envio(pedido_id)
+    total = calcular_total(pedido_id)
+    saldo = calcular_saldo(pedido_id)
+
+    items_str = []
+    for item in pedido.items:
+        line = f"Producto: {item.producto} (x{item.cantidad})"
+        if item.color_toalla or item.color_moño:
+            line += f"\n  Colores: Toalla {item.color_toalla or 'No especificado'}, Moño {item.color_moño or 'No especificado'}"
+        if item.nombre_bebe:
+            line += f"\n  Bebé: {item.nombre_bebe}"
+        if item.tarjetita:
+            line += f"\n  Tarjeta: {item.tarjetita}"
+        items_str.append(line)
+
+    entrega = pedido.entrega
+    entrega_str = "No especificada" if not entrega else f"{entrega.tipo_entrega} ({entrega.municipio or 'N/A'}) - Fecha: {entrega.fecha_entrega or 'Pendiente'}"
+
+    resumen = f"""
+RESUMEN DEL PEDIDO
+===================
+Folio: {pedido.folio}
+Modo atencion: {pedido.modo_atencion}
+Estado: {pedido.estado}
+Fecha creacion: {pedido.fecha_creacion}
+
+Cliente
+Telefono: {pedido.telefono}
+
+Productos
+{chr(10).join(items_str) if items_str else "No hay productos agregados."}
+
+Entrega
+{entrega_str}
+
+Finanzas
+Subtotal: ${subtotal:.2f}
+Envio: ${envio:.2f}
+Total: ${total:.2f}
+Saldo: ${saldo:.2f}
+    """
+    return resumen.strip()
 
 def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
     if not kwargs:
@@ -224,7 +270,9 @@ def agregar_producto(pedido_id: int, producto: str, cantidad: int, precio_unitar
     except Exception as e:
         raise e
 
-# ... (Funciones de cálculo, validación y estado se mantienen igual) ...
+# ==============================================================================
+# # CÁLCULOS
+# ==============================================================================
 def calcular_subtotal(pedido_id: int) -> float:
     with get_db_connection() as conn:
         return conn.cursor().execute("SELECT SUM(subtotal) FROM pedido_items WHERE pedido_id = ?", (pedido_id,)).fetchone()[0] or 0.0
@@ -245,6 +293,9 @@ def calcular_saldo(pedido_id: int) -> float:
         pagado = cursor.fetchone()[0] or 0.0
         return round(total - pagado, 2)
 
+# ==============================================================================
+# # VALIDACIONES Y ESTADOS
+# ==============================================================================
 def pedido_es_cotizable(pedido_id: int) -> bool:
     p = obtener_pedido(pedido_id)
     return bool(p and p.items and all(i.producto and i.cantidad > 0 for i in p.items))

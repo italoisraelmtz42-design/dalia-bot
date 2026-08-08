@@ -1,7 +1,7 @@
 COLORES DISPONIBLES UNICAMENTE PARA TOALLITAS, JABÓN Y O MOÑO / LISTÓN
 
-*cuando el cliente o la conversación sea sobre los colores disponibles que manejamos, mandar siempre el archivo:
-*Colores disponibles.jpeg (esta imagen contiene los colores disponibles y es ideal para que el cliente vea el tono exacto de cada color de los que manejamos)
+*cuando el cliente o la conversación sea sobre los colores disponibles que manejamos, mandar siempre el archivo: Colores disponibles.jpeg 
+(esta imagen contiene los colores disponibles y es ideal para que el cliente vea el tono exacto de cada color de los que manejamos)
 *si el cliente solicita color rosa, aclarar siempre si se refiere al tono rosa palo o rosa pastel. (esto es importante)
 *si el cliente escoge color azul, aclararle que el color disponible es el azul rey. solo confirmar el dato al cliente para evitar confusiones futuras.
 *(no manejamos otros colores)

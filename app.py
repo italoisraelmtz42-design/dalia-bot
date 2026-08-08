@@ -120,7 +120,7 @@ def url_imagen_producto(clave_producto):
 
 
 # ===========================
-# CARGAR BASE DE CONOCIMIENTO (CORREGIDO: RECURSIVO CON OS.WALK Y DIAGNÓSTICO)
+# CARGAR BASE DE CONOCIMIENTO (RECURSIVO CON OS.WALK Y DIAGNÓSTICO)
 # ===========================
 
 def cargar_conocimiento():
@@ -348,7 +348,6 @@ def obtener_sesion(numero):
                 pedido_db = crm.cargar_pedido(cliente)
                 pedido_previo = crm.pedido_para_ram(pedido_db)
                 if pedido_db:
-                    # 🔥 CORRECCIÓN: Usar punto en lugar de corchetes para el objeto PedidoData
                     pedido_id = pedido_db.id
                 if mensajes_previos or (pedido_previo and any(pedido_previo.values())):
                     print(f"♻️ Sesión de {numero} hidratada desde SQLite ({len(mensajes_previos)} mensajes previos, pedido ID {pedido_id})")
@@ -549,6 +548,19 @@ INFORMACIÓN QUE YA SE LE ENVIÓ A ESTE CLIENTE EN MENSAJES ANTERIORES
 BASE DE CONOCIMIENTO:
 
 {conocimiento}
+
+===========================================================
+🚨 REGLA DE SEGURIDAD Y CIERRE AUTOMÁTICO (LEE ESTO CON ATENCIÓN):
+===========================================================
+Cuando el cliente CONFIRME explícitamente su pedido (diciendo "sí", "confirmo", "está bien", etc.) 
+o cuando ENVÍE UN COMPROBANTE DE PAGO (imagen de transferencia o depósito),
+DEBES llamar INMEDIATAMENTE a la función actualizar_pedido con todos los datos confirmados 
+(anticipo_confirmado=true, producto, cantidad, colores, fecha, entrega, etc.) para guardar 
+el pedido en la base de datos. No dejes el pedido en la RAM. Si el cliente ya confirmó todo,
+la llamada a actualizar_pedido debe ejecutarse SIN que el cliente tenga que pedírtelo de nuevo.
+
+El cliente NO debe saber que estás llamando a una herramienta. Solo actúa con normalidad.
+===========================================================
 """
 
 
@@ -958,7 +970,6 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
             crm.guardar_respuesta(cliente, respuesta)
             crm.sincronizar_pedido(cliente, sesion["pedido"])
             pedido_db = crm.cargar_pedido(cliente)
-            # 🔥 CORRECCIÓN: Usar punto en lugar de corchetes para obtener el ID
             sesion["pedido_id"] = pedido_db.id if pedido_db else None
         except Exception as e:
             print("⚠️ Error guardando en CRM (el bot sigue funcionando con RAM):", repr(e))

@@ -1,10 +1,20 @@
-import sqlite3
 import os
+import sqlite3
 import logging
 
 logger_db = logging.getLogger('database')
 
+# Leer la ruta de la variable de entorno. Si no existe, usar la ruta por defecto.
 DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
+
+# Crear el directorio si no existe (para soportar rutas como /data/ en Render)
+db_dir = os.path.dirname(DB_PATH)
+if db_dir and not os.path.exists(db_dir):
+    try:
+        os.makedirs(db_dir, exist_ok=True)
+        logger_db.info(f"Directorio de base de datos creado: {db_dir}")
+    except Exception as e:
+        logger_db.warning(f"No se pudo crear el directorio {db_dir}: {e}")
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)

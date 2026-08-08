@@ -53,7 +53,7 @@ def cargar_pedido(cliente):
     return None
 
 # ==============================================================================
-# 🔧 sincronizar_pedido CORREGIDO – maneja None y conversión segura
+# 🔧 sincronizar_pedido CORREGIDO – maneja None, dict y cualquier objeto
 # ==============================================================================
 def sincronizar_pedido(*args, **kwargs):
     cliente = args[0] if args else {}

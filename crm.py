@@ -1,6 +1,7 @@
 import re
 import logging
 from typing import Dict, Any, List, Optional
+from dataclasses import asdict
 
 from database import init_db
 from constantes import logger_crm, EstadoPedido
@@ -52,7 +53,7 @@ def cargar_pedido(cliente):
     return None
 
 # ==============================================================================
-# 🔧 sincronizar_pedido CORREGIDO (tolera string y dict)
+# 🔧 sincronizar_pedido CORREGIDO – maneja None y conversión segura
 # ==============================================================================
 def sincronizar_pedido(*args, **kwargs):
     cliente = args[0] if args else {}
@@ -60,7 +61,7 @@ def sincronizar_pedido(*args, **kwargs):
     if kwargs:
         datos_pedido.update(kwargs)
 
-    # 🔥 Normalizar cliente: si es string, convertirlo a dict con 'numero'
+    # Normalizar cliente (puede ser string o dict)
     if isinstance(cliente, str):
         cliente = {"numero": cliente}
     telefono = cliente.get('numero')
@@ -68,18 +69,31 @@ def sincronizar_pedido(*args, **kwargs):
         logger_crm.error("sincronizar_pedido invocada sin un objeto cliente válido.")
         return {}
 
-    # 1. Cargar borrador actual desde SQLite (si existe)
+    # 1. Cargar borrador desde SQLite
     borrador = pedido_manager.cargar_borrador_pedido(telefono) or {}
-    # 2. Fusionar con los nuevos datos (datos_pedido puede ser dict o PedidoData)
-    if isinstance(datos_pedido, dict):
-        borrador.update({k: v for k, v in datos_pedido.items() if v is not None})
-    else:
-        # si es PedidoData, lo convertimos a dict (usando vars() o __dict__)
-        borrador.update({k: v for k, v in vars(datos_pedido).items() if v is not None})
+    
+    # 2. Fusionar con los nuevos datos (si datos_pedido no es None ni dict, lo convertimos)
+    if datos_pedido is None:
+        datos_pedido = {}
+    elif not isinstance(datos_pedido, dict):
+        # Intentar convertir a dict usando asdict si es dataclass, o __dict__, o str()
+        try:
+            if hasattr(datos_pedido, '__dict__'):
+                datos_pedido = datos_pedido.__dict__
+            else:
+                # Si es un objeto sin __dict__, intentamos serializar a dict con asdict (si es dataclass)
+                from dataclasses import asdict
+                datos_pedido = asdict(datos_pedido)
+        except:
+            # Fallback: convertir a string y ponerlo en una nota
+            datos_pedido = {"_raw": str(datos_pedido)}
+    
+    # Ahora datos_pedido es un dict
+    borrador.update({k: v for k, v in datos_pedido.items() if v is not None})
 
     # 3. Comprobar si debemos crear el pedido oficial
     debe_crear = (
-        datos_pedido.get('anticipo_confirmado') is True if isinstance(datos_pedido, dict) else False
+        datos_pedido.get('anticipo_confirmado') is True
     )
     if debe_crear:
         pedido_id = pedido_manager.obtener_pedido_activo(telefono)

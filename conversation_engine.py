@@ -4,12 +4,12 @@ from openai import OpenAI
 
 def cargar_base_conocimiento() -> str:
     """
-    Lee TODOS los archivos .txt de la carpeta conocimiento/ y sus subcarpetas.
-    Imprime diagnóstico detallado.
+    Lee TODOS los archivos .txt de la carpeta conocimiento/ y sus subcarpetas,
+    ubicada en la raíz del proyecto (junto a app.py).
     """
     knowledge_text = ""
-    # 1. Definir el directorio base
-    knowledge_dir = os.path.join(os.path.dirname(__file__), 'conocimiento')
+    # 1. Definir el directorio base como el directorio de trabajo actual (donde está app.py)
+    knowledge_dir = os.path.join(os.getcwd(), 'conocimiento')
     
     # 2. Diagnóstico: imprimir ruta absoluta
     print("="*60)
@@ -19,7 +19,7 @@ def cargar_base_conocimiento() -> str:
     # 3. Verificar si la carpeta existe
     if not os.path.exists(knowledge_dir):
         print(f"❌ ERROR: La carpeta '{knowledge_dir}' NO EXISTE.")
-        print("   Verifica que la carpeta 'conocimiento' esté en la misma ubicación que este script.")
+        print("   Verifica que la carpeta 'conocimiento' esté en el mismo nivel que app.py.")
         print("="*60)
         return ""
     
@@ -31,7 +31,7 @@ def cargar_base_conocimiento() -> str:
     # 4. Buscar recursivamente en todas las subcarpetas (**/*.txt)
     try:
         files = glob.glob(os.path.join(knowledge_dir, '**', '*.txt'), recursive=True)
-        files.sort()  # Orden alfabético para consistencia
+        files.sort()
         
         total_archivos = len(files)
         total_caracteres = 0
@@ -54,7 +54,7 @@ def cargar_base_conocimiento() -> str:
         print(f"TOTAL CARACTERES  : {total_caracteres}")
         print("="*60)
         
-        # 6. Construir el texto completo para la IA (como antes)
+        # 6. Construir el texto completo para la IA
         for file_path in files:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read().strip()

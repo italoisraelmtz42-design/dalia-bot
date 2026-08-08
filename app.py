@@ -120,24 +120,76 @@ def url_imagen_producto(clave_producto):
 
 
 # ===========================
-# CARGAR BASE DE CONOCIMIENTO (CORREGIDO: RECURSIVO)
+# CARGAR BASE DE CONOCIMIENTO (CORREGIDO: RECURSIVO CON OS.WALK Y DIAGNÓSTICO)
 # ===========================
 
 def cargar_conocimiento():
     knowledge = ""
-    # Buscamos recursivamente todos los archivos .txt usando rglob (recursive glob)
-    archivos = sorted(CARPETA.rglob("*.txt"))
-
+    
     print("\n" + "=" * 60)
     print("CARGANDO BASE DE CONOCIMIENTO...")
     print("=" * 60)
 
-    for i, archivo in enumerate(archivos, start=1):
-        # Mostramos la ruta relativa para identificar de qué subcarpeta viene
-        rel_path = archivo.relative_to(CARPETA)
-        print(f"[{i:02}/{len(archivos)}] ✅ {rel_path}")
+    # 1. Ruta absoluta y diagnóstico de la carpeta
+    ruta_absoluta = CARPETA.resolve()
+    print(f"Ruta absoluta de conocimiento: {ruta_absoluta}")
+    print(f"¿Existe?: {ruta_absoluta.exists()}")
+
+    # 2. Variables para conteo y listado
+    encontrados_txt = []
+    carpetas_encontradas = set()
+    archivos_encontrados = []
+
+    # 3. Recorrer recursivamente la carpeta con os.walk() para obtener estructura
+    if ruta_absoluta.exists():
+        for root, dirs, files in os.walk(str(ruta_absoluta)):
+            root_path = Path(root)
+            rel_root = root_path.relative_to(ruta_absoluta) if root_path != ruta_absoluta else Path('.')
+            # Guardamos la ruta de la carpeta relativa para listarla
+            if str(rel_root) != '.':
+                carpetas_encontradas.add(str(rel_root))
+            
+            for file in files:
+                if file.lower().endswith('.txt'):
+                    full_path = root_path / file
+                    encontrados_txt.append(full_path)
+                    archivos_encontrados.append(str(full_path.relative_to(ruta_absoluta)))
+
+        # 4. Imprimir listado de carpetas
+        print("\nListado de carpetas encontradas:")
+        if not carpetas_encontradas:
+            print("  (Solo la raíz)")
+        for carpeta in sorted(carpetas_encontradas):
+            print(f"  📁 {carpeta}")
+
+        # 5. Imprimir listado de archivos
+        print("\nListado de archivos encontrados:")
+        for archivo in sorted(archivos_encontrados):
+            print(f"  📄 {archivo}")
+
+        print(f"\nTOTAL TXT ENCONTRADOS: {len(encontrados_txt)}")
+
+        # 6. Si no encuentra nada, imprime la estructura completa del árbol y aborta
+        if len(encontrados_txt) == 0:
+            print("\n🟡 ADVERTENCIA: NO SE ENCONTRARON ARCHIVOS .TXT. ESTRUCTURA COMPLETA DEL DIRECTORIO:")
+            for root, dirs, files in os.walk(str(ruta_absoluta)):
+                nivel = root.replace(str(ruta_absoluta), '').count(os.sep)
+                indent = ' ' * (nivel * 2)
+                print(f"{indent}📁 {Path(root).name}/")
+                for file in files:
+                    print(f"{indent}   📄 {file}")
+            return ""  # No cargar nada si hay 0 archivos
+
+    else:
+        print(f"❌ ERROR: La carpeta '{ruta_absoluta}' NO EXISTE.")
+        return ""
+
+    # 7. Cargar recursivamente los archivos .txt encontrados (insensible a mayúsculas)
+    print("=" * 60)
+    for full_path in sorted(encontrados_txt):
+        rel_path = full_path.relative_to(ruta_absoluta)
         try:
-            contenido = archivo.read_text(encoding="utf-8", errors="ignore")
+            contenido = full_path.read_text(encoding="utf-8", errors="ignore")
             bloque = f"""
 
 ==================================================
@@ -152,13 +204,12 @@ FIN DEL ARCHIVO
 
 """
             knowledge += bloque
-            # Guardamos con clave = ruta relativa para evitar colisiones
             CONOCIMIENTO_POR_ARCHIVO[str(rel_path)] = bloque
         except Exception as e:
             print(f"❌ Error leyendo {rel_path}: {e}")
 
     print("\n" + "=" * 60)
-    print("TOTAL DE ARCHIVOS :", len(archivos))
+    print(f"TOTAL TXT CARGADOS: {len(CONOCIMIENTO_POR_ARCHIVO)}")
     print("TOTAL CARACTERES  :", len(knowledge))
     print("=" * 60 + "\n")
 
@@ -297,7 +348,8 @@ def obtener_sesion(numero):
                 pedido_db = crm.cargar_pedido(cliente)
                 pedido_previo = crm.pedido_para_ram(pedido_db)
                 if pedido_db:
-                    pedido_id = pedido_db["id"]
+                    # 🔥 CORRECCIÓN: Usar punto en lugar de corchetes para el objeto PedidoData
+                    pedido_id = pedido_db.id
                 if mensajes_previos or (pedido_previo and any(pedido_previo.values())):
                     print(f"♻️ Sesión de {numero} hidratada desde SQLite ({len(mensajes_previos)} mensajes previos, pedido ID {pedido_id})")
             except Exception as e:
@@ -905,9 +957,9 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
         try:
             crm.guardar_respuesta(cliente, respuesta)
             crm.sincronizar_pedido(cliente, sesion["pedido"])
-            # Actualizar pedido_id en sesión
             pedido_db = crm.cargar_pedido(cliente)
-            sesion["pedido_id"] = pedido_db["id"] if pedido_db else None
+            # 🔥 CORRECCIÓN: Usar punto en lugar de corchetes para obtener el ID
+            sesion["pedido_id"] = pedido_db.id if pedido_db else None
         except Exception as e:
             print("⚠️ Error guardando en CRM (el bot sigue funcionando con RAM):", repr(e))
 

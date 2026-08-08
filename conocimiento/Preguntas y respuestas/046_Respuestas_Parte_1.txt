@@ -28,14 +28,6 @@ RESPUESTAS LISTAS - PARTE 1
 
 . ¿Te gustaría que te sugiera las opciones más vendidas para tu evento?
 
-. ¡Perfecto! Ya casi terminamos.
-Solo necesito confirmar:
-• Producto
-• Cantidad
-• Fecha
-• Colores
-• Entrega
-
 . En cuanto confirmemos esos datos podremos iniciar tu pedido.
 
 . Gracias por confiar en Recuerditos Dalia. 😊

@@ -5,30 +5,67 @@ from openai import OpenAI
 def cargar_base_conocimiento() -> str:
     """
     Lee TODOS los archivos .txt de la carpeta conocimiento/ y sus subcarpetas.
+    Imprime diagnóstico detallado.
     """
     knowledge_text = ""
     # 1. Definir el directorio base
     knowledge_dir = os.path.join(os.path.dirname(__file__), 'conocimiento')
     
-    # 2. Buscar recursivamente en todas las subcarpetas (**/*.txt)
+    # 2. Diagnóstico: imprimir ruta absoluta
+    print("="*60)
+    print("CARGANDO BASE DE CONOCIMIENTO...")
+    print(f"Ruta de la carpeta conocimiento: {os.path.abspath(knowledge_dir)}")
+    
+    # 3. Verificar si la carpeta existe
+    if not os.path.exists(knowledge_dir):
+        print(f"❌ ERROR: La carpeta '{knowledge_dir}' NO EXISTE.")
+        print("   Verifica que la carpeta 'conocimiento' esté en la misma ubicación que este script.")
+        print("="*60)
+        return ""
+    
+    if not os.path.isdir(knowledge_dir):
+        print(f"❌ ERROR: '{knowledge_dir}' no es un directorio.")
+        print("="*60)
+        return ""
+
+    # 4. Buscar recursivamente en todas las subcarpetas (**/*.txt)
     try:
         files = glob.glob(os.path.join(knowledge_dir, '**', '*.txt'), recursive=True)
-        files.sort() # Orden alfabético para mantener consistencia
+        files.sort()  # Orden alfabético para consistencia
         
-        if not files:
-            print("⚠️ No se encontraron archivos .txt en la carpeta conocimiento/ o sus subcarpetas.")
+        total_archivos = len(files)
+        total_caracteres = 0
+        
+        if total_archivos == 0:
+            print(f"⚠️ No se encontraron archivos .txt en: {os.path.abspath(knowledge_dir)}")
+            print("   Posibles causas: la carpeta está vacía, o los archivos tienen otra extensión.")
+            print("="*60)
             return ""
 
+        # 5. Procesar cada archivo y mostrar detalles
         for file_path in files:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
-                # Extraemos el nombre del archivo para dar contexto
+                total_caracteres += len(content)
+                relative_path = os.path.relpath(file_path, knowledge_dir)
+                print(f"✅ {relative_path}  ({len(content)} caracteres)")
+
+        print(f"\nTOTAL DE ARCHIVOS : {total_archivos}")
+        print(f"TOTAL CARACTERES  : {total_caracteres}")
+        print("="*60)
+        
+        # 6. Construir el texto completo para la IA (como antes)
+        for file_path in files:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
                 relative_path = os.path.relpath(file_path, knowledge_dir)
                 knowledge_text += f"\n--- INFORMACIÓN DEL ARCHIVO '{relative_path}' ---\n{content}\n"
                 
         return knowledge_text.strip()
+        
     except Exception as e:
-        print(f"⚠️ Error al cargar la base de conocimiento: {e}")
+        print(f"❌ ERROR al leer los archivos: {e}")
+        print("="*60)
         return ""
 
 def procesar_con_gpt(telefono, texto, historial=None):

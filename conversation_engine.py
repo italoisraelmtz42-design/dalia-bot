@@ -4,35 +4,27 @@ from openai import OpenAI
 
 def encontrar_carpeta_conocimiento() -> str:
     """
-    Busca la carpeta 'conocimiento' en las 3 ubicaciones más probables del contenedor.
-    Retorna la ruta absoluta de la carpeta si la encuentra y tiene archivos .txt.
+    Busca la carpeta 'conocimiento' en la raíz del proyecto.
     """
-    # Candidatas: 1. directorio actual (src), 2. junto a este script, 3. raíz del proyecto
-    base_paths = [
-        os.getcwd(),                            # /opt/render/project/src
-        os.path.dirname(os.path.abspath(__file__)), # /opt/render/project/src
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # /opt/render/project
-    ]
+    # En Render, el código está en /opt/render/project/src/
+    # Como 'conocimiento' está en el mismo nivel que app.py, está en src/
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    ruta_candidata = os.path.join(base_path, 'conocimiento')
     
-    # Eliminar duplicados y probar cada una
-    for base in base_paths:
-        ruta_candidata = os.path.join(base, 'conocimiento')
-        if os.path.isdir(ruta_candidata):
-            # Verificar si tiene archivos .txt
-            archivos = glob.glob(os.path.join(ruta_candidata, '**', '*.txt'), recursive=True)
-            if archivos:
-                print(f"✅ ENCONTRADA: Carpeta 'conocimiento' en {ruta_candidata}")
-                return ruta_candidata
-            else:
-                print(f"⚠️ Encontrada carpeta '{ruta_candidata}', pero está vacía de archivos .txt.")
+    if os.path.isdir(ruta_candidata):
+        return ruta_candidata
     
-    # Si no la encuentra, retorna None
-    print("❌ No se encontró la carpeta 'conocimiento' en ninguna ubicación común.")
+    # Fallback a la raíz del proyecto (si alguna vez cambia la estructura)
+    project_root = os.path.dirname(base_path)
+    ruta_candidata_2 = os.path.join(project_root, 'conocimiento')
+    if os.path.isdir(ruta_candidata_2):
+        return ruta_candidata_2
+    
     return None
 
 def cargar_base_conocimiento() -> str:
     """
-    Lee TODOS los archivos .txt de la carpeta conocimiento/ y sus subcarpetas.
+    Lee TODOS los archivos .txt (sin importar mayúsculas/minúsculas) de la carpeta conocimiento/ y sus subcarpetas.
     """
     knowledge_text = ""
     
@@ -43,20 +35,29 @@ def cargar_base_conocimiento() -> str:
     knowledge_dir = encontrar_carpeta_conocimiento()
     
     if not knowledge_dir:
-        print("   Verifica que la carpeta 'conocimiento' esté en la raíz del proyecto (junto a 'src').")
+        print(f"❌ ERROR: No se encontró la carpeta 'conocimiento'.")
+        print("   Asegúrate de que la carpeta 'conocimiento' esté en el mismo nivel que 'app.py'.")
         print("="*60)
         return ""
 
-    # 2. Buscar recursivamente en todas las subcarpetas (**/*.txt)
+    print(f"✅ Carpeta encontrada en: {os.path.abspath(knowledge_dir)}")
+    
+    # 2. Buscar recursivamente archivos .txt y .TXT (insensible a mayúsculas)
     try:
-        files = glob.glob(os.path.join(knowledge_dir, '**', '*.txt'), recursive=True)
+        # Buscamos tanto .txt como .TXT para cubrir el caso de Linux
+        files_txt = glob.glob(os.path.join(knowledge_dir, '**', '*.txt'), recursive=True)
+        files_TXT = glob.glob(os.path.join(knowledge_dir, '**', '*.TXT'), recursive=True)
+        
+        # Combinamos las listas y eliminamos duplicados (por si acaso)
+        files = list(set(files_txt + files_TXT))
         files.sort()
         
         total_archivos = len(files)
         total_caracteres = 0
         
         if total_archivos == 0:
-            print(f"⚠️ La carpeta '{knowledge_dir}' está vacía o no tiene archivos .txt.")
+            print(f"⚠️ La carpeta '{os.path.abspath(knowledge_dir)}' existe, pero no contiene archivos .txt o .TXT.")
+            print("   Verifica que dentro de las subcarpetas haya archivos con estas extensiones.")
             print("="*60)
             return ""
 

@@ -164,52 +164,47 @@ FIN DEL ARCHIVO
     return knowledge
 
 KNOWLEDGE = cargar_conocimiento()
+CONOCIMIENTO_POR_ARCHIVO = {f"archivo_{i}": block for i, block in enumerate(knowledge.split('==================================================\nARCHIVO:')) if block}
+ARCHIVOS_CONOCIMIENTO_SIEMPRE = set()
 
 def seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=None, top_k=16):
     palabras_clave = {p for p in re.findall(r"[a-záéíóúñ0-9]+", (texto_cliente or "").lower()) if len(p) > 3}
     if historial_reciente:
-        texto_relevancia += " " + " ".join(m.get("content", "") for m in historial_reciente[-4:] if isinstance(m.get("content"), str))
+        historial_text = " ".join(m.get("content", "") for m in historial_reciente[-4:] if isinstance(m.get("content"), str))
+        palabras_clave |= {p for p in re.findall(r"[a-záéíóúñ0-9]+", historial_text.lower()) if len(p) > 3}
 
     puntajes = []
     for nombre, bloque in CONOCIMIENTO_POR_ARCHIVO.items():
         bloque_lower = bloque.lower()
         puntaje = sum(1 for palabra in palabras_clave if palabra in bloque_lower)
         puntajes.append((puntaje, nombre))
-
     puntajes.sort(key=lambda x: x[0], reverse=True)
     seleccionados = {nombre for _, nombre in puntajes[:top_k]}
     seleccionados |= ARCHIVOS_CONOCIMIENTO_SIEMPRE
-
     return "".join(CONOCIMIENTO_POR_ARCHIVO[nombre] for nombre in sorted(seleccionados) if nombre in CONOCIMIENTO_POR_ARCHIVO)
 
 # ===========================
-# SESIONES POR CLIENTE (CACHÉ LIGERA, SOLO PARA RENDIMIENTO)
+# SESIONES POR CLIENTE (CACHÉ LIGERA)
 # ===========================
 sesiones = {}
 sesiones_lock = threading.Lock()
 
-# Ahora la fuente de verdad es SQLite. La RAM solo guarda el historial descargado y el ID del pedido.
 def obtener_sesion(numero):
     with sesiones_lock:
         if numero not in sesiones:
-            # Cargar historial desde SQLite
             mensajes_previos = pedido_manager.chat_cargar_memoria(numero, limite=MAX_TURNOS_HISTORIAL)
-            # Cargar el pedido activo desde SQLite (si existe) o el borrador
             pedido_id = pedido_manager.obtener_pedido_activo(numero)
             pedido_previo = None
             if pedido_id:
                 pedido_obj = pedido_manager.obtener_pedido(pedido_id)
-                pedido_previo = pedido_obj  # Lo guardamos en caché para la conversación actual
+                pedido_previo = pedido_obj
             else:
-                # Si no hay pedido, buscamos el borrador (para mostrarlo en el contexto)
                 borrador = pedido_manager.cargar_borrador_pedido(numero)
                 if borrador:
                     pedido_previo = borrador
                     print(f"♻️ Borrador persistente cargado desde SQLite para {numero}")
-            
             if mensajes_previos or pedido_previo:
                 print(f"♻️ Sesión de {numero} hidratada desde SQLite ({len(mensajes_previos)} mensajes previos, pedido ID {pedido_id})")
-
             sesiones[numero] = {
                 "messages": mensajes_previos,
                 "pedido": pedido_previo,
@@ -224,13 +219,11 @@ def obtener_sesion(numero):
 def construir_system_prompt(estado_resumen, conocimiento=None):
     if conocimiento is None:
         conocimiento = KNOWLEDGE
-    
     ahora = datetime.now(ZONA_HORARIA_NEGOCIO)
     fecha = ahora.strftime("%d/%m/%Y")
     hora = ahora.strftime("%H:%M")
     dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     dia_semana = dias[ahora.weekday()]
-
     return f"""
 Eres DALIA, asesora de ventas de Recuerditos Dalia.
 
@@ -249,14 +242,6 @@ ESTADO ACTUAL DEL PEDIDO (desde base de datos):
 BASE DE CONOCIMIENTO:
 {conocimiento}
 """
-
-def resumen_info_enviada(info_enviada):
-    # (Implementación existente de resumen de información ya enviada)
-    pass
-
-def detectar_info_enviada(texto_respuesta):
-    # (Implementación existente de detección de información ya enviada)
-    pass
 
 TOOLS = [
     {
@@ -285,7 +270,6 @@ TOOLS = [
         },
     },
 ]
-
 if CATALOGO_IMAGENES:
     TOOLS.append({
         "type": "function",
@@ -294,14 +278,15 @@ if CATALOGO_IMAGENES:
             "description": "Envía una foto de producto.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "producto": {"type": "string", "enum": list(CATALOGO_IMAGENES.keys())}
-                },
+                "properties": {"producto": {"type": "string", "enum": list(CATALOGO_IMAGENES.keys())}},
                 "required": ["producto"]
             }
         }
     })
 
+# ===========================
+# ENVIAR MENSAJES
+# ===========================
 def enviar_whatsapp(numero, texto):
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto}}
@@ -326,120 +311,6 @@ def enviar_whatsapp_imagen(numero, image_url, caption=""):
         print(f"⚠️ Excepción enviando imagen: {e}")
         return None
 
-# ===========================
-# PREGUNTAR A OPENAI
-# ===========================
-def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
-    sesion = obtener_sesion(numero)
-    historial = sesion["messages"]
-    pedido_cache = sesion["pedido"]
-    pedido_id = sesion["pedido_id"]
-
-    # 1. Construir el estado del pedido desde SQLite
-    estado_resumen = "Sin pedido activo."
-    if pedido_id:
-        pedido_db = pedido_manager.obtener_pedido(pedido_id)
-        if pedido_db:
-            estado_resumen = f"Pedido oficial: Folio {pedido_db.folio}, {pedido_db.estado}"
-    elif pedido_cache:
-        estado_resumen = f"Borrador actual: {json.dumps(pedido_cache, ensure_ascii=False)}"
-
-    # 2. Construir mensajes
-    system_prompt = construir_system_prompt(estado_resumen)
-    mensajes = [{"role": "system", "content": system_prompt}] + historial
-    
-    if imagen_base64:
-        contenido_usuario = [
-            {"type": "text", "text": texto_cliente or "(El cliente mandó una imagen)"},
-            {"type": "image_url", "image_url": {"url": f"data:{imagen_mime};base64,{imagen_base64}"}}
-        ]
-    else:
-        contenido_usuario = texto_cliente
-    mensajes.append({"role": "user", "content": contenido_usuario})
-
-    # 3. Llamar a OpenAI
-    response = client.chat.completions.create(
-        model=MODELO,
-        messages=mensajes,
-        tools=TOOLS,
-        temperature=0.4,
-        top_p=0.9,
-        max_tokens=600
-    )
-
-    choice = response.choices[0]
-    mensaje = choice.message
-
-    # 4. Procesar herramientas
-    if mensaje.tool_calls:
-        for tool_call in mensaje.tool_calls:
-            args = json.loads(tool_call.function.arguments)
-            if tool_call.function.name == "actualizar_pedido":
-                # La acción se ejecutará al final de este flujo, en sincronizar_pedido
-                pass
-            elif tool_call.function.name == "mostrar_foto_producto":
-                clave = args.get("producto")
-                url = url_imagen_producto(clave)
-                if url:
-                    enviar_whatsapp_imagen(numero, url, caption=CATALOGO_IMAGENES[clave]["nombre_mostrar"])
-        # Refinar respuesta si es necesario
-        respuesta = mensaje.content or "He actualizado tu pedido."
-    else:
-        respuesta = mensaje.content or "Disculpa, ¿me repites?"
-
-    # 5. Guardar la respuesta del bot en SQLite
-    pedido_manager.chat_guardar_mensaje(numero, respuesta, "bot")
-    
-    # 6. Retornar respuesta
-    return respuesta
-
-# ===========================
-# PROCESAMIENTO DE MENSAJES
-# ===========================
-def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
-    print("=" * 70)
-    print(f"🚀 Procesando mensaje de {numero}")
-    print(f"💬 Texto recibido: {texto_cliente}")
-
-    # Descargar imagen si existe
-    imagen_base64 = None
-    imagen_mime = None
-    if media_id_imagen:
-        print("🖼️ El cliente mandó una imagen (Vision), descargándola...")
-        contenido, mime = descargar_imagen_whatsapp(media_id_imagen)
-        if contenido:
-            imagen_base64 = base64.b64encode(contenido).decode("utf-8")
-            imagen_mime = mime
-            print(f"✅ Imagen descargada ({len(contenido)} bytes, {mime})")
-        else:
-            print("❌ No se pudo descargar la imagen del cliente, se sigue solo con el texto")
-
-    # 1. Guardar el mensaje del cliente en SQLite (Historial)
-    pedido_manager.chat_guardar_mensaje(numero, texto_cliente or "(imagen sin texto)", "usuario")
-
-    # 2. Consultar a OpenAI
-    try:
-        print("🧠 Consultando OpenAI...")
-        respuesta = preguntar_ia(numero, texto_cliente, imagen_base64=imagen_base64, imagen_mime=imagen_mime)
-        print("✅ Respuesta generada")
-        print(respuesta[:300])
-    except Exception as e:
-        print(f"❌ Error llamando a OpenAI: {e}")
-        respuesta = "Disculpa, tuve un problema técnico. ¿Me puedes repetir tu mensaje? 🙂"
-
-    # 3. Sincronizar el estado con SQLite (crm.sincronizar_pedido ahora actualiza el borrador o crea el pedido)
-    try:
-        # Extraemos datos de la herramienta? No, la sincronización se hará basada en la conversación.
-        crm.sincronizar_pedido(numero, sesiones.get(numero, {}).get("pedido", {}))
-    except Exception as e:
-        print(f"⚠️ Error guardando en CRM (el bot sigue funcionando con RAM): {e}")
-
-    # 4. Enviar respuesta a WhatsApp
-    print("📤 Enviando respuesta a WhatsApp...")
-    enviar_whatsapp(numero, respuesta)
-    print("🏁 Fin procesamiento")
-    print("=" * 70)
-
 def descargar_imagen_whatsapp(media_id):
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
     try:
@@ -461,6 +332,124 @@ def descargar_imagen_whatsapp(media_id):
     except Exception as e:
         print(f"⚠️ Excepción descargando imagen: {e}")
         return None, None
+
+# ===========================
+# PREGUNTAR A OPENAI
+# ===========================
+def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
+    sesion = obtener_sesion(numero)
+    historial = sesion["messages"]
+    pedido_cache = sesion["pedido"]
+    pedido_id = sesion["pedido_id"]
+
+    # Construir estado del pedido
+    estado_resumen = "Sin pedido activo."
+    if pedido_id:
+        pedido_db = pedido_manager.obtener_pedido(pedido_id)
+        if pedido_db:
+            estado_resumen = f"Pedido oficial: Folio {pedido_db.folio}, {pedido_db.estado}"
+    elif pedido_cache:
+        estado_resumen = f"Borrador actual: {json.dumps(pedido_cache, ensure_ascii=False)}"
+
+    system_prompt = construir_system_prompt(estado_resumen)
+    mensajes = [{"role": "system", "content": system_prompt}] + historial
+
+    if imagen_base64:
+        contenido_usuario = [
+            {"type": "text", "text": texto_cliente or "(El cliente mandó una imagen)"},
+            {"type": "image_url", "image_url": {"url": f"data:{imagen_mime};base64,{imagen_base64}"}}
+        ]
+    else:
+        contenido_usuario = texto_cliente
+    mensajes.append({"role": "user", "content": contenido_usuario})
+
+    response = client.chat.completions.create(
+        model=MODELO,
+        messages=mensajes,
+        tools=TOOLS,
+        temperature=0.4,
+        top_p=0.9,
+        max_tokens=600
+    )
+
+    choice = response.choices[0]
+    mensaje = choice.message
+
+    # Procesar herramientas
+    if mensaje.tool_calls:
+        for tool_call in mensaje.tool_calls:
+            args = json.loads(tool_call.function.arguments)
+            if tool_call.function.name == "actualizar_pedido":
+                # 🔥 Aplicar los cambios al caché de la sesión
+                if not pedido_cache or isinstance(pedido_cache, dict):
+                    # Si es un dict, actualizamos directamente
+                    if not pedido_cache:
+                        pedido_cache = {}
+                    # Fusionamos los argumentos
+                    pedido_cache.update({k: v for k, v in args.items() if v is not None})
+                else:
+                    # Si es PedidoData, lo convertimos a dict y actualizamos
+                    pedido_cache = {k: v for k, v in vars(pedido_cache).items() if v is not None}
+                    pedido_cache.update({k: v for k, v in args.items() if v is not None})
+                sesion["pedido"] = pedido_cache
+            elif tool_call.function.name == "mostrar_foto_producto":
+                clave = args.get("producto")
+                url = url_imagen_producto(clave)
+                if url:
+                    enviar_whatsapp_imagen(numero, url, caption=CATALOGO_IMAGENES[clave]["nombre_mostrar"])
+        respuesta = mensaje.content or "He actualizado tu pedido."
+    else:
+        respuesta = mensaje.content or "Disculpa, ¿me repites?"
+
+    # Guardar la respuesta del bot en SQLite
+    pedido_manager.chat_guardar_mensaje(numero, respuesta, "bot")
+    return respuesta
+
+# ===========================
+# PROCESAMIENTO DE MENSAJES
+# ===========================
+def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
+    print("=" * 70)
+    print(f"🚀 Procesando mensaje de {numero}")
+    print(f"💬 Texto recibido: {texto_cliente}")
+
+    imagen_base64 = None
+    imagen_mime = None
+    if media_id_imagen:
+        print("🖼️ El cliente mandó una imagen (Vision), descargándola...")
+        contenido, mime = descargar_imagen_whatsapp(media_id_imagen)
+        if contenido:
+            imagen_base64 = base64.b64encode(contenido).decode("utf-8")
+            imagen_mime = mime
+            print(f"✅ Imagen descargada ({len(contenido)} bytes, {mime})")
+        else:
+            print("❌ No se pudo descargar la imagen del cliente, se sigue solo con el texto")
+
+    # Guardar mensaje del cliente en SQLite (historial)
+    pedido_manager.chat_guardar_mensaje(numero, texto_cliente or "(imagen sin texto)", "usuario")
+
+    # Consultar a OpenAI
+    try:
+        print("🧠 Consultando OpenAI...")
+        respuesta = preguntar_ia(numero, texto_cliente, imagen_base64=imagen_base64, imagen_mime=imagen_mime)
+        print("✅ Respuesta generada")
+        print(respuesta[:300])
+    except Exception as e:
+        print(f"❌ Error llamando a OpenAI: {e}")
+        respuesta = "Disculpa, tuve un problema técnico. ¿Me puedes repetir tu mensaje? 🙂"
+
+    # Sincronizar con SQLite (el borrador o pedido se actualizará en crm.sincronizar_pedido)
+    try:
+        cliente = crm.cargar_cliente(numero)
+        crm.sincronizar_pedido(cliente, sesion["pedido"] if numero in sesiones else {})
+    except Exception as e:
+        print(f"⚠️ Error guardando en CRM (el bot sigue funcionando con RAM): {e}")
+
+    # Enviar respuesta
+    print("📤 Enviando respuesta a WhatsApp...")
+    enviar_whatsapp(numero, respuesta)
+    print("🏁 Fin procesamiento")
+    print("=" * 70)
 
 # ===========================
 # WEBHOOKS
@@ -510,10 +499,8 @@ def handle_message():
 
         texto_cliente = mensaje["text"]["body"]
         threading.Thread(target=procesar_mensaje_en_fondo, args=(numero, texto_cliente), daemon=True).start()
-
     except Exception as e:
         print("Evento sin mensaje de texto reconocible:", e)
-
     return jsonify({"status": "ok"}), 200
 
 def verificar_firma_webhook(payload_bytes, firma_header):
@@ -527,7 +514,7 @@ def verificar_firma_webhook(payload_bytes, firma_header):
     return hmac.compare_digest(firma_esperada, firma_recibida)
 
 def ya_fue_procesado(mensaje_id):
-    # (Lógica estándar de deduplicación de mensajes)
+    # (Deduplicación básica)
     return False
 
 def procesar_mensaje_no_soportado(numero, tipo):

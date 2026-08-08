@@ -336,6 +336,9 @@ def info_enviada_vacia():
     }
 
 
+# ==============================================================================
+# 🔴 CAMBIO CLAVE 1: HIDRATACIÓN DE SESIÓN DESDE BORRADOR
+# ==============================================================================
 def obtener_sesion(numero):
     with sesiones_lock:
         if numero not in sesiones:
@@ -349,6 +352,14 @@ def obtener_sesion(numero):
                 pedido_previo = crm.pedido_para_ram(pedido_db)
                 if pedido_db:
                     pedido_id = pedido_db.id
+                
+                # Si no hay pedido oficial, intentamos cargar el BORRADOR persistente
+                if not pedido_previo or not any(pedido_previo.values()):
+                    borrador = pedido_manager.cargar_borrador_pedido(numero)
+                    if borrador:
+                        pedido_previo = borrador
+                        print(f"♻️ Borrador persistente cargado desde SQLite para {numero}")
+                
                 if mensajes_previos or (pedido_previo and any(pedido_previo.values())):
                     print(f"♻️ Sesión de {numero} hidratada desde SQLite ({len(mensajes_previos)} mensajes previos, pedido ID {pedido_id})")
             except Exception as e:
@@ -968,6 +979,12 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
 
         try:
             crm.guardar_respuesta(cliente, respuesta)
+            
+            # ==========================================================================
+            # 🔴 CAMBIO CLAVE 2: GUARDAR BORRADOR EN CADA MENSAJE (ANTES DE SINCRONIZAR)
+            # ==========================================================================
+            pedido_manager.guardar_borrador_pedido(numero, sesion["pedido"])
+            
             crm.sincronizar_pedido(cliente, sesion["pedido"])
             pedido_db = crm.cargar_pedido(cliente)
             sesion["pedido_id"] = pedido_db.id if pedido_db else None

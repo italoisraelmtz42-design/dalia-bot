@@ -53,7 +53,7 @@ def cargar_pedido(cliente):
     return None
 
 # ==============================================================================
-# 🔧 sincronizar_pedido CORREGIDO – maneja None, dict y cualquier objeto
+# sincronizar_pedido (sin cambios mayores, ya maneja None y conversión)
 # ==============================================================================
 def sincronizar_pedido(*args, **kwargs):
     cliente = args[0] if args else {}
@@ -61,7 +61,6 @@ def sincronizar_pedido(*args, **kwargs):
     if kwargs:
         datos_pedido.update(kwargs)
 
-    # Normalizar cliente (puede ser string o dict)
     if isinstance(cliente, str):
         cliente = {"numero": cliente}
     telefono = cliente.get('numero')
@@ -69,32 +68,21 @@ def sincronizar_pedido(*args, **kwargs):
         logger_crm.error("sincronizar_pedido invocada sin un objeto cliente válido.")
         return {}
 
-    # 1. Cargar borrador desde SQLite
     borrador = pedido_manager.cargar_borrador_pedido(telefono) or {}
-    
-    # 2. Fusionar con los nuevos datos (si datos_pedido no es None ni dict, lo convertimos)
     if datos_pedido is None:
         datos_pedido = {}
     elif not isinstance(datos_pedido, dict):
-        # Intentar convertir a dict usando asdict si es dataclass, o __dict__, o str()
         try:
             if hasattr(datos_pedido, '__dict__'):
                 datos_pedido = datos_pedido.__dict__
             else:
-                # Si es un objeto sin __dict__, intentamos serializar a dict con asdict (si es dataclass)
                 from dataclasses import asdict
                 datos_pedido = asdict(datos_pedido)
         except:
-            # Fallback: convertir a string y ponerlo en una nota
             datos_pedido = {"_raw": str(datos_pedido)}
-    
-    # Ahora datos_pedido es un dict
     borrador.update({k: v for k, v in datos_pedido.items() if v is not None})
 
-    # 3. Comprobar si debemos crear el pedido oficial
-    debe_crear = (
-        datos_pedido.get('anticipo_confirmado') is True
-    )
+    debe_crear = datos_pedido.get('anticipo_confirmado') is True
     if debe_crear:
         pedido_id = pedido_manager.obtener_pedido_activo(telefono)
         if not pedido_id:
@@ -105,14 +93,12 @@ def sincronizar_pedido(*args, **kwargs):
         else:
             logger_crm.info("ℹ️ Ya existe un pedido oficial, no se crea otro.")
     else:
-        # Guardar/actualizar borrador
         pedido_manager.guardar_borrador_pedido(telefono, borrador)
         logger_crm.info(f"📝 Borrador actualizado para el teléfono {telefono}")
-
     return None
 
 # ==============================================================================
-# El resto de funciones se mantienen sin cambios
+# El resto de funciones (detectar intención, etc.) se mantienen igual
 # ==============================================================================
 def _detectar_intencion_pedido(texto: str) -> bool:
     return sum(1 for p in ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo"] if p in texto.lower()) >= 2

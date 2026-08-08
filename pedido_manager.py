@@ -13,6 +13,11 @@ from constantes import (
 from validators import validar_estado, validar_transicion
 
 # ==============================================================================
+# 🟢 [DEBUG] MARCADOR DE VERSIÓN (Para verificar en los logs de Render)
+# ==============================================================================
+print("🟢 [DEBUG] Cargando nueva versión de pedido_manager.py con obtener_pedido()")
+
+# ==============================================================================
 # # EVENTOS INTERNOS
 # ==============================================================================
 def _registrar_evento(pedido_id: int, evento: str, descripcion: str = None,
@@ -58,7 +63,7 @@ def uso_registrar_openai(telefono: str):
         conn.commit()
 
 # ==============================================================================
-# # MOTOR DE BORRADORES (NUEVO)
+# # MOTOR DE BORRADORES
 # ==============================================================================
 def guardar_borrador_pedido(telefono: str, datos_pedido: dict):
     """Guarda el borrador del pedido en la tabla `borradores_pedido`."""
@@ -234,15 +239,21 @@ def eliminar_producto(item_id: int):
         logger_pedidos.error(f"[eliminar_producto] ❌ Error: {e}")
         raise e
 
-# ... (Las funciones de cálculo y validación se mantienen igual) ...
+# ==============================================================================
+# # CÁLCULOS (imprescindibles para generar_resumen)
+# ==============================================================================
 def calcular_subtotal(pedido_id: int) -> float:
     with get_db_connection() as conn:
         return conn.cursor().execute("SELECT SUM(subtotal) FROM pedido_items WHERE pedido_id = ?", (pedido_id,)).fetchone()[0] or 0.0
+
 def calcular_envio(pedido_id: int) -> float:
     with get_db_connection() as conn:
         row = conn.cursor().execute("SELECT costo_envio FROM entregas WHERE pedido_id = ?", (pedido_id,)).fetchone()
         return row[0] if row else 0.0
-def calcular_total(pedido_id: int) -> float: return calcular_subtotal(pedido_id) + calcular_envio(pedido_id)
+
+def calcular_total(pedido_id: int) -> float:
+    return calcular_subtotal(pedido_id) + calcular_envio(pedido_id)
+
 def calcular_saldo(pedido_id: int) -> float:
     total = calcular_total(pedido_id)
     with get_db_connection() as conn:
@@ -250,9 +261,14 @@ def calcular_saldo(pedido_id: int) -> float:
         cursor.execute("SELECT SUM(monto) FROM pagos WHERE pedido_id = ? AND confirmado = 1", (pedido_id,))
         pagado = cursor.fetchone()[0] or 0.0
         return round(total - pagado, 2)
+
+# ==============================================================================
+# # VALIDACIONES Y ESTADOS
+# ==============================================================================
 def pedido_es_cotizable(pedido_id: int) -> bool:
     p = obtener_pedido(pedido_id)
     return bool(p and p.items and all(i.producto and i.cantidad > 0 for i in p.items))
+
 def pedido_esta_completo(pedido_id: int) -> bool:
     p = obtener_pedido(pedido_id)
     if not p or not p.items: return False
@@ -261,46 +277,72 @@ def pedido_esta_completo(pedido_id: int) -> bool:
     if e.tipo_entrega == "Domicilio" and (not e.direccion or not e.municipio): return False
     return all((i.producto and i.cantidad and i.color_toalla and i.color_moño and
                 i.tipo_jaboncito and i.nombre_bebe and i.tarjetita) for i in p.items)
+
 def obtener_campos_faltantes(pedido_id: int) -> List[Dict[str, int]]:
     p = obtener_pedido(pedido_id)
     if not p: return []
     if not p.items: return [{"campo": "producto", "prioridad": 10}]
     i, e = p.items[0], p.entrega
     f = []
-    if not i.color_toalla: f.append({"campo": "color_toalla", "prioridad": 5})
-    if not i.color_moño: f.append({"campo": "color_moño", "prioridad": 5})
-    if not i.tipo_jaboncito: f.append({"campo": "tipo_jaboncito", "prioridad": 4})
-    if not i.nombre_bebe: f.append({"campo": "nombre_bebe", "prioridad": 3})
-    if not i.tarjetita: f.append({"campo": "tarjetita", "prioridad": 2})
-    if not e: f.append({"campo": "tipo_entrega", "prioridad": 7})
+    if not i.color_toalla:
+        f.append({"campo": "color_toalla", "prioridad": 5})
+    if not i.color_moño:
+        f.append({"campo": "color_moño", "prioridad": 5})
+    if not i.tipo_jaboncito:
+        f.append({"campo": "tipo_jaboncito", "prioridad": 4})
+    if not i.nombre_bebe:
+        f.append({"campo": "nombre_bebe", "prioridad": 3})
+    if not i.tarjetita:
+        f.append({"campo": "tarjetita", "prioridad": 2})
+    if not e:
+        f.append({"campo": "tipo_entrega", "prioridad": 7})
     else:
-        if not e.fecha_entrega: f.append({"campo": "fecha_entrega", "prioridad": 6})
+        if not e.fecha_entrega:
+            f.append({"campo": "fecha_entrega", "prioridad": 6})
         if e.tipo_entrega == "Domicilio":
-            if not e.direccion: f.append({"campo": "direccion", "prioridad": 7})
-            if not e.municipio: f.append({"campo": "municipio", "prioridad": 7})
+            if not e.direccion:
+                f.append({"campo": "direccion", "prioridad": 7})
+            if not e.municipio:
+                f.append({"campo": "municipio", "prioridad": 7})
     return f
+
 def obtener_porcentaje_completitud(pedido_id: int) -> int:
     p = obtener_pedido(pedido_id)
-    if not p or not p.items: return 0
+    if not p or not p.items:
+        return 0
     i, e = p.items[0], p.entrega
     w = 0
-    if i.producto: w += PESOS_COMPLETITUD['producto']
-    if i.cantidad > 0: w += PESOS_COMPLETITUD['cantidad']
-    if i.color_toalla and i.color_moño: w += PESOS_COMPLETITUD['colores']
+    if i.producto:
+        w += PESOS_COMPLETITUD['producto']
+    if i.cantidad > 0:
+        w += PESOS_COMPLETITUD['cantidad']
+    if i.color_toalla and i.color_moño:
+        w += PESOS_COMPLETITUD['colores']
     if e and e.fecha_entrega and e.tipo_entrega:
         w += PESOS_COMPLETITUD['fecha']
-        if (e.tipo_entrega == "Domicilio" and e.direccion and e.municipio) or (e.tipo_entrega == "Local"): w += PESOS_COMPLETITUD['entrega']
-    if i.nombre_bebe: w += PESOS_COMPLETITUD['nombre_bebe']
-    if i.tarjetita: w += PESOS_COMPLETITUD['tarjetita']
+        if (e.tipo_entrega == "Domicilio" and e.direccion and e.municipio) or (e.tipo_entrega == "Local"):
+            w += PESOS_COMPLETITUD['entrega']
+    if i.nombre_bebe:
+        w += PESOS_COMPLETITUD['nombre_bebe']
+    if i.tarjetita:
+        w += PESOS_COMPLETITUD['tarjetita']
     return int((w / sum(PESOS_COMPLETITUD.values())) * 100)
+
 def cambiar_estado(pedido_id: int, nuevo_estado: str, usuario: str = "sistema"):
-    if not validar_estado(nuevo_estado): raise ValueError(f"Estado '{nuevo_estado}' inválido.")
+    if not validar_estado(nuevo_estado):
+        raise ValueError(f"Estado '{nuevo_estado}' inválido.")
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT estado FROM pedidos WHERE id = ?", (pedido_id,))
         row = cursor.fetchone()
-        if not row: raise ValueError("Pedido no encontrado.")
-        if not validar_transicion(row[0], nuevo_estado): raise ValueError(f"Transición inválida: {row[0]} -> {nuevo_estado}")
+        if not row:
+            raise ValueError("Pedido no encontrado.")
+        if not validar_transicion(row[0], nuevo_estado):
+            raise ValueError(f"Transición inválida: {row[0]} -> {nuevo_estado}")
         actualizar_pedido(pedido_id, usuario=usuario, estado=nuevo_estado)
-def desactivar_bot(pedido_id: int): actualizar_pedido(pedido_id, modo_atencion=ModoAtencion.DALIA.value)
-def activar_bot(pedido_id: int): actualizar_pedido(pedido_id, modo_atencion=ModoAtencion.BOT.value)
+
+def desactivar_bot(pedido_id: int):
+    actualizar_pedido(pedido_id, modo_atencion=ModoAtencion.DALIA.value)
+
+def activar_bot(pedido_id: int):
+    actualizar_pedido(pedido_id, modo_atencion=ModoAtencion.BOT.value)

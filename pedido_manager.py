@@ -256,6 +256,74 @@ def obtener_pedido(pedido_id: int) -> Optional[PedidoData]:
         entrega = EntregaData(**dict(entrega_row)) if entrega_row else None
         return PedidoData(**pedido_dict, items=items, pagos=pagos, entrega=entrega)
 
+def generar_resumen(pedido_id: Optional[int] = None, borrador: Optional[dict] = None) -> str:
+    """
+    Genera el texto de resumen del pedido que se inserta en el system prompt.
+    - Si hay pedido_id (pedido oficial confirmado), resume desde la tabla `pedidos`.
+    - Si no, resume desde el borrador (dict con los campos que el cliente ha
+      ido confirmando, aunque el pedido oficial todavía no exista).
+    - Si no hay ni pedido oficial ni borrador con datos, indica que no hay
+      pedido activo.
+    """
+    if pedido_id:
+        pedido = obtener_pedido(pedido_id)
+        if pedido:
+            partes = [f"Pedido oficial confirmado (folio {pedido.folio}, estado {pedido.estado})."]
+            for item in pedido.items:
+                partes.append(
+                    f"- {item.cantidad} x {item.producto} "
+                    f"(toalla {item.color_toalla or 'sin especificar'}, "
+                    f"moño {item.color_moño or 'sin especificar'}, "
+                    f"jaboncito {item.tipo_jaboncito or 'sin especificar'} "
+                    f"color {item.color_jaboncito or 'sin especificar'})"
+                )
+                if item.nombre_bebe:
+                    partes.append(f"  Nombre para personalizar: {item.nombre_bebe}")
+                if item.tarjetita:
+                    partes.append(f"  Tarjetita: {item.tarjetita}")
+            if pedido.entrega:
+                partes.append(
+                    f"Entrega: {pedido.entrega.tipo_entrega}"
+                    + (f", municipio {pedido.entrega.municipio}" if pedido.entrega.municipio else "")
+                    + (f", dirección {pedido.entrega.direccion}" if pedido.entrega.direccion else "")
+                    + (f", fecha {pedido.entrega.fecha_entrega}" if pedido.entrega.fecha_entrega else "")
+                )
+            if pedido.pagos:
+                partes.append("Anticipo/pago ya confirmado por el cliente.")
+            return "\n".join(partes)
+
+    if borrador and any(v not in (None, "", []) for v in borrador.values()):
+        etiquetas = {
+            "producto": "Producto",
+            "cantidad": "Cantidad",
+            "evento": "Evento",
+            "fecha_evento": "Fecha de entrega/evento",
+            "color_toalla": "Color de toalla",
+            "color_mono": "Color de moño",
+            "color_velita": "Color de velita",
+            "tipo_entrega": "Tipo de entrega",
+            "direccion": "Dirección",
+            "municipio": "Municipio",
+            "anticipo_confirmado": "Anticipo confirmado",
+            "tipo_jaboncito": "Tipo de jaboncito",
+            "color_jaboncito": "Color de jaboncito",
+            "nombre_bebe": "Nombre del bebé",
+            "tarjetita": "Tarjetita",
+            "notas": "Notas",
+        }
+        lineas = ["Borrador en progreso (aún no confirmado formalmente):"]
+        for campo, etiqueta in etiquetas.items():
+            valor = borrador.get(campo)
+            if valor not in (None, "", []):
+                lineas.append(f"- {etiqueta}: {valor}")
+        faltantes = [etiquetas[c] for c in etiquetas if borrador.get(c) in (None, "", [])]
+        if faltantes:
+            lineas.append(f"Datos aún faltantes: {', '.join(faltantes)}")
+        return "\n".join(lineas)
+
+    return "Sin pedido activo."
+
+
 def actualizar_pedido(pedido_id: int, usuario: str = "sistema", **kwargs):
     # Solo actualiza campos de la tabla pedidos (estado, modo_atencion, etc.)
     if not kwargs:

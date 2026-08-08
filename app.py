@@ -460,11 +460,11 @@ explícitamente.
 """
 
 
-def construir_system_prompt(pedido_id, info_enviada, conocimiento=None):
+def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None):
     if conocimiento is None:
         conocimiento = KNOWLEDGE
 
-    resumen = pedido_manager.generar_resumen(pedido_id) if pedido_id else "Sin pedido activo."
+    resumen = pedido_manager.generar_resumen(pedido_id=pedido_id, borrador=pedido)
 
     ahora = datetime.now(ZONA_HORARIA_NEGOCIO)
     fecha = ahora.strftime("%d/%m/%Y")
@@ -742,7 +742,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
 
     conocimiento_relevante = seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=historial)
 
-    system_prompt = construir_system_prompt(pedido_id, info_enviada, conocimiento=conocimiento_relevante)
+    system_prompt = construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=conocimiento_relevante)
     mensajes_completos = [{"role": "system", "content": system_prompt}] + historial
 
     if len(mensajes_completos) > MAX_TURNOS_HISTORIAL + 1:
@@ -779,7 +779,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
                 })
 
             mensajes_completos[0]["content"] = construir_system_prompt(
-                pedido_id, info_enviada, conocimiento=conocimiento_relevante
+                pedido, pedido_id, info_enviada, conocimiento=conocimiento_relevante
             )
             continue
 

@@ -55,6 +55,9 @@ def cargar_pedido(cliente):
         return pedido_manager.obtener_pedido(pedido_id)
     return None
 
+# ==============================================================================
+# # CORRECCIÓN DE sincronizar_pedido() (PASOS 1, 2 y 3)
+# ==============================================================================
 def sincronizar_pedido(*args, **kwargs):
     cliente = args[0] if args else {}
     datos_pedido = args[1] if len(args) > 1 else {}
@@ -66,7 +69,15 @@ def sincronizar_pedido(*args, **kwargs):
         logger_crm.error("sincronizar_pedido invocada sin un objeto cliente válido.")
         return {}
 
+    logger_crm.info("="*60)
+    logger_crm.info("===== SINCRONIZANDO PEDIDO =====")
+    logger_crm.info(f"Telefono: {telefono}")
+    logger_crm.info(f"Pedido RAM: {datos_pedido}")
+
+    # 1. Buscar el pedido activo
     pedido_id = pedido_manager.obtener_pedido_activo(telefono)
+    
+    # 2. Si no hay pedido y el usuario tiene producto en RAM, crearlo
     if not pedido_id and datos_pedido.get('producto'):
         cliente_id = cliente.get('id', 0)
         try:
@@ -76,6 +87,7 @@ def sincronizar_pedido(*args, **kwargs):
             return {}
 
     if pedido_id:
+        # (Gestión de Productos)
         if datos_pedido.get('producto') and datos_pedido.get('cantidad'):
             try:
                 pedido_manager.agregar_producto(
@@ -93,6 +105,7 @@ def sincronizar_pedido(*args, **kwargs):
             except Exception as e:
                 logger_crm.error(f"Error al agregar producto: {e}")
 
+        # (Gestión de Entrega)
         if datos_pedido.get('tipo_entrega'):
             try:
                 pedido_manager.actualizar_entrega(
@@ -106,6 +119,7 @@ def sincronizar_pedido(*args, **kwargs):
             except Exception as e:
                 logger_crm.error(f"Error al actualizar entrega: {e}")
 
+        # (Gestión de Estados del Pedido)
         update_kwargs = {k: v for k, v in datos_pedido.items() if k in ['estado', 'modo_atencion', 'es_urgente']}
         if update_kwargs:
             try:
@@ -113,7 +127,31 @@ def sincronizar_pedido(*args, **kwargs):
             except Exception as e:
                 logger_crm.error(f"Error al actualizar estado: {e}")
 
+        # ==========================================================================
+        # PASO 3: VERIFICACIÓN INMEDIATA DESPUÉS DE GUARDAR
+        # ==========================================================================
+        logger_crm.info("="*60)
+        logger_crm.info("🔄 Verificando persistencia inmediata...")
+        try:
+            pedido_verificado = pedido_manager.obtener_pedido_activo(telefono)
+            if pedido_verificado:
+                logger_crm.info("✅ Pedido sincronizado correctamente.")
+                logger_crm.info(f"🆔 Pedido ID: {pedido_verificado}")
+                logger_crm.info(f"📱 Cliente: {telefono}")
+                # Recuperamos el objeto completo para obtener el estado
+                pedido_obj = pedido_manager.obtener_pedido(pedido_verificado)
+                if pedido_obj:
+                    logger_crm.info(f"📌 Estado: {pedido_obj.estado}")
+            else:
+                logger_crm.error("❌ ¡ERROR! El pedido se guardó pero NO se pudo recuperar con obtener_pedido_activo() inmediatamente.")
+        except Exception as e:
+            logger_crm.error(f"❌ Excepción durante la verificación inmediata: {e}")
+        logger_crm.info("="*60)
+        # ==========================================================================
+
         return pedido_manager.obtener_pedido(pedido_id)
+    
+    logger_crm.info("ℹ️ No se realizó ninguna acción de sincronización de pedido.")
     return {}
 
 def _detectar_intencion_pedido(texto: str) -> bool:

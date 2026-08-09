@@ -59,6 +59,60 @@ PESOS_COMPLETITUD = {
     'colores': 10, 'nombre_bebe': 5, 'tarjetita': 5
 }
 
+# ==============================================================================
+# REGLAS POR PRODUCTO (corrige Observación 5/6 de la auditoría forense)
+# ------------------------------------------------------------------------------
+# El backend, no el modelo, decide qué campos aplican a cada tipo de producto.
+# "requiere": campos que SÍ deben pedirse para ese producto.
+# Si un producto no hace match con ninguna clave de aquí, se usa la lista
+# COMPLETA de FALTANTES_UNIVERSALES como respaldo (comportamiento anterior).
+#
+# Cómo hace el match: busca si alguna de las palabras clave aparece dentro
+# del texto de pedido["producto"] (en minúsculas). El primer match gana.
+# ==============================================================================
+FALTANTES_UNIVERSALES = [
+    "producto", "cantidad", "fecha_evento", "color_toalla", "color_mono",
+    "color_velita", "tipo_entrega", "direccion", "municipio",
+    "tipo_jaboncito", "color_jaboncito", "nombre_bebe", "tarjetita",
+]
+
+REGLAS_PRODUCTO = {
+    # clave: (palabras clave para hacer match contra pedido["producto"], campos requeridos)
+    "sencillo": {
+        "palabras_clave": ["sencillo", "sin jabon", "sin jabón"],
+        "requiere": ["producto", "cantidad", "fecha_evento", "color_toalla", "tipo_entrega"],
+    },
+    "jaboncito": {
+        "palabras_clave": ["jaboncito", "con jabon", "con jabón"],
+        "requiere": [
+            "producto", "cantidad", "fecha_evento", "color_toalla",
+            "tipo_jaboncito", "color_jaboncito", "tipo_entrega",
+        ],
+    },
+    "velita": {
+        "palabras_clave": ["velita", "vela"],
+        "requiere": [
+            "producto", "cantidad", "fecha_evento", "color_toalla",
+            "color_velita", "tipo_entrega",
+        ],
+    },
+}
+
+
+def campos_requeridos_para(nombre_producto: str) -> list:
+    """Devuelve la lista de campos que de verdad aplican para este producto.
+    Si no hace match con ninguna regla conocida, regresa la lista universal
+    completa (comportamiento anterior, más seguro que asumir de más)."""
+    if not nombre_producto:
+        return FALTANTES_UNIVERSALES
+
+    texto = nombre_producto.lower()
+    for regla in REGLAS_PRODUCTO.values():
+        if any(palabra in texto for palabra in regla["palabras_clave"]):
+            return regla["requiere"]
+
+    return FALTANTES_UNIVERSALES
+
 # --- DATACLASSES (Movidas aquí para evitar ImportError) ---
 @dataclass
 class ItemData:
@@ -84,6 +138,12 @@ class PagoData:
     metodo: str
     comprobante: Optional[str] = None
     confirmado: int = 0
+    # 🔧 AGREGADO: la tabla `pagos` tiene columna `fecha` (con default
+    # CURRENT_TIMESTAMP), pero este dataclass no la declaraba. Nunca se
+    # notó porque, antes de la corrección del bug crítico de pagos
+    # perdidos, la tabla `pagos` siempre estaba vacía para cualquier
+    # pedido (ver Observación adicional de la auditoría forense).
+    fecha: Optional[str] = None
 
 @dataclass
 class EntregaData:

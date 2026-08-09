@@ -8,7 +8,7 @@ from database import get_db_connection
 from constantes import (
     logger_pedidos, EstadoPedido, ModoAtencion, OrigenEvento,
     COLUMNAS_PERMITIDAS_PEDIDOS, PESOS_COMPLETITUD, TRANSICIONES_VALIDAS,
-    PedidoData, ItemData, PagoData, EntregaData
+    PedidoData, ItemData, PagoData, EntregaData, campos_requeridos_para
 )
 from validators import validar_estado, validar_transicion
 
@@ -166,7 +166,11 @@ def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: dict) 
 
         # Insertar items (si existen)
         if borrador.get('producto') and borrador.get('cantidad'):
-            precio = borrador.get('precio_unitario', 0.0)
+            # 🔧 CORREGIDO: antes leía 'precio_unitario' de un campo que
+            # nunca existía en el borrador (siempre quedaba en $0.00).
+            # Ahora el modelo lo captura vía actualizar_pedido cuando le
+            # informa el precio al cliente (ver TOOLS en app.py).
+            precio = borrador.get('precio_unitario') or 0.0
             subtotal = borrador['cantidad'] * precio
             sql_item = """
                 INSERT INTO pedido_items (pedido_id, producto, cantidad, precio_unitario, subtotal,
@@ -181,7 +185,11 @@ def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: dict) 
                 precio,
                 subtotal,
                 borrador.get('color_toalla'),
-                borrador.get('color_moño'),
+                # 🔧 CORREGIDO: el borrador guarda 'color_mono' (sin tilde,
+                # así está definido en TOOLS/pedido_vacio de app.py). Antes
+                # se leía 'color_moño' (con tilde), que nunca existía, y el
+                # color del moño se perdía silenciosamente al confirmar.
+                borrador.get('color_mono'),
                 borrador.get('tipo_jaboncito'),
                 borrador.get('color_jaboncito'),
                 borrador.get('nombre_bebe'),
@@ -199,12 +207,22 @@ def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: dict) 
                 borrador['tipo_entrega'],
                 borrador.get('municipio'),
                 borrador.get('direccion'),
-                borrador.get('fecha_entrega'),
+                # 🔧 CORREGIDO: el borrador guarda 'fecha_evento' (así está
+                # en TOOLS de app.py). Antes se leía 'fecha_entrega', que
+                # nunca existía, y la fecha se perdía al confirmar.
+                borrador.get('fecha_evento'),
                 borrador.get('costo_envio', 0.0)
             ))
 
         # Insertar pago (si existe anticipo)
-        if borrador.get('anticipo_confirmado') and borrador.get('metodo_pago'):
+        # 🔧 CORREGIDO: antes exigía 'metodo_pago', un campo que el modelo
+        # nunca podía llenar (no existía en TOOLS), así que esta condición
+        # nunca era verdadera y NINGÚN anticipo se guardaba en la tabla
+        # `pagos`, aunque el bot le confirmara al cliente que lo recibió.
+        # Ahora solo exige que el anticipo esté confirmado; si no hay
+        # método de pago explícito, se guarda como "no especificado" en
+        # vez de perder el registro del pago por completo.
+        if borrador.get('anticipo_confirmado'):
             sql_pago = """
                 INSERT INTO pagos (pedido_id, tipo, monto, metodo, comprobante, confirmado)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -212,8 +230,8 @@ def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: dict) 
             cursor.execute(sql_pago, (
                 pedido_id,
                 'ANTICIPO',
-                borrador.get('monto_anticipo', 0.0),
-                borrador.get('metodo_pago'),
+                borrador.get('monto_anticipo') or 0.0,
+                borrador.get('metodo_pago') or 'no especificado',
                 borrador.get('comprobante'),
                 1
             ))
@@ -316,9 +334,19 @@ def generar_resumen(pedido_id: Optional[int] = None, borrador: Optional[dict] = 
             valor = borrador.get(campo)
             if valor not in (None, "", []):
                 lineas.append(f"- {etiqueta}: {valor}")
-        faltantes = [etiquetas[c] for c in etiquetas if borrador.get(c) in (None, "", [])]
+
+        # 🔧 CORREGIDO (Observación 5/6 de la auditoría): antes se listaban
+        # como "faltantes" los 16 campos del schema completo, sin importar
+        # si aplicaban al producto elegido (por eso el bot preguntaba por
+        # la velita en un pedido "sin jabón"). Ahora el backend decide, según
+        # el producto, cuáles campos son realmente relevantes.
+        campos_relevantes = campos_requeridos_para(borrador.get("producto"))
+        faltantes = [
+            etiquetas[c] for c in campos_relevantes
+            if c in etiquetas and borrador.get(c) in (None, "", [])
+        ]
         if faltantes:
-            lineas.append(f"Datos aún faltantes: {', '.join(faltantes)}")
+            lineas.append(f"Datos aún faltantes (solo los que aplican a este producto): {', '.join(faltantes)}")
         return "\n".join(lineas)
 
     return "Sin pedido activo."

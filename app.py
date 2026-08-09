@@ -384,6 +384,10 @@ def pedido_vacio():
         "monto_anticipo": None,
         "metodo_pago": None,
         "comprobante": None,
+        # 🆕 Faltaba: el modelo sí le cotiza el envío al cliente en texto,
+        # pero nunca lo guardaba -- se perdía igual que pasaba antes con
+        # el precio_unitario.
+        "costo_envio": None,
     }
 
 
@@ -611,6 +615,30 @@ guardarlo. Puedes llamarla varias veces en la conversación conforme se vayan
 confirmando más datos. No llames la función con datos que el cliente no ha
 confirmado todavía.
 
+IMPORTANTE — GUARDA TODO LO QUE LE DIGAS AL CLIENTE, NO SOLO LO QUE ÉL DIGA:
+esto aplica a cualquier dato concreto del pedido que TÚ le informes al
+cliente (no solo lo que el cliente confirma) — precio por pieza, costo de
+envío, fecha de entrega, municipio o dirección, tipo de entrega. En el
+MISMO turno en que le des cualquiera de estos datos, llama a
+actualizar_pedido con ese valor. Si solo se lo dices en el mensaje pero no
+llamas la función, el dato se pierde y el pedido oficial queda incompleto
+o en $0, aunque el cliente sí haya visto la información correcta.
+
+Ejemplos: si le cotizas el envío a domicilio ("el envío a Guadalupe cuesta
+$90"), llama a actualizar_pedido con costo_envio=90 en ese mismo turno. Si
+le confirmas la fecha de entrega ("te lo tengo listo el jueves
+13/08/2026"), llama a actualizar_pedido con fecha_evento="13/08/2026" en
+ese mismo turno. Lo mismo aplica para tipo_entrega, direccion, municipio y
+precio_unitario.
+
+🚫 NO COMPARTAS LOS DATOS BANCARIOS DEL ANTICIPO hasta que el pedido tenga
+guardados (vía actualizar_pedido, no solo mencionados en el chat): producto,
+cantidad, los colores/variantes que apliquen, fecha_evento, tipo_entrega, y
+si la entrega es a domicilio, también direccion/municipio y costo_envio. Si
+el cliente pide el anticipo antes de que tengas todo esto, dile que primero
+necesitas confirmar esos datos y pregúntale lo que falte — no le mandes los
+datos bancarios todavía.
+
 IMPORTANTE — PRECIO: en el momento en que le informes al cliente el precio
 por pieza o el total del pedido (usando el precio de la Base de Conocimiento),
 llama a actualizar_pedido incluyendo precio_unitario con ese valor numérico.
@@ -745,6 +773,14 @@ TOOLS = [
                             "Precio por pieza en MXN, según la Base de Conocimiento. "
                             "Llénalo en cuanto informes el precio o total al cliente, "
                             "para que quede registrado en el pedido oficial."
+                        ),
+                    },
+                    "costo_envio": {
+                        "type": "number",
+                        "description": (
+                            "Costo de envío a domicilio en MXN, según la Base de "
+                            "Conocimiento. Llénalo en cuanto le cotices el envío al "
+                            "cliente (solo aplica si tipo_entrega es a domicilio)."
                         ),
                     },
                     "monto_anticipo": {
@@ -1085,6 +1121,7 @@ def notificar_a_dalia(pedido_db, pedido_ram):
 
     monto_anticipo = _valor(pago.monto if pago else None, "monto_anticipo")
     metodo_pago = _valor(pago.metodo if pago else None, "metodo_pago") or "no especificado"
+    costo_envio = _valor(entrega.costo_envio if entrega else None, "costo_envio")
 
     monto_anticipo_texto = f"${monto_anticipo:,.2f} MXN" if monto_anticipo else "monto no especificado"
     texto_producto = f"{cantidad} x {producto}" if cantidad else producto
@@ -1113,12 +1150,15 @@ def notificar_a_dalia(pedido_db, pedido_ram):
     lineas.append(f"Tipo de entrega: {tipo_entrega}")
     if direccion:
         lineas.append(f"Dirección: {direccion}" + (f", {municipio}" if municipio else ""))
+    if costo_envio:
+        lineas.append(f"Costo de envío: ${costo_envio:,.2f} MXN")
 
-    # Total de la venta = precio_unitario x cantidad. No incluye envío
-    # porque ese dato todavía no se captura en el pedido. Si falta
-    # cualquiera de los dos, se omite en vez de mostrar $0 inventado.
+    # Total = precio_unitario x cantidad (+ costo_envio si aplica), para
+    # que coincida con lo que el cliente vio en el resumen que le mandó el
+    # bot en el chat. Si falta el precio o la cantidad, se omite en vez de
+    # mostrar un total incompleto o inventado.
     if precio_unitario and cantidad:
-        total_venta = precio_unitario * cantidad
+        total_venta = (precio_unitario * cantidad) + (costo_envio or 0)
         lineas.append(f"Total de la venta: ${total_venta:,.2f} MXN")
 
     mensaje = "\n".join(lineas)
@@ -1304,6 +1344,21 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
 
     texto_para_guardar = texto_cliente or ("(imagen sin texto)" if media_id_imagen else "")
     cliente = registrar_entrada_cliente(numero, texto_para_guardar, tipo=tipo_para_crm)
+
+    # 🆕 Código de reactivación: si el mensaje trae 2 emojis de osito 🧸🧸,
+    # y este número estaba en modo DALIA/SUSPENDIDO, se regresa a modo BOT.
+    # Pensado sobre todo como atajo de pruebas: NO valida quién lo manda,
+    # así que cualquiera que le escriba al bot con este código reactiva su
+    # propio número. Antes de usarlo con clientes reales conviene revisar
+    # si conviene restringirlo (ej. que solo funcione para un número
+    # autorizado), ver aviso en el chat.
+    if texto_cliente and texto_cliente.count("🧸") >= 2:
+        if pedido_manager.reactivar_modo_bot(numero):
+            print(f"🧸🧸 {numero} se reactivó con el código de ositos")
+            respuesta_reactivacion = "✅ Listo, vuelvo a estar activo para ti. ¿En qué te puedo ayudar?"
+            crm.guardar_respuesta(cliente, respuesta_reactivacion)
+            enviar_whatsapp(numero, respuesta_reactivacion)
+            return
 
     # 🆕 Meta 2: si Dalia (humana) ya tomó el control de esta conversación
     # (esto pasa automáticamente en cuanto se confirma el anticipo), el

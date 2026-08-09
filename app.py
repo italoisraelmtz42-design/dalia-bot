@@ -1345,38 +1345,33 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
     texto_para_guardar = texto_cliente or ("(imagen sin texto)" if media_id_imagen else "")
     cliente = registrar_entrada_cliente(numero, texto_para_guardar, tipo=tipo_para_crm)
 
-    # 🆕 Código de reactivación: si el mensaje trae 2 emojis de osito 🧸🧸,
-    # y este número estaba en modo DALIA/SUSPENDIDO, se regresa a modo BOT.
-    # Pensado sobre todo como atajo de pruebas: NO valida quién lo manda,
-    # así que cualquiera que le escriba al bot con este código reactiva su
-    # propio número. Antes de usarlo con clientes reales conviene revisar
-    # si conviene restringirlo (ej. que solo funcione para un número
-    # autorizado), ver aviso en el chat.
+    # 🆕 Código de reactivación (AHORA reset completo): si el mensaje trae
+    # 2 emojis de osito 🧸🧸, se borra TODO lo relacionado a este teléfono
+    # -- historial de chat, borrador, y pedidos oficiales -- y queda como
+    # si el número nunca hubiera hablado con el bot. Antes solo regresaba
+    # el modo a BOT sin borrar datos; ahora se pidió que también limpie
+    # toda la información de pedidos anteriores.
+    #
+    # ⚠️ Es DESTRUCTIVO E IRREVERSIBLE. Pensado sobre todo para pruebas.
+    # NO valida quién lo manda -- cualquiera que le escriba al bot con
+    # este código borra su propio historial. Antes de usarlo con clientes
+    # reales, hay que decidir si conviene restringirlo (ej. que solo
+    # funcione para un número autorizado) para no borrar por accidente el
+    # historial de negocio de un pedido real ya entregado/cobrado.
     if texto_cliente and texto_cliente.count("🧸") >= 2:
-        if pedido_manager.reactivar_modo_bot(numero):
-            print(f"🧸🧸 {numero} se reactivó con el código de ositos")
+        if pedido_manager.resetear_cliente_completo(numero):
+            print(f"🧸🧸 {numero}: reset completo (historial + pedidos eliminados)")
 
-            # 🔧 CORREGIDO (2da vuelta): mi corrección anterior solo limpiaba
-            # el BORRADOR en SQLite -- pero para cuando el cliente reactiva,
-            # ese borrador casi siempre YA NO EXISTE (se borra en cuanto se
-            # confirma el pedido oficial). El dato viejo de verdad seguía
-            # vivo en la SESIÓN EN RAM (sesiones[numero]['pedido']), que
-            # nunca se tocaba. Como crm.sincronizar_pedido revisa ese mismo
-            # diccionario después de CADA mensaje, en cuanto encontraba
-            # anticipo_confirmado=True (viejo, nunca limpiado) volvía a
-            # poner el modo en DALIA -- por eso la reactivación "aguantaba"
-            # exactamente un mensaje y se caía sola otra vez. Ahora se
-            # limpia directo en RAM, que es la fuente real que se revisa.
-            sesion_reactivada = obtener_sesion(numero)
-            sesion_reactivada["pedido"]["anticipo_confirmado"] = None
-            sesion_reactivada["pedido"]["monto_anticipo"] = None
-            sesion_reactivada["pedido"]["metodo_pago"] = None
-            sesion_reactivada["pedido"]["comprobante"] = None
-            sesion_reactivada["pedido_id"] = None
+            # Se descarta la sesión en RAM por completo -- con la base de
+            # datos ya vacía para este teléfono, la próxima vez que se
+            # llame a obtener_sesion() se va a reconstruir desde cero.
+            with sesiones_lock:
+                sesiones.pop(numero, None)
 
-            respuesta_reactivacion = "✅ Listo, vuelvo a estar activo para ti. ¿En qué te puedo ayudar?"
-            crm.guardar_respuesta(cliente, respuesta_reactivacion)
-            enviar_whatsapp(numero, respuesta_reactivacion)
+            respuesta_reset = "✅ Listo, empezamos de cero. ¿En qué te puedo ayudar?"
+            cliente_fresco = registrar_entrada_cliente(numero, "🧸🧸", tipo="texto")
+            crm.guardar_respuesta(cliente_fresco, respuesta_reset)
+            enviar_whatsapp(numero, respuesta_reset)
             return
 
     # 🆕 Meta 2: si Dalia (humana) ya tomó el control de esta conversación

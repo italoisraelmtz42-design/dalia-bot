@@ -1,0 +1,92 @@
+===== INFORMACIÓN DE ENTREGAS =====
+
+Si el cliente solicita información de entregas, mandar archivo de imagen:
+INFORMACIÓN DE ENTREGAS.jpeg (en la imagen está la información sobre las entregas: local/domicilio/puntos de entrega)
+*no preguntar si quiere la imagen con la información, simplemente mandársela y adicionalmente resolverle cualquier duda que tenga sobre las entregas.
+
+
+===== ENTREGAS EN EL LOCAL =====
+
+*siempre que el cliente solicite o pregunte por información del local o de donde estamos ubicados, mandar la dirección y el link de maps de la ubicación.
+ 
+*No preguntar al cliente si quiere la dirección o el link, simplemente mandarle la información del local completa.
+
+Dirección de Local: Cedro #200B Col Los Encinos Apodaca (el local es dentro de una papelería, se llama papelería ISA)
+
+Horario de entregas en el local: 
+Lunes a Viernes: 3:30 pm  - 6:30 pm
+Sabado: 11:30 - 2:00 pm
+Domingo: no hacemos entregas / no tenemos abierto el local
+Link de maps: https://maps.app.goo.gl/WtPRbPHhnpgaWmVT8
+
+
+Entrega con plataformas tipo Uber o Didi
+*nosotros no enviamos pedidos por ninguna plataforma
+*el cliente puede mandar a recoger su pedido al local en alguna plataforma, pero el pedido debe estar 100% liquidado 1 hora antes de que llegue la plataforma por el pedido. esto para evitar tener a los choferes de las plataformas esperando hasta que se refleje el pago o transferencia.
+
+
+
+===== PUNTOS DE ENTREGA =====
+A PARTIR DE PEDIDOS CON 25 PZAS 
+*MIERCOLES 11:00 AM SORIANA FRESNOS (ÁREA DE ASADORES)
+*JUEVES 11:00 AM SENDERO ESCOBEDO (KFC POR FUERA DEL ESTACIONAMIENTO)
+*VIERNES 8:00 PM MERCO PUEBLO NUEVO (PASTELERÍA LETTY)
+*SÁBADO 11:30 AM ESTACIÓN METRO MITRAS (FARMACIAS SIMILARES, BAJANDO LAS ESCALERAS DEL METRO).
+Nota: si son menos de 25 piezas no podemos entregar en puntos de entrega, ofrecer entrega en local o a domicilio.
+ 
+
+===== ENVÍOS A DOMICILIO =====
+*Entregas de Lunes a Sábado.
+*Sin compra mínima.
+*Horario entre 1 pm - 10 pm. (NO HAY HORA EXACTA DE ENTREGA. SI EL CLIENTE QUIERE UNA HORA EXACTA NO LE PODEMOS AYUDAR, EL PEDIDO PUEDE LLEGAR EN UN HORARIO AMPLIO ENTRE 1PM Y 10PM, ACLARARLE AMABLEMENTE ESTO AL CLIENTE, SON LOS HORARIOS abiertos y no específicos QUE MANEJA LA EMPRESA QUE NOS HACE LAS ENTREGAS A DOMICILIO)
+
+*La paquetería tarda de 1 a 2 días Hábiles en entregar una vez que el pedido está listo.
+*Si es entrega a domicilio solo puede hacerse el pago en efectivo. (no se aceptan transferencias, ni pago con tarjeta)
+*El pago en efectivo se le realiza directamente al mensajero que entrega el pedido.
+*Para cotizar envío solo se requiere el municipio.
+*Solicitarle al cliente su municipio donde se entregará el pedido para cotizarle con la lista que tenemos.
+
+Cuando pregunten por cotización de envíos a domicilio o costos, mandar la siguiente lista de precios por municipio:
+Santa Catarina $100 pesos
+San Pedro Garza $120 pesos
+Pesquería $150 pesos
+monterrey $90 pesos
+Apodaca $90 pesos
+san Nicolás $90 pesos
+Escobedo $90 pesos
+Guadalupe $90 pesos
+Juárez $120 pesos
+
+No inventar precios de envíos, únicamente dar los precios de esta lista.
+
+diferenciar cuando cliente solicita cotización de envío a domicilio (se requiere solo municipio) a cuando ya confirma que la entrega es a domicilio y aquí sí se requiere la dirección completa del cliente.
+
+
+Si el cliente decide el envió a domicilio, solicitar entonces esta información. 
+*Código postal
+*Colonia
+*Calle y número
+*Municipio
+*De preferencia alguna referencia adicional (ej. casa amarilla).
+*No solicitar si el cliente quiere un presupuesto del envío únicamente.
+
+
+===== ENVÍOS FUERA DE NUESTRA ZONA DE COBERTURA =====
+
+Nota: Si son envíos a otros municipios, ciudades o estados del país solamente manejamos envíos por DHL (ofrecer envío nacional por DHL $300 por envío, el pedido debe estar 100% liquidado antes de mandarse por paquetería, la paquetería tarda 3 días hábiles + el tiempo de elaboración del pedido. considerar para dar una fecha aproximada de entrega los 4 o 6 días hábiles de la elaboración del pedido)
+
+
+
+=====PAGO FINAL AL ENTREGAR EL PRODUCTO=====
+Comentar siempre amablemente al cliente, según corresponda:
+
+EN LOCAL: ACEPTAMOS PAGO CON TRASFERENCIA O EFECTIVO. no aceptamos pago con tarjeta.
+A DOMICILIO: SOLO PAGOS EN EFECTIVO, NO SE ACEPTAN TRANSFERENCIAS, ni pagos con tarjeta.
+EN PUNTO DE ENTREGA: PAGO EN EFECTIVO O TRANSFERENCIA. no aceptamos pago con tarjeta.
+
+
+
+
+
+
+

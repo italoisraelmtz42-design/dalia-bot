@@ -164,9 +164,27 @@ def reactivar_modo_bot(telefono: str) -> bool:
             )
             conn.commit()
             cambiado = cur.rowcount > 0
-            if cambiado:
-                logger_pedidos.info(f"🧸🧸 {telefono} reactivado a modo BOT por código de reactivación")
-            return cambiado
+
+        # 🔧 CORREGIDO: si el borrador persistente todavía traía
+        # anticipo_confirmado=True de un pedido anterior (el que ya se
+        # había pagado y por eso quedó en modo DALIA), sin este paso el
+        # bot se volvía a silenciar solo apenas el modelo llamaba a
+        # actualizar_pedido de nuevo por CUALQUIER motivo -- aunque el
+        # cliente no hubiera mandado ningún comprobante nuevo. Se limpia
+        # la bandera de anticipo (y los datos del pago viejo) para que la
+        # reactivación sea de verdad completa.
+        borrador = cargar_borrador_pedido(telefono)
+        if borrador and borrador.get('anticipo_confirmado'):
+            borrador['anticipo_confirmado'] = False
+            borrador['monto_anticipo'] = None
+            borrador['metodo_pago'] = None
+            borrador['comprobante'] = None
+            guardar_borrador_pedido(telefono, borrador)
+            logger_pedidos.info(f"🧹 Bandera de anticipo limpiada del borrador de {telefono} al reactivar")
+
+        if cambiado:
+            logger_pedidos.info(f"🧸🧸 {telefono} reactivado a modo BOT por código de reactivación")
+        return cambiado
     except Exception as e:
         logger_pedidos.error(f"[reactivar_modo_bot] Error: {e}")
         return False

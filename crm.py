@@ -6,7 +6,6 @@ from dataclasses import asdict
 from database import init_db
 from constantes import logger_crm, EstadoPedido
 import pedido_manager
-import conversation_engine
 
 def inicializar_base_datos():
     logger_crm.warning("🔄 [Compatibilidad] app.py llamó a crm.inicializar_base_datos(). Ejecutando init_db()...")
@@ -98,39 +97,11 @@ def sincronizar_pedido(*args, **kwargs):
     return None
 
 # ==============================================================================
-# El resto de funciones (detectar intención, etc.) se mantienen igual
+# 🔧 LIMPIEZA (Observación 11 de la auditoría forense): se eliminaron
+# _detectar_intencion_pedido(), generar_respuesta_conversacional(),
+# manejar_intencion_pedido() y MAPEO_PREGUNTAS — código muerto confirmado:
+# ninguna otra parte del proyecto los importaba ni los llamaba. Si en el
+# futuro se necesita un flujo de "detectar intención de compra", conviene
+# reescribirlo usando campos_requeridos_para() de constantes.py, no el
+# esquema plano de 16 campos que usaba MAPEO_PREGUNTAS.
 # ==============================================================================
-def _detectar_intencion_pedido(texto: str) -> bool:
-    return sum(1 for p in ["quiero", "pedir", "comprar", "cotizar", "toalla", "jabón", "jaboncito", "moño", "regalo"] if p in texto.lower()) >= 2
-
-def generar_respuesta_conversacional(cliente, texto: str) -> str:
-    telefono = cliente['numero'] if isinstance(cliente, dict) else cliente
-    historial = pedido_manager.chat_cargar_memoria(telefono)
-    return conversation_engine.procesar_con_gpt(telefono, texto, historial)
-
-def manejar_intencion_pedido(cliente, texto: str) -> str:
-    try:
-        telefono, cliente_id = cliente['numero'], cliente.get('id', 0)
-        borrador = pedido_manager.cargar_borrador_pedido(telefono) or {}
-        if not borrador.get('producto'):
-            borrador['producto'] = "Toalla Personalizada"
-            borrador['cantidad'] = 1
-            borrador['precio_unitario'] = 350.0
-            pedido_manager.guardar_borrador_pedido(telefono, borrador)
-        return "He iniciado tu borrador. ¿Qué producto deseas?"
-    except Exception as e:
-        logger_crm.error(f"Error en manejar_intencion_pedido: {e}")
-        return "❌ Ocurrió un error técnico. Por favor, intenta de nuevo."
-
-MAPEO_PREGUNTAS = {
-    "producto": "¿Qué producto deseas pedir? (ej. Toalla, Jabón)",
-    "color_toalla": "¿De qué color quieres la toallita?",
-    "color_moño": "¿De qué color quieres el moño?",
-    "tipo_jaboncito": "¿De qué forma quieres el jaboncito? (corazón, flor, osito, etc.)",
-    "nombre_bebe": "¿Cuál es el nombre del bebé para la tarjeta?",
-    "tarjetita": "¿Qué mensaje quieres que pongamos en la tarjetita?",
-    "tipo_entrega": "¿Cómo quieres tu entrega? (Local o Domicilio)",
-    "fecha_entrega": "¿Para qué fecha necesitas el pedido?",
-    "direccion": "¿Cuál es la dirección de entrega?",
-    "municipio": "¿A qué municipio pertenece la dirección de entrega?"
-}

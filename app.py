@@ -334,6 +334,13 @@ def pedido_vacio():
         "nombre_bebe": None,
         "tarjetita": None,
         "notas": None,
+        # 🔧 NUEVOS (corrigen el hallazgo crítico de la auditoría forense:
+        # antes estos datos se perdían al confirmar el pedido oficial
+        # porque el modelo nunca tenía forma de capturarlos).
+        "precio_unitario": None,
+        "monto_anticipo": None,
+        "metodo_pago": None,
+        "comprobante": None,
     }
 
 
@@ -540,6 +547,12 @@ guardarlo. Puedes llamarla varias veces en la conversación conforme se vayan
 confirmando más datos. No llames la función con datos que el cliente no ha
 confirmado todavía.
 
+IMPORTANTE — PRECIO: en el momento en que le informes al cliente el precio
+por pieza o el total del pedido (usando el precio de la Base de Conocimiento),
+llama a actualizar_pedido incluyendo precio_unitario con ese valor numérico.
+Si no guardas el precio aquí, el pedido oficial queda registrado con precio
+$0, aunque se lo hayas dicho al cliente.
+
 {seccion_fotos_producto(catalogo_imagenes=CATALOGO_IMAGENES)}
 
 {seccion_catalogo_pdf()}
@@ -551,10 +564,14 @@ categorías y actúa según corresponda:
 1. COMPROBANTE DE PAGO (pantalla de banco, ticket, captura de transferencia
    o depósito): confirma amablemente que lo recibiste, menciona el monto
    si lo puedes leer con claridad, agradece, y llama a actualizar_pedido
-   con anticipo_confirmado=true. Avísale que en breve le confirman su
-   pedido. Si el monto no se alcanza a leer bien, dile que no se ve claro
+   con anticipo_confirmado=true, monto_anticipo (el monto que leas en la
+   imagen), metodo_pago (ej. "transferencia" o "depósito", según lo que
+   veas), y comprobante (una descripción breve de lo que se ve, ej. banco
+   y referencia si se alcanzan a leer). Avísale que en breve le confirman
+   su pedido. Si el monto no se alcanza a leer bien, dile que no se ve claro
    y pide que lo reenvíe o confirme el monto por texto — no inventes un
-   monto que no puedas leer con seguridad.
+   monto que no puedas leer con seguridad, y en ese caso NO llenes
+   monto_anticipo (déjalo sin mandar).
 2. REFERENCIA DE COLOR (foto de un color/tela/objeto que el cliente manda
    para pedir "quiero este color"): compáralo con los colores disponibles
    en la Base de Conocimiento y dile cuál de los tuyos se parece más. No
@@ -634,6 +651,29 @@ TOOLS = [
                     "nombre_bebe": {"type": "string", "description": "Nombre del bebé para personalizar"},
                     "tarjetita": {"type": "string", "description": "Texto o diseño de la tarjetita"},
                     "notas": {"type": "string", "description": "Notas adicionales del cliente"},
+                    "precio_unitario": {
+                        "type": "number",
+                        "description": (
+                            "Precio por pieza en MXN, según la Base de Conocimiento. "
+                            "Llénalo en cuanto informes el precio o total al cliente, "
+                            "para que quede registrado en el pedido oficial."
+                        ),
+                    },
+                    "monto_anticipo": {
+                        "type": "number",
+                        "description": "Monto del anticipo que el cliente pagó/confirmó, en MXN.",
+                    },
+                    "metodo_pago": {
+                        "type": "string",
+                        "description": "Cómo pagó el anticipo, ej. 'transferencia', 'efectivo', 'depósito'.",
+                    },
+                    "comprobante": {
+                        "type": "string",
+                        "description": (
+                            "Breve descripción de lo que se ve en el comprobante de pago "
+                            "que mandó el cliente (banco, referencia, etc.), si aplica."
+                        ),
+                    },
                 },
             },
         },
@@ -675,26 +715,26 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
         datos = json.loads(argumentos_json) if argumentos_json else {}
     except (json.JSONDecodeError, TypeError):
         print("⚠️ No se pudo parsear argumentos de actualizar_pedido:", argumentos_json)
-        return
+        return []
+    campos_modificados = []
     for campo, valor in datos.items():
         if campo in pedido and valor not in (None, ""):
             pedido[campo] = valor
+            campos_modificados.append(campo)
     print("📝 Pedido actualizado en RAM:", pedido)
+    return campos_modificados
 
 
 def ejecutar_tool_call(tool_call, sesion, numero, pedido):
     if tool_call.function.name == "actualizar_pedido":
-        # 1. Mutar el estado en la memoria RAM
-        aplicar_actualizacion_pedido(pedido, tool_call.function.arguments)
-        
-        # 🔥 CAMBIO CLAVE: PERSISTIR INMEDIATAMENTE EL BORRADOR EN SQLite
-        try:
-            pedido_manager.guardar_borrador_pedido(numero, pedido)
-            print(f"💾 Estado de borrador sincronizado exitosamente en SQLite para {numero}")
-        except Exception as e:
-            print(f"⚠️ Error al persistir el borrador en la BD: {e}")
-
-        return "ok"
+        # 🔧 CORREGIDO (Observación 7): antes esta función también hacía un
+        # guardar_borrador_pedido() aquí mismo, y luego procesar_mensaje_en_fondo
+        # y crm.sincronizar_pedido lo volvían a guardar cada uno por su lado
+        # (triple escritura por mensaje). Ahora esta función solo actualiza
+        # la memoria en RAM; el guardado a SQLite ocurre UNA sola vez, en
+        # crm.sincronizar_pedido, después de que preguntar_ia() termina.
+        campos_modificados = aplicar_actualizacion_pedido(pedido, tool_call.function.arguments)
+        return "ok", campos_modificados
 
     if tool_call.function.name == "mostrar_foto_producto":
         try:
@@ -705,18 +745,18 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido):
         imagenes_enviadas = sesion["imagenes_enviadas"]
 
         if clave in imagenes_enviadas:
-            return "ya se le mandó esta foto antes en la conversación, no la repitas"
+            return "ya se le mandó esta foto antes en la conversación, no la repitas", []
 
         url_imagen = url_imagen_producto(clave)
         if not url_imagen:
-            return f"no hay foto disponible para '{clave}', no ofrezcas una foto de esto"
+            return f"no hay foto disponible para '{clave}', no ofrezcas una foto de esto", []
 
         nombre_mostrar = CATALOGO_IMAGENES[clave]["nombre_mostrar"]
         enviar_whatsapp_imagen(numero, url_imagen, caption=nombre_mostrar)
         imagenes_enviadas.add(clave)
-        return "imagen enviada correctamente"
+        return "imagen enviada correctamente", []
 
-    return "función desconocida"
+    return "función desconocida", []
 
 
 def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
@@ -761,6 +801,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
         historial = sesion["messages"]
 
     MAX_ITERACIONES_HERRAMIENTAS = 4
+    campos_modificados_total = []
     for _ in range(MAX_ITERACIONES_HERRAMIENTAS):
         r = client.chat.completions.create(
             model=MODELO,
@@ -781,7 +822,8 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
             mensajes_completos.append(mensaje.model_dump(exclude_none=True))
 
             for tool_call in mensaje.tool_calls:
-                resultado = ejecutar_tool_call(tool_call, sesion, numero, pedido)
+                resultado, campos_modificados = ejecutar_tool_call(tool_call, sesion, numero, pedido)
+                campos_modificados_total.extend(campos_modificados)
                 mensajes_completos.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
@@ -797,11 +839,17 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
         historial.append({"role": "assistant", "content": texto})
 
         # ================================================================
-        # 🔥 CAMBIO CLAVE: LOGS DESPUÉS DEL TOOL
+        # 🔧 CORREGIDO (Observación 4): antes este log revisaba
+        # `mensaje.tool_calls` del mensaje FINAL (de texto), que por
+        # definición del propio loop siempre está vacío en este punto —
+        # por eso SIEMPRE decía "Ninguno" sin importar lo que hubiera
+        # cambiado antes. Ahora se usa la lista acumulada de campos que
+        # de verdad se modificaron en cualquier vuelta del loop. También
+        # se quitó la referencia a `args`, que no existía en este scope.
         # ================================================================
         print("\n" + "=" * 70)
         print("===== DESPUÉS DEL TOOL =====")
-        print(f"Campos modificados: {list(args.keys()) if mensaje.tool_calls else 'Ninguno'}")
+        print(f"Campos modificados: {campos_modificados_total if campos_modificados_total else 'Ninguno'}")
         print(f"Borrador actualizado: {json.dumps(pedido, ensure_ascii=False, default=str)}")
         print(f"Persistencia SQLite: OK (guardado inmediato)")
         print("=" * 70)
@@ -1024,12 +1072,13 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
 
         try:
             crm.guardar_respuesta(cliente, respuesta)
-            
-            # ==========================================================================
-            # 🔴 CAMBIO CLAVE 2: GUARDAR BORRADOR EN CADA MENSAJE (ANTES DE SINCRONIZAR)
-            # ==========================================================================
-            pedido_manager.guardar_borrador_pedido(numero, sesion["pedido"])
-            
+
+            # 🔧 CORREGIDO (Observación 7): antes aquí había una llamada
+            # extra a guardar_borrador_pedido() (comentada como "CAMBIO
+            # CLAVE 2"), redundante con la que ya hace ejecutar_tool_call
+            # y con la que hace crm.sincronizar_pedido justo abajo — hasta
+            # 3 escrituras a SQLite por un solo mensaje. Ahora solo se
+            # guarda UNA vez, dentro de crm.sincronizar_pedido.
             crm.sincronizar_pedido(cliente, sesion["pedido"])
             pedido_db = crm.cargar_pedido(cliente)
             sesion["pedido_id"] = pedido_db.id if pedido_db else None

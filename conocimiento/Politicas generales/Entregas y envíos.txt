@@ -73,7 +73,7 @@ Si el cliente decide el envió a domicilio, solicitar entonces esta información
 
 ===== ENVÍOS FUERA DE NUESTRA ZONA DE COBERTURA =====
 
-Nota: Si son envíos a otros municipios, ciudades o estados del país solamente manejamos envíos por DHL (ofrecer envío nacional por DHL $300 por envío, el pedido debe estar 100% liquidado antes de mandarse por paquetería, la paquetería tarda 3 días hábiles + el tiempo de elaboración del pedido. considerar para dar una fecha aproximada de entrega los 4 o 6 días hábiles de la elaboración del pedido)
+Nota: Si son envíos a otros municipios, ciudades o estados del país solamente manejamos envíos por DHL (ofrecer envío nacional por DHL $300 por envío, el pedido debe estar 100% liquidado antes de mandarse por paquetería, la paquetería tarda 3 días hábiles + el tiempo de elaboración del pedido)
 
 
 

@@ -15,9 +15,16 @@ if db_dir and not os.path.exists(db_dir):
         logger_db.warning(f"No se pudo crear el directorio {db_dir}: {e}")
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
+    # timeout=10: si la BD está ocupada, espera hasta 10s antes de fallar
+    # (en vez de tronar de inmediato con "database is locked").
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    # WAL permite lecturas mientras alguien más escribe. Con varios mensajes
+    # de WhatsApp llegando casi al mismo tiempo (cada uno en su propio hilo),
+    # esto evita errores intermitentes de "database is locked".
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
     return conn
 
 def init_order_tables():

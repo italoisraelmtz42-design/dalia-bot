@@ -844,11 +844,28 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
 
     MAX_ITERACIONES_HERRAMIENTAS = 4
     campos_modificados_total = []
-    for _ in range(MAX_ITERACIONES_HERRAMIENTAS):
+    for indice_iteracion in range(MAX_ITERACIONES_HERRAMIENTAS):
+        # 🔧 CORREGIDO: se detectó en producción que, aunque el prompt le
+        # pide al modelo llamar a actualizar_pedido al ver un comprobante
+        # de pago, a veces el modelo simplemente responde en texto sin
+        # llamar la función — le dice al cliente "gracias por tu anticipo"
+        # pero nunca queda guardado en la base de datos, así que el bot
+        # nunca se entera de que debía silenciarse ni avisarle a Dalia.
+        # Una instrucción de texto no es 100% confiable; forzar la llamada
+        # a la función sí lo es. Por eso, en la primera vuelta de este
+        # loop, si llegó una imagen, se OBLIGA a llamar a
+        # actualizar_pedido (con los campos que apliquen, aunque sea
+        # vacío si la imagen no trae nada que guardar). De ahí en
+        # adelante el modelo vuelve a responder con libertad normal.
+        tool_choice_este_turno = "auto"
+        if imagen_base64 and indice_iteracion == 0:
+            tool_choice_este_turno = {"type": "function", "function": {"name": "actualizar_pedido"}}
+
         r = client.chat.completions.create(
             model=MODELO,
             messages=mensajes_completos,
             tools=TOOLS,
+            tool_choice=tool_choice_este_turno,
             temperature=0.4,
             top_p=0.9,
             max_tokens=600,

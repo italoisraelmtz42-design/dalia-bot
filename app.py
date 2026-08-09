@@ -253,7 +253,7 @@ ARCHIVOS_CONOCIMIENTO_SIEMPRE = {
     "Politicas generales/Anticipos.txt",
     "Politicas generales/Colores disponibles.txt",
     "Politicas generales/Datos bancarios  para pagos, transferencias y anticipos.txt",
-    "Politicas generales/Entregas y env#U00edos.txt",
+    "Politicas generales/Entregas y envíos.txt",
     "Politicas generales/Pedidos urgentes.txt",
     "Politicas generales/Precios de mayoreo.txt",
     "Politicas generales/REGLAS IRROMPIBLES DEL NEGOCIO.txt",

@@ -237,14 +237,49 @@ FIN DEL ARCHIVO
 CONOCIMIENTO_POR_ARCHIVO = {}
 KNOWLEDGE = cargar_conocimiento()
 
+# 🔧 CORREGIDO: esta lista tenía nombres de archivo VIEJOS (sin
+# subcarpeta, con la numeración de antes de reorganizar /conocimiento en
+# carpetas como "Politicas generales/", "Ventas/", etc.). Como
+# CONOCIMIENTO_POR_ARCHIVO guarda las claves con la ruta relativa
+# completa (ver cargar_conocimiento: CONOCIMIENTO_POR_ARCHIVO[str(rel_path)]),
+# NINGUNO de esos nombres viejos hacía match — esta lista de "siempre
+# incluidos" llevaba tiempo sin incluir NADA, en silencio. Eso significaba
+# que archivos críticos como las reglas del anticipo solo se mandaban al
+# modelo si el mensaje del cliente coincidía por palabras clave, y si no,
+# el modelo podía inventar cifras (como pasó: dijo que el anticipo era de
+# $200, un número que no existe en ningún archivo — la Base de
+# Conocimiento solo dice "desde $50 pesos").
 ARCHIVOS_CONOCIMIENTO_SIEMPRE = {
-    "04_REGLAS_GENERALES.txt",
-    "033_Reglas_Conversacion.txt",
-    "027_Pagos_y_Anticipos.txt",
-    "028_Colores_Disponibles.txt",
-    "029_Flujo_de_Venta.txt",
-    "050_Saludos_Humanos.txt",
+    "Politicas generales/Anticipos.txt",
+    "Politicas generales/Colores disponibles.txt",
+    "Politicas generales/Datos bancarios  para pagos, transferencias y anticipos.txt",
+    "Politicas generales/Entregas y env#U00edos.txt",
+    "Politicas generales/Pedidos urgentes.txt",
+    "Politicas generales/Precios de mayoreo.txt",
+    "Politicas generales/REGLAS IRROMPIBLES DEL NEGOCIO.txt",
+    "Politicas generales/Resumen del pedido.txt",
+    "Preguntas y respuestas/033_Reglas_Conversacion.txt",
+    "Preguntas y respuestas/045_Guia_Tono_y_Personalidad.txt",
+    "Preguntas y respuestas/050_Saludos_Humanos.txt",
+    "Ventas/ERRORES_PROHIBIDOS.txt",
+    "Ventas/MEMORIA_CONVERSACIONAL.txt",
+    "Ventas/Proceso de venta.txt",
 }
+
+# 🆕 Validación al arrancar: si algún nombre de esta lista no existe de
+# verdad en la carpeta /conocimiento, se avisa FUERTE en los logs, en vez
+# de fallar en silencio como pasó esta vez. Si renombras o mueves algún
+# archivo de conocimiento en el futuro, esto te va a avisar de inmediato.
+_faltantes_siempre = sorted(ARCHIVOS_CONOCIMIENTO_SIEMPRE - set(CONOCIMIENTO_POR_ARCHIVO.keys()))
+if _faltantes_siempre:
+    print("\n" + "🚨" * 20)
+    print("ADVERTENCIA: estos archivos de ARCHIVOS_CONOCIMIENTO_SIEMPRE")
+    print("NO se encontraron en /conocimiento (revisa el nombre exacto):")
+    for _f in _faltantes_siempre:
+        print(f"   ❌ {_f}")
+    print("🚨" * 20 + "\n")
+else:
+    print(f"✅ Los {len(ARCHIVOS_CONOCIMIENTO_SIEMPRE)} archivos 'siempre incluidos' existen correctamente\n")
 
 
 def seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=None, top_k=16):
@@ -537,6 +572,12 @@ REGLAS:
   colores si el cliente está hablando de forma de entrega).
 - Si el cliente dice que ya le diste cierta información antes ("ya me la
   pasaste", "otra vez?"), discúlpate en una sola frase breve y NO la repitas.
+
+REGLA FIJA DEL ANTICIPO (esta regla NO depende de la Base de Conocimiento,
+así que aplícala siempre, incluso si no ves el archivo de anticipos en este
+mensaje): el anticipo para CUALQUIER pedido es "desde $50 MXN", nunca un
+monto distinto, y nunca varía según el tamaño o total del pedido. Jamás
+menciones una cifra distinta de $50 como el anticipo requerido.
 
 REGLAS DE FECHAS Y PEDIDOS URGENTES (usa SIEMPRE la fecha de hoy de arriba,
 {dia_semana} {fecha}, para todo cálculo; nunca calcules fechas por tu cuenta):

@@ -114,6 +114,34 @@ def eliminar_borrador_pedido(telefono: str):
     except Exception as e:
         logger_pedidos.error(f"[eliminar_borrador_pedido] Error eliminando borrador: {e}")
 
+
+def resetear_cliente_completo(telefono: str) -> bool:
+    """⚠️ DESTRUCTIVO E IRREVERSIBLE. Borra TODO lo relacionado a este
+    teléfono: historial de chat, borrador en progreso, y los pedidos
+    oficiales (que en cascada borra también sus items/entrega/pagos).
+
+    Pensado para el código de reactivación 🧸🧸 (ver app.py), sobre todo
+    para pruebas -- así el número queda como si nunca hubiera hablado con
+    el bot. NO debería usarse con números de clientes reales que ya
+    tengan pedidos de verdad entregados/cobrados, porque ese historial de
+    negocio se pierde para siempre (no hay manera de deshacer esto).
+    """
+    try:
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM historial_chat WHERE telefono = ?", (telefono,))
+            conn.execute("DELETE FROM borradores_pedido WHERE telefono = ?", (telefono,))
+            # El borrado en cascada (ON DELETE CASCADE) se encarga de
+            # pedido_items, entregas y pagos asociados a estos pedidos.
+            conn.execute("DELETE FROM pedidos WHERE telefono = ?", (telefono,))
+            conn.commit()
+            logger_pedidos.info(
+                f"🧨 Reset completo aplicado a {telefono}: historial, borrador y pedidos eliminados"
+            )
+        return True
+    except Exception as e:
+        logger_pedidos.error(f"[resetear_cliente_completo] Error: {e}")
+        return False
+
 # ==============================================================================
 # # MOTOR DE PEDIDOS OFICIALES
 # ==============================================================================

@@ -150,6 +150,39 @@ def obtener_modo_atencion(telefono: str) -> str:
         """, (telefono,)).fetchone()
         return row["modo_atencion"] if row else ModoAtencion.BOT.value
 
+def confirmar_anticipo_pedido_existente(pedido_id: int, telefono: str, borrador: dict):
+    """Se usa cuando YA existía un pedido oficial para este teléfono (de un
+    contacto o prueba anterior) y se confirma un anticipo nuevo. En vez de
+    ignorarlo (que era el bug: el pedido nunca pasaba a modo DALIA y el
+    bot seguía respondiendo para siempre), se actualiza ese pedido: pasa a
+    modo DALIA y se registra el pago nuevo.
+    """
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                "UPDATE pedidos SET modo_atencion = ?, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?",
+                (ModoAtencion.DALIA.value, pedido_id)
+            )
+            if borrador.get('anticipo_confirmado'):
+                conn.execute(
+                    """INSERT INTO pagos (pedido_id, tipo, monto, metodo, comprobante, confirmado)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        pedido_id,
+                        'ANTICIPO',
+                        borrador.get('monto_anticipo') or 0.0,
+                        borrador.get('metodo_pago') or 'no especificado',
+                        borrador.get('comprobante'),
+                        1
+                    )
+                )
+            conn.commit()
+            logger_pedidos.info(f"🔁 Pedido existente {pedido_id} pasó a modo DALIA con nuevo anticipo registrado")
+        eliminar_borrador_pedido(telefono)
+    except Exception as e:
+        logger_pedidos.error(f"[confirmar_anticipo_pedido_existente] Error: {e}")
+
+
 def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: dict) -> int:
     """
     Crea un pedido oficial a partir del borrador.

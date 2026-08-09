@@ -1039,9 +1039,19 @@ def enviar_whatsapp(numero, texto):
 
 def notificar_a_dalia(pedido_db, pedido_ram):
     """Le manda a Dalia (a su WhatsApp personal, no al del bot) un aviso
-    cada vez que se confirma un anticipo, con lo esencial para que le dé
-    seguimiento. Si DALIA_WHATSAPP_NUMERO no está configurado, no hace
-    nada (no rompe el resto del flujo)."""
+    cada vez que se confirma un anticipo, con el RESUMEN COMPLETO del
+    pedido — no solo lo mínimo. Como Dalia no puede ver la conversación
+    que tuvo el bot con el cliente, este mensaje es la única forma en que
+    se entera de qué se acordó, así que debe bastar por sí solo para que
+    pueda contactar al cliente con seguridad, sin tener que preguntarle
+    "oye, ¿qué habíamos quedado?".
+
+    Usa como fuente principal el pedido YA GUARDADO en la base de datos
+    (pedido_db, con sus items/entrega/pagos) porque es el registro más
+    confiable -- pedido_ram (el borrador en RAM) se usa solo como
+    respaldo si algo faltó en la BD. Si DALIA_WHATSAPP_NUMERO no está
+    configurado, no hace nada (no rompe el resto del flujo).
+    """
     if not DALIA_WHATSAPP_NUMERO:
         print("⚠️ DALIA_WHATSAPP_NUMERO no configurado, no se pudo notificar a Dalia")
         return
@@ -1049,31 +1059,69 @@ def notificar_a_dalia(pedido_db, pedido_ram):
     folio = pedido_db.folio if pedido_db else "SIN FOLIO"
     telefono_cliente = pedido_db.telefono if pedido_db else "desconocido"
 
-    monto_anticipo = pedido_ram.get("monto_anticipo")
-    monto_anticipo_texto = f"${monto_anticipo:,.2f} MXN" if monto_anticipo else "monto no especificado"
+    item = pedido_db.items[0] if (pedido_db and pedido_db.items) else None
+    entrega = pedido_db.entrega if pedido_db else None
+    pago = pedido_db.pagos[-1] if (pedido_db and pedido_db.pagos) else None
 
-    producto = pedido_ram.get("producto") or "sin especificar"
-    cantidad = pedido_ram.get("cantidad")
+    def _valor(de_bd, campo_ram):
+        """de_bd ya viene resuelto (ej. item.producto); campo_ram es el
+        nombre del campo de respaldo en pedido_ram si de_bd viene vacío."""
+        return de_bd if de_bd not in (None, "") else pedido_ram.get(campo_ram)
+
+    producto = _valor(item.producto if item else None, "producto") or "sin especificar"
+    cantidad = _valor(item.cantidad if item else None, "cantidad")
+    color_toalla = _valor(item.color_toalla if item else None, "color_toalla") or "sin especificar"
+    color_mono = _valor(item.color_moño if item else None, "color_mono") or "sin especificar"
+    tipo_jaboncito = _valor(item.tipo_jaboncito if item else None, "tipo_jaboncito")
+    color_jaboncito = _valor(item.color_jaboncito if item else None, "color_jaboncito")
+    nombre_bebe = _valor(item.nombre_bebe if item else None, "nombre_bebe")
+    tarjetita = _valor(item.tarjetita if item else None, "tarjetita")
+    precio_unitario = _valor(item.precio_unitario if item else None, "precio_unitario")
+
+    tipo_entrega = _valor(entrega.tipo_entrega if entrega else None, "tipo_entrega") or "sin especificar"
+    direccion = _valor(entrega.direccion if entrega else None, "direccion")
+    municipio = _valor(entrega.municipio if entrega else None, "municipio")
+    fecha_entrega = _valor(entrega.fecha_entrega if entrega else None, "fecha_evento") or "sin especificar"
+
+    monto_anticipo = _valor(pago.monto if pago else None, "monto_anticipo")
+    metodo_pago = _valor(pago.metodo if pago else None, "metodo_pago") or "no especificado"
+
+    monto_anticipo_texto = f"${monto_anticipo:,.2f} MXN" if monto_anticipo else "monto no especificado"
     texto_producto = f"{cantidad} x {producto}" if cantidad else producto
 
-    # Total de la venta = precio_unitario x cantidad (subtotal del
-    # producto; no incluye envío porque ese dato todavía no se captura en
-    # el pedido). Si falta cualquiera de los dos, se omite la línea en vez
-    # de mostrar un total inventado o en $0.
-    precio_unitario = pedido_ram.get("precio_unitario")
-    linea_total = ""
+    lineas = [
+        "🔔 Nuevo anticipo confirmado",
+        f"Folio: {folio}",
+        f"Cliente: {telefono_cliente}",
+        f"Monto anticipo: {monto_anticipo_texto}",
+        f"Método de pago: {metodo_pago}",
+        "",
+        "— Resumen del pedido —",
+        f"Producto: {texto_producto}",
+        f"Color de toalla: {color_toalla}",
+        f"Color de moño: {color_mono}",
+    ]
+
+    if tipo_jaboncito or color_jaboncito:
+        lineas.append(f"Jaboncito: {tipo_jaboncito or 'sin especificar'} color {color_jaboncito or 'sin especificar'}")
+    if nombre_bebe:
+        lineas.append(f"Nombre para tarjeta: {nombre_bebe}")
+    if tarjetita:
+        lineas.append(f"Tarjetita: {tarjetita}")
+
+    lineas.append(f"Fecha de entrega: {fecha_entrega}")
+    lineas.append(f"Tipo de entrega: {tipo_entrega}")
+    if direccion:
+        lineas.append(f"Dirección: {direccion}" + (f", {municipio}" if municipio else ""))
+
+    # Total de la venta = precio_unitario x cantidad. No incluye envío
+    # porque ese dato todavía no se captura en el pedido. Si falta
+    # cualquiera de los dos, se omite en vez de mostrar $0 inventado.
     if precio_unitario and cantidad:
         total_venta = precio_unitario * cantidad
-        linea_total = f"\nTotal de la venta: ${total_venta:,.2f} MXN"
+        lineas.append(f"Total de la venta: ${total_venta:,.2f} MXN")
 
-    mensaje = (
-        "🔔 Nuevo anticipo confirmado\n"
-        f"Folio: {folio}\n"
-        f"Cliente: {telefono_cliente}\n"
-        f"Monto anticipo: {monto_anticipo_texto}\n"
-        f"Producto: {texto_producto}"
-        f"{linea_total}"
-    )
+    mensaje = "\n".join(lineas)
     enviar_whatsapp(DALIA_WHATSAPP_NUMERO, mensaje)
 
 

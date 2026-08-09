@@ -54,6 +54,12 @@ WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "cambia_este_token")
 WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
 
+# Número personal de Dalia (con lada, sin signos: ej. "5218114905653"),
+# al que se le manda una notificación cada vez que se confirma un
+# anticipo. Si no está configurado, simplemente no se manda la
+# notificación (no rompe nada del resto del bot).
+DALIA_WHATSAPP_NUMERO = os.getenv("DALIA_WHATSAPP_NUMERO", "")
+
 GRAPH_API_VERSION = "v20.0"
 GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
 
@@ -564,20 +570,17 @@ Cuando el cliente te mande una imagen, clasifícala primero en una de estas
 categorías y actúa según corresponda:
 
 1. COMPROBANTE DE PAGO (pantalla de banco, ticket, captura de transferencia
-   o depósito) CON MONTO LEGIBLE: confirma amablemente que lo recibiste,
-   menciona el monto, agradece, y llama a actualizar_pedido con
+   o depósito) CON MONTO LEGIBLE: llama a actualizar_pedido con
    anticipo_confirmado=true, monto_anticipo (el monto que leas en la
    imagen), metodo_pago (ej. "transferencia" o "depósito", según lo que
    veas), y comprobante (una descripción breve de lo que se ve, ej. banco
    y referencia si se alcanzan a leer).
 
-   IMPORTANTE: este es tu ÚLTIMO mensaje en esta conversación — en cuanto
-   confirmas el anticipo, Dalia (la dueña, una persona real) toma el
-   control para coordinar entrega, costos adicionales y seguimiento. Así
-   que en este mensaje debes: agradecer, confirmar el monto recibido,
-   avisar que su pedido ya se empezó a elaborar, incluir el emoji ⏳, y
-   decirle que Dalia sigue la conversación desde aquí. No hagas preguntas
-   de seguimiento ni ofrezcas más ayuda en este mensaje — ciérralo.
+   IMPORTANTE: NO redactes ningún mensaje de confirmación ni de
+   despedida — el sistema le manda al cliente un mensaje fijo
+   automáticamente en cuanto detecta anticipo_confirmado=true, tú no
+   tienes que escribir nada más para este caso. Solo llama a la función
+   con los datos correctos.
 
    Si el monto NO se alcanza a leer bien, es un caso distinto: dile que no
    se ve claro y pide que lo reenvíe o confirme el monto por texto — no
@@ -607,14 +610,31 @@ BASE DE CONOCIMIENTO:
 ===========================================================
 🚨 REGLA DE SEGURIDAD Y CIERRE AUTOMÁTICO (LEE ESTO CON ATENCIÓN):
 ===========================================================
-Cuando el cliente CONFIRME explícitamente su pedido (diciendo "sí", "confirmo", "está bien", etc.) 
-o cuando ENVÍE UN COMPROBANTE DE PAGO (imagen de transferencia o depósito),
-DEBES llamar INMEDIATAMENTE a la función actualizar_pedido con todos los datos confirmados 
-(anticipo_confirmado=true, producto, cantidad, colores, fecha, entrega, etc.) para guardar 
-el pedido en la base de datos. No dejes el pedido en la RAM. Si el cliente ya confirmó todo,
-la llamada a actualizar_pedido debe ejecutarse SIN que el cliente tenga que pedírtelo de nuevo.
+Hay una diferencia importante entre dos cosas que NO debes confundir:
 
-El cliente NO debe saber que estás llamando a una herramienta. Solo actúa con normalidad.
+- Que el cliente confirme que el RESUMEN DEL PEDIDO está correcto (dice
+  "sí", "confirmo", "está bien" a un resumen que TÚ le mostraste antes) ->
+  esto solo significa que los DATOS del pedido son correctos. NO llames a
+  actualizar_pedido con anticipo_confirmado=true por esto — el cliente
+  todavía no ha pagado nada, solo aprobó los datos.
+
+- Que el cliente confirme que YA PAGÓ el anticipo -> esto es lo único que
+  debe activar anticipo_confirmado=true, y solo debe pasar cuando:
+    a) el cliente manda una imagen de comprobante de pago con monto
+       legible (ver sección de Vision arriba), o
+    b) el cliente te dice explícitamente por texto que ya pagó/transfirió,
+       mencionando un monto específico (ej. "ya te transferí $150", "ya
+       deposité 100 pesos") — en ese caso llama a actualizar_pedido con
+       anticipo_confirmado=true, monto_anticipo (el monto que mencionó), y
+       metodo_pago="confirmado por texto".
+
+Si el cliente dice "sí" a cualquier otra cosa que NO sea confirmar que ya
+pagó (el resumen del pedido, si quiere que le expliques el anticipo, etc.),
+NO actives anticipo_confirmado — sigue la conversación con normalidad.
+
+Cuando SÍ se confirme el pago (por imagen o por texto con monto), llama a
+actualizar_pedido de inmediato, sin que el cliente tenga que pedírtelo de
+nuevo. El cliente no debe saber que estás llamando a una herramienta.
 ===========================================================
 """
 
@@ -745,8 +765,18 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido):
         # (triple escritura por mensaje). Ahora esta función solo actualiza
         # la memoria en RAM; el guardado a SQLite ocurre UNA sola vez, en
         # crm.sincronizar_pedido, después de que preguntar_ia() termina.
+        ya_estaba_confirmado = pedido.get("anticipo_confirmado") is True
         campos_modificados = aplicar_actualizacion_pedido(pedido, tool_call.function.arguments)
-        return "ok", campos_modificados
+        # 🆕 Se detecta aquí (no se le deja al modelo) si ESTE turno es el
+        # que confirma el anticipo por primera vez. Los mensajes que le
+        # llegan al cliente en ese caso son fijos, no los redacta el
+        # modelo (ver preguntar_ia y procesar_mensaje_en_fondo).
+        anticipo_recien_confirmado = (
+            "anticipo_confirmado" in campos_modificados
+            and pedido.get("anticipo_confirmado") is True
+            and not ya_estaba_confirmado
+        )
+        return "ok", campos_modificados, anticipo_recien_confirmado
 
     if tool_call.function.name == "mostrar_foto_producto":
         try:
@@ -757,18 +787,18 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido):
         imagenes_enviadas = sesion["imagenes_enviadas"]
 
         if clave in imagenes_enviadas:
-            return "ya se le mandó esta foto antes en la conversación, no la repitas", []
+            return "ya se le mandó esta foto antes en la conversación, no la repitas", [], False
 
         url_imagen = url_imagen_producto(clave)
         if not url_imagen:
-            return f"no hay foto disponible para '{clave}', no ofrezcas una foto de esto", []
+            return f"no hay foto disponible para '{clave}', no ofrezcas una foto de esto", [], False
 
         nombre_mostrar = CATALOGO_IMAGENES[clave]["nombre_mostrar"]
         enviar_whatsapp_imagen(numero, url_imagen, caption=nombre_mostrar)
         imagenes_enviadas.add(clave)
-        return "imagen enviada correctamente", []
+        return "imagen enviada correctamente", [], False
 
-    return "función desconocida", []
+    return "función desconocida", [], False
 
 
 def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
@@ -833,14 +863,31 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
         if mensaje.tool_calls:
             mensajes_completos.append(mensaje.model_dump(exclude_none=True))
 
+            anticipo_recien_confirmado_este_turno = False
             for tool_call in mensaje.tool_calls:
-                resultado, campos_modificados = ejecutar_tool_call(tool_call, sesion, numero, pedido)
+                resultado, campos_modificados, anticipo_recien_confirmado = ejecutar_tool_call(
+                    tool_call, sesion, numero, pedido
+                )
                 campos_modificados_total.extend(campos_modificados)
+                if anticipo_recien_confirmado:
+                    anticipo_recien_confirmado_este_turno = True
                 mensajes_completos.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
                     "content": resultado,
                 })
+
+            if anticipo_recien_confirmado_este_turno:
+                # 🆕 No hace falta pedirle al modelo que redacte una
+                # respuesta final: los 2 mensajes que le llegan al cliente
+                # en este caso son siempre los mismos (ver
+                # procesar_mensaje_en_fondo), así que ni se gasta la
+                # llamada extra a OpenAI. Se marca la sesión para que
+                # procesar_mensaje_en_fondo sepa que debe mandar los
+                # mensajes fijos + notificar a Dalia.
+                sesion["_anticipo_recien_confirmado"] = True
+                print("⏳ Anticipo confirmado en este turno — se cortan las respuestas automáticas del modelo")
+                return None
 
             mensajes_completos[0]["content"] = construir_system_prompt(
                 pedido, pedido_id, info_enviada, conocimiento=conocimiento_relevante
@@ -915,6 +962,46 @@ def enviar_whatsapp(numero, texto):
     except requests.RequestException as e:
         print("⚠️ Excepción enviando WhatsApp:", e)
         return None
+
+
+def notificar_a_dalia(pedido_db, pedido_ram):
+    """Le manda a Dalia (a su WhatsApp personal, no al del bot) un aviso
+    cada vez que se confirma un anticipo, con lo esencial para que le dé
+    seguimiento. Si DALIA_WHATSAPP_NUMERO no está configurado, no hace
+    nada (no rompe el resto del flujo)."""
+    if not DALIA_WHATSAPP_NUMERO:
+        print("⚠️ DALIA_WHATSAPP_NUMERO no configurado, no se pudo notificar a Dalia")
+        return
+
+    folio = pedido_db.folio if pedido_db else "SIN FOLIO"
+    telefono_cliente = pedido_db.telefono if pedido_db else "desconocido"
+
+    monto_anticipo = pedido_ram.get("monto_anticipo")
+    monto_anticipo_texto = f"${monto_anticipo:,.2f} MXN" if monto_anticipo else "monto no especificado"
+
+    producto = pedido_ram.get("producto") or "sin especificar"
+    cantidad = pedido_ram.get("cantidad")
+    texto_producto = f"{cantidad} x {producto}" if cantidad else producto
+
+    # Total de la venta = precio_unitario x cantidad (subtotal del
+    # producto; no incluye envío porque ese dato todavía no se captura en
+    # el pedido). Si falta cualquiera de los dos, se omite la línea en vez
+    # de mostrar un total inventado o en $0.
+    precio_unitario = pedido_ram.get("precio_unitario")
+    linea_total = ""
+    if precio_unitario and cantidad:
+        total_venta = precio_unitario * cantidad
+        linea_total = f"\nTotal de la venta: ${total_venta:,.2f} MXN"
+
+    mensaje = (
+        "🔔 Nuevo anticipo confirmado\n"
+        f"Folio: {folio}\n"
+        f"Cliente: {telefono_cliente}\n"
+        f"Monto anticipo: {monto_anticipo_texto}\n"
+        f"Producto: {texto_producto}"
+        f"{linea_total}"
+    )
+    enviar_whatsapp(DALIA_WHATSAPP_NUMERO, mensaje)
 
 
 def enviar_whatsapp_imagen(numero, image_url, caption=""):
@@ -1112,11 +1199,50 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         try:
             print("🧠 Consultando OpenAI...")
             respuesta = preguntar_ia(numero, texto_cliente, imagen_base64=imagen_base64, imagen_mime=imagen_mime)
-            print("✅ Respuesta generada")
-            print(respuesta[:300])
+            if respuesta is not None:
+                print("✅ Respuesta generada")
+                print(respuesta[:300])
         except Exception as e:
             print("❌ Error llamando a OpenAI:", repr(e))
             respuesta = "Disculpa, tuve un problema técnico. ¿Me puedes repetir tu mensaje? 🙂"
+
+        # 🆕 Caso especial: se acaba de confirmar el anticipo en este turno
+        # (preguntar_ia regresa None y deja la bandera en la sesión). Los
+        # mensajes al cliente son fijos, no los redacta el modelo, y
+        # además se le avisa a Dalia por su WhatsApp personal.
+        if respuesta is None and sesion.get("_anticipo_recien_confirmado"):
+            sesion["_anticipo_recien_confirmado"] = False
+            mensaje_1 = "¡Gracias por tu anticipo! En breve te contactaremos para enviarte la nota de tu pedido."
+            mensaje_2 = "⌛"
+
+            try:
+                # sincronizar_pedido ya regresa el pedido oficial (recién
+                # creado o actualizado) con su folio — no usar
+                # crm.cargar_pedido aquí, porque esa función EXCLUYE a
+                # propósito los pedidos en modo DALIA (ver
+                # pedido_manager.obtener_pedido_activo) y ya acabamos de
+                # poner este pedido en modo DALIA.
+                pedido_db = crm.sincronizar_pedido(cliente, sesion["pedido"])
+                sesion["pedido_id"] = pedido_db.id if pedido_db else None
+
+                crm.guardar_respuesta(cliente, mensaje_1)
+                crm.guardar_respuesta(cliente, mensaje_2)
+            except Exception as e:
+                print("⚠️ Error guardando en CRM (el bot sigue funcionando con RAM):", repr(e))
+                pedido_db = None
+
+            time.sleep(random.uniform(2, 4))
+            print("📤 Enviando mensajes fijos de confirmación de anticipo...")
+            enviar_whatsapp(numero, mensaje_1)
+            time.sleep(1.5)
+            enviar_whatsapp(numero, mensaje_2)
+
+            print("📣 Notificando a Dalia...")
+            notificar_a_dalia(pedido_db, sesion["pedido"])
+
+            print("🏁 Fin procesamiento (anticipo confirmado)")
+            print("=" * 70)
+            return
 
         try:
             crm.guardar_respuesta(cliente, respuesta)

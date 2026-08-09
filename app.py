@@ -1355,6 +1355,25 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
     if texto_cliente and texto_cliente.count("🧸") >= 2:
         if pedido_manager.reactivar_modo_bot(numero):
             print(f"🧸🧸 {numero} se reactivó con el código de ositos")
+
+            # 🔧 CORREGIDO (2da vuelta): mi corrección anterior solo limpiaba
+            # el BORRADOR en SQLite -- pero para cuando el cliente reactiva,
+            # ese borrador casi siempre YA NO EXISTE (se borra en cuanto se
+            # confirma el pedido oficial). El dato viejo de verdad seguía
+            # vivo en la SESIÓN EN RAM (sesiones[numero]['pedido']), que
+            # nunca se tocaba. Como crm.sincronizar_pedido revisa ese mismo
+            # diccionario después de CADA mensaje, en cuanto encontraba
+            # anticipo_confirmado=True (viejo, nunca limpiado) volvía a
+            # poner el modo en DALIA -- por eso la reactivación "aguantaba"
+            # exactamente un mensaje y se caía sola otra vez. Ahora se
+            # limpia directo en RAM, que es la fuente real que se revisa.
+            sesion_reactivada = obtener_sesion(numero)
+            sesion_reactivada["pedido"]["anticipo_confirmado"] = None
+            sesion_reactivada["pedido"]["monto_anticipo"] = None
+            sesion_reactivada["pedido"]["metodo_pago"] = None
+            sesion_reactivada["pedido"]["comprobante"] = None
+            sesion_reactivada["pedido_id"] = None
+
             respuesta_reactivacion = "✅ Listo, vuelvo a estar activo para ti. ¿En qué te puedo ayudar?"
             crm.guardar_respuesta(cliente, respuesta_reactivacion)
             enviar_whatsapp(numero, respuesta_reactivacion)

@@ -21,6 +21,7 @@ from openai import OpenAI
 
 import crm
 import pedido_manager
+import audio_handler
 
 # ===========================
 # CONFIGURACIÓN
@@ -1037,7 +1038,7 @@ def procesar_mensaje_no_soportado(numero, tipo):
     enviar_whatsapp(numero, respuesta)
 
 
-def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
+def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None):
     print("=" * 70)
     print(f"🚀 Procesando mensaje de {numero}")
     print(f"💬 Texto recibido: {texto_cliente}")
@@ -1045,7 +1046,33 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None):
     imagen_base64 = None
     imagen_mime = None
     tipo_para_crm = "texto"
-    if media_id_imagen:
+
+    if media_id_audio:
+        print("🎤 El cliente mandó un audio, descargándolo...")
+        contenido_audio, mime_audio = descargar_imagen_whatsapp(media_id_audio)
+        if not contenido_audio:
+            print("❌ No se pudo descargar el audio del cliente")
+            respuesta_fallo = "No pude descargar tu audio 😔 ¿me lo puedes mandar otra vez, o escribirlo?"
+            cliente = registrar_entrada_cliente(numero, "(audio no descargable)", tipo="audio")
+            crm.guardar_respuesta(cliente, respuesta_fallo)
+            enviar_whatsapp(numero, respuesta_fallo)
+            return
+
+        print(f"✅ Audio descargado ({len(contenido_audio)} bytes, {mime_audio}), transcribiendo...")
+        texto_transcrito = audio_handler.transcribir_audio(client, contenido_audio, mime_audio)
+        if not texto_transcrito:
+            print("❌ No se pudo transcribir el audio")
+            respuesta_fallo = "No logré entender tu audio 😔 ¿me lo puedes escribir, por favor?"
+            cliente = registrar_entrada_cliente(numero, "(audio no se pudo transcribir)", tipo="audio")
+            crm.guardar_respuesta(cliente, respuesta_fallo)
+            enviar_whatsapp(numero, respuesta_fallo)
+            return
+
+        print(f"📝 Audio transcrito: {texto_transcrito}")
+        texto_cliente = texto_transcrito
+        tipo_para_crm = "audio"
+
+    elif media_id_imagen:
         print("🖼️ El cliente mandó una imagen (Vision), descargándola...")
         contenido, mime = descargar_imagen_whatsapp(media_id_imagen)
         if contenido:
@@ -1131,6 +1158,18 @@ def handle_message():
                 target=procesar_mensaje_en_fondo,
                 args=(numero, caption),
                 kwargs={"media_id_imagen": media_id},
+                daemon=True,
+            ).start()
+            return jsonify({"status": "ok"}), 200
+
+        if tipo == "audio":
+            # Meta manda "audio" tanto para notas de voz como para audios
+            # adjuntos normales; ambos llegan igual, con un media_id.
+            media_id = mensaje["audio"]["id"]
+            threading.Thread(
+                target=procesar_mensaje_en_fondo,
+                args=(numero, ""),
+                kwargs={"media_id_audio": media_id},
                 daemon=True,
             ).start()
             return jsonify({"status": "ok"}), 200

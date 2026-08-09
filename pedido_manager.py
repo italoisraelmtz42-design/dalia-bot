@@ -150,6 +150,28 @@ def obtener_modo_atencion(telefono: str) -> str:
         """, (telefono,)).fetchone()
         return row["modo_atencion"] if row else ModoAtencion.BOT.value
 
+def reactivar_modo_bot(telefono: str) -> bool:
+    """Regresa a modo BOT todos los pedidos de este teléfono que no lo
+    estuvieran ya (código de reactivación: 2 emojis de osito 🧸🧸, ver
+    app.py). Devuelve True si de verdad cambió algo, False si ya estaba
+    en modo BOT o si no tiene ningún pedido."""
+    try:
+        with get_db_connection() as conn:
+            cur = conn.execute(
+                "UPDATE pedidos SET modo_atencion = ?, fecha_actualizacion = CURRENT_TIMESTAMP "
+                "WHERE telefono = ? AND modo_atencion != ?",
+                (ModoAtencion.BOT.value, telefono, ModoAtencion.BOT.value)
+            )
+            conn.commit()
+            cambiado = cur.rowcount > 0
+            if cambiado:
+                logger_pedidos.info(f"🧸🧸 {telefono} reactivado a modo BOT por código de reactivación")
+            return cambiado
+    except Exception as e:
+        logger_pedidos.error(f"[reactivar_modo_bot] Error: {e}")
+        return False
+
+
 def confirmar_anticipo_pedido_existente(pedido_id: int, telefono: str, borrador: dict):
     """Se usa cuando YA existía un pedido oficial para este teléfono (de un
     contacto o prueba anterior) y se confirma un anticipo nuevo. En vez de

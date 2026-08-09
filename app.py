@@ -22,6 +22,7 @@ from openai import OpenAI
 import crm
 import pedido_manager
 import audio_handler
+from constantes import ModoAtencion
 
 # ===========================
 # CONFIGURACIÓN
@@ -563,16 +564,26 @@ Cuando el cliente te mande una imagen, clasifícala primero en una de estas
 categorías y actúa según corresponda:
 
 1. COMPROBANTE DE PAGO (pantalla de banco, ticket, captura de transferencia
-   o depósito): confirma amablemente que lo recibiste, menciona el monto
-   si lo puedes leer con claridad, agradece, y llama a actualizar_pedido
-   con anticipo_confirmado=true, monto_anticipo (el monto que leas en la
+   o depósito) CON MONTO LEGIBLE: confirma amablemente que lo recibiste,
+   menciona el monto, agradece, y llama a actualizar_pedido con
+   anticipo_confirmado=true, monto_anticipo (el monto que leas en la
    imagen), metodo_pago (ej. "transferencia" o "depósito", según lo que
    veas), y comprobante (una descripción breve de lo que se ve, ej. banco
-   y referencia si se alcanzan a leer). Avísale que en breve le confirman
-   su pedido. Si el monto no se alcanza a leer bien, dile que no se ve claro
-   y pide que lo reenvíe o confirme el monto por texto — no inventes un
-   monto que no puedas leer con seguridad, y en ese caso NO llenes
-   monto_anticipo (déjalo sin mandar).
+   y referencia si se alcanzan a leer).
+
+   IMPORTANTE: este es tu ÚLTIMO mensaje en esta conversación — en cuanto
+   confirmas el anticipo, Dalia (la dueña, una persona real) toma el
+   control para coordinar entrega, costos adicionales y seguimiento. Así
+   que en este mensaje debes: agradecer, confirmar el monto recibido,
+   avisar que su pedido ya se empezó a elaborar, incluir el emoji ⏳, y
+   decirle que Dalia sigue la conversación desde aquí. No hagas preguntas
+   de seguimiento ni ofrezcas más ayuda en este mensaje — ciérralo.
+
+   Si el monto NO se alcanza a leer bien, es un caso distinto: dile que no
+   se ve claro y pide que lo reenvíe o confirme el monto por texto — no
+   inventes un monto que no puedas leer con seguridad, y en ese caso NO
+   llenes monto_anticipo ni anticipo_confirmado (la conversación sigue
+   normal, tú sigues respondiendo).
 2. REFERENCIA DE COLOR (foto de un color/tela/objeto que el cliente manda
    para pedir "quiero este color"): compáralo con los colores disponibles
    en la Base de Conocimiento y dile cuál de los tuyos se parece más. No
@@ -1085,6 +1096,16 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
 
     texto_para_guardar = texto_cliente or ("(imagen sin texto)" if media_id_imagen else "")
     cliente = registrar_entrada_cliente(numero, texto_para_guardar, tipo=tipo_para_crm)
+
+    # 🆕 Meta 2: si Dalia (humana) ya tomó el control de esta conversación
+    # (esto pasa automáticamente en cuanto se confirma el anticipo), el
+    # bot NO debe responder nada más. El mensaje ya quedó guardado arriba
+    # para que Dalia lo vea, pero no se gasta una llamada a OpenAI ni se
+    # manda ninguna respuesta automática.
+    modo_atencion = pedido_manager.obtener_modo_atencion(numero)
+    if modo_atencion != ModoAtencion.BOT.value:
+        print(f"🙅 Bot en silencio para {numero} (modo_atencion={modo_atencion}); mensaje guardado, sin respuesta automática.")
+        return
 
     sesion = obtener_sesion(numero)
     with sesion["lock"]:

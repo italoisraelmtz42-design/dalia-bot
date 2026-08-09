@@ -392,7 +392,17 @@ def obtener_sesion(numero):
 
             sesiones[numero] = {
                 "messages": mensajes_previos,
-                "pedido": pedido_previo or pedido_vacio(),
+                # 🔧 CORREGIDO: antes se usaba pedido_previo directo, que
+                # podía venir de un borrador guardado con un esquema viejo
+                # (de antes de que existieran campos como
+                # anticipo_confirmado, precio_unitario, monto_anticipo,
+                # etc.). Si a ese diccionario le faltaban esas claves,
+                # aplicar_actualizacion_pedido las descartaba en silencio
+                # después (su chequeo "if campo in pedido" las trataba
+                # como inexistentes). Ahora siempre se parte de un
+                # pedido_vacio() con TODOS los campos actuales, y encima
+                # se pisan con los valores que sí traiga pedido_previo.
+                "pedido": {**pedido_vacio(), **(pedido_previo or {})},
                 "pedido_id": pedido_id,
                 "info_enviada": info_enviada_vacia(),
                 "imagenes_enviadas": set(),
@@ -400,9 +410,14 @@ def obtener_sesion(numero):
             }
         
         # 🔥 SIEMPRE recargamos el borrador desde SQLite al inicio de cada mensaje
+        # 🔧 CORREGIDO: mismo problema que arriba pero en cada mensaje, no
+        # solo al hidratar la sesión por primera vez -- este era el punto
+        # que de verdad causaba la pérdida de datos en producción, porque
+        # se ejecuta SIEMPRE, incluso en sesiones que ya llevaban rato
+        # corriendo con el esquema completo.
         borrador = pedido_manager.cargar_borrador_pedido(numero)
         if borrador:
-            sesiones[numero]["pedido"] = borrador
+            sesiones[numero]["pedido"] = {**pedido_vacio(), **borrador}
         return sesiones[numero]
 
 

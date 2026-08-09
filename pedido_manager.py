@@ -130,6 +130,26 @@ def obtener_pedido_activo(telefono: str) -> Optional[int]:
         row = cursor.fetchone()
         return row[0] if row else None
 
+
+def obtener_modo_atencion(telefono: str) -> str:
+    """Devuelve el modo de atención vigente para este cliente: 'BOT' si el
+    bot debe seguir respondiendo automáticamente, o 'DALIA'/'SUSPENDIDO' si
+    un humano ya tomó el control (esto pasa automáticamente en cuanto se
+    confirma el anticipo de un pedido) y el bot debe quedarse callado.
+
+    A diferencia de obtener_pedido_activo() (que a propósito EXCLUYE los
+    pedidos en modo DALIA para no tratarlos como "activos" del bot), esta
+    función sí necesita poder ver ese estado, por eso mira directo el
+    pedido más reciente del cliente sin filtrar por modo_atencion.
+    """
+    with get_db_connection() as conn:
+        row = conn.execute("""
+            SELECT modo_atencion FROM pedidos
+            WHERE telefono = ?
+            ORDER BY id DESC LIMIT 1
+        """, (telefono,)).fetchone()
+        return row["modo_atencion"] if row else ModoAtencion.BOT.value
+
 def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: dict) -> int:
     """
     Crea un pedido oficial a partir del borrador.
@@ -151,6 +171,11 @@ def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: dict) 
         folio = f"DAL-{current_year}-{next_seq:06d}"
 
         # Insertar pedido
+        # 🆕 El pedido oficial SOLO se crea cuando ya se confirmó el
+        # anticipo (ver crm.sincronizar_pedido: debe_crear depende de
+        # anticipo_confirmado). Por eso nace directo en modo DALIA: el
+        # bot ya hizo su parte (tomar el pedido y cobrar el anticipo) y
+        # a partir de aquí Dalia toma el control de la conversación.
         sql_pedido = """
             INSERT INTO pedidos (folio, cliente_id, telefono, estado, modo_atencion)
             VALUES (?, ?, ?, ?, ?)
@@ -158,7 +183,7 @@ def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: dict) 
         cursor.execute(sql_pedido, (
             folio, cliente_id, telefono,
             EstadoPedido.BORRADOR.value,
-            ModoAtencion.BOT.value
+            ModoAtencion.DALIA.value
         ))
         pedido_id = cursor.lastrowid
         if not pedido_id:

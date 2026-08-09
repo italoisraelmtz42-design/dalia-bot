@@ -88,9 +88,17 @@ def sincronizar_pedido(*args, **kwargs):
             cliente_id = cliente.get('id', 0)
             pedido_id = pedido_manager.crear_pedido_desde_borrador(telefono, cliente_id, borrador)
             logger_crm.info(f"🆕 Pedido oficial creado desde borrador. ID: {pedido_id}")
-            return pedido_manager.obtener_pedido(pedido_id)
         else:
-            logger_crm.info("ℹ️ Ya existe un pedido oficial, no se crea otro.")
+            # 🔧 CORREGIDO: antes, si ya existía un pedido oficial para este
+            # teléfono (ej. de una prueba o contacto anterior), el código
+            # simplemente lo ignoraba y no hacía nada — el pedido NUNCA
+            # pasaba a modo DALIA, y el bot seguía respondiendo para
+            # siempre en ese número, aunque el cliente sí acabara de mandar
+            # un anticipo nuevo. Ahora se actualiza el pedido existente:
+            # pasa a modo DALIA y se registra el pago.
+            pedido_manager.confirmar_anticipo_pedido_existente(pedido_id, telefono, borrador)
+            logger_crm.info(f"🔁 Pedido existente {pedido_id} actualizado a modo DALIA con nuevo anticipo.")
+        return pedido_manager.obtener_pedido(pedido_id)
     else:
         pedido_manager.guardar_borrador_pedido(telefono, borrador)
         logger_crm.info(f"📝 Borrador actualizado para el teléfono {telefono}")

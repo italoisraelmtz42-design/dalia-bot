@@ -1,14 +1,16 @@
 PRODUCTO 009
 OSITO DE TOALLA AFELPADA
 
+Precio
+$18.00 MXN por pieza.
+
 mandar siempre la siguiente imagen del recuerdito:
 osito toalla afelpada.jpeg 
 *cuando cliente pregunta por el producto
 *cuando se le recomiende el producto
 *cuando el cliente solicite opciones
 
-Precio
-$18.00 MXN por pieza.
+
 
 Descripción comercial:
 Modelo elaborado con una toalla afelpada de mayor tamaño (29cm x 29cm aproximadamente), lo que proporciona una apariencia más suave y robusta. El osito ya formado mide aproximadamente 15cm.

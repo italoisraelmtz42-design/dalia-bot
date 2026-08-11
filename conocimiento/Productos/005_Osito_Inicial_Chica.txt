@@ -1,14 +1,16 @@
 PRODUCTO 005
 OSITO DE TOALLA CON INICIAL CHICA
 
+Precio
+$15.00 MXN por pieza.
+
 mandar siempre la siguiente imagen del recuerdito:
 osito con inicial chica.jpeg 
 *cuando cliente pregunta por el producto
 *cuando se le recomiende el producto
 *cuando el cliente solicite opciones
 
-Precio
-$15.00 MXN por pieza.
+
 
 Descripción comercial
 Modelo personalizado con una inicial decorativa. Muy elegido cuando se desea que el recuerdito tenga un toque único.

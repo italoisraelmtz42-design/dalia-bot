@@ -1,6 +1,13 @@
 PRODUCTO 014
 UNICORNIO DE TOALLA CON JABONCITO O SIN JABONCITO (JABONCITO DE PIE, CRUZ, CORAZON, FLOR, OSITO, ESTRELLA)
 
+mandar siempre la siguiente imagen del recuerdito:
+unicornio de toalla.jpeg 
+*cuando cliente pregunta por el producto
+*cuando se le recomiende el producto
+*cuando el cliente solicite opciones
+
+
 
 Precio: $14 pesos
 

@@ -1,6 +1,9 @@
 PRODUCTO 004
 OSITO DE TOALLA DOBLE PIE
 
+Precio
+$14.00 MXN por pieza.
+
 mandar siempre la siguiente imagen del recuerdito:
 osito doble piecito.jpeg 
 *cuando cliente pregunta por el producto
@@ -8,8 +11,7 @@ osito doble piecito.jpeg
 *cuando el cliente solicite opciones
 
 
-Precio
-$14.00 MXN por pieza.
+
 
 Descripción comercial
 Versión del osito de toalla que incorpora dos jaboncitos con forma de piecito, ideal para Baby Shower y nacimientos.

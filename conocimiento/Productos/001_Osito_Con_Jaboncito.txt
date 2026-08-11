@@ -2,6 +2,13 @@
 PRODUCTO 001
 OSITO DE TOALLA CON UN JABONCITO DE PIE O ESTRELLA O CORAZÓN, O FLOR, O CRUZ O UN OSITO
 
+mandar siempre la siguiente imagen del recuerdito:
+osito con jaboncito.jpeg 
+*cuando cliente pregunta por el producto
+*cuando se le recomiende el producto
+*cuando el cliente solicite opciones
+
+
 Categoría
 Ositos de Toalla
 

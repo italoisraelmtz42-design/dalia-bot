@@ -1,6 +1,12 @@
 PRODUCTO 016
 CABALLO DE TOALLA CON JABONCITO O SIN JABONCITO (JABONCITO DE PIE, CRUZ, CORAZON, FLOR, OSITO, ESTRELLA)
 
+mandar siempre la siguiente imagen del recuerdito:
+caballito de toalla.jpeg 
+*cuando cliente pregunta por el producto
+*cuando se le recomiende el producto
+*cuando el cliente solicite opciones
+
 
 Precio: $15 pesos
 

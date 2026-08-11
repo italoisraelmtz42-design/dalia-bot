@@ -1,6 +1,12 @@
 PRODUCTO 009
 OSITO DE TOALLA AFELPADA
 
+mandar siempre la siguiente imagen del recuerdito:
+osito toalla afelpada.jpeg 
+*cuando cliente pregunta por el producto
+*cuando se le recomiende el producto
+*cuando el cliente solicite opciones
+
 Precio
 $18.00 MXN por pieza.
 

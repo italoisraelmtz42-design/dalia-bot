@@ -1,6 +1,13 @@
 PRODUCTO 004
 OSITO DE TOALLA DOBLE PIE
 
+mandar siempre la siguiente imagen del recuerdito:
+osito doble piecito.jpeg 
+*cuando cliente pregunta por el producto
+*cuando se le recomiende el producto
+*cuando el cliente solicite opciones
+
+
 Precio
 $14.00 MXN por pieza.
 

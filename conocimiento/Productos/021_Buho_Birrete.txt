@@ -1,6 +1,12 @@
 PRODUCTO 021
 BÚHO DE TOALLA CON BIRRETE CON JABONCITO O SIN JABONCITO (JABONCITO DE PIE, CRUZ, CORAZON, FLOR, OSITO, ESTRELLA)
 
+mandar siempre la siguiente imagen del recuerdito:
+buho con virrete de toalla.jpeg 
+*cuando cliente pregunta por el producto
+*cuando se le recomiende el producto
+*cuando el cliente solicite opciones
+
 
 
 precio: $14 pesos

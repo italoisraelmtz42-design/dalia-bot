@@ -1,14 +1,16 @@
 PRODUCTO 007
 OSITO DE TOALLA CON INICIAL GRANDE
 
+Precio
+$22.00 MXN por pieza.
+
 mandar siempre la siguiente imagen del recuerdito:
 osito con inicial grande.jpeg 
 *cuando cliente pregunta por el producto
 *cuando se le recomiende el producto
 *cuando el cliente solicite opciones
 
-Precio
-$22.00 MXN por pieza.
+
 
 Descripción comercial
 Modelo premium del catálogo. Incorpora una inicial de mayor tamaño que resalta visualmente y hace del recuerdito una pieza mucho más personalizada.

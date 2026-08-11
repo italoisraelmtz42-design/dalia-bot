@@ -1,13 +1,15 @@
 PRODUCTO 017
 PERRITO DE TOALLA CON JABONCITO O SIN JABONCITO (JABONCITO DE PIE, CRUZ, CORAZON, FLOR, OSITO, ESTRELLA)
 
+Precio: $13 pesos
+
 mandar siempre la siguiente imagen del recuerdito:
 perrito de toalla.jpeg 
 *cuando cliente pregunta por el producto
 *cuando se le recomiende el producto
 *cuando el cliente solicite opciones
 
-Precio: $13 pesos
+
 
 Descripción comercial
 Figura de toalla con forma de perrito. Es un recuerdito alegre y llamativo para eventos infantiles.

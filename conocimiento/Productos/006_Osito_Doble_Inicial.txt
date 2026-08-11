@@ -1,6 +1,12 @@
 PRODUCTO 006
 OSITO DE TOALLA DOBLE INICIAL CHICA
 
+mandar siempre la siguiente imagen del recuerdito:
+osito con doble inicial chica.jpeg 
+*cuando cliente pregunta por el producto
+*cuando se le recomiende el producto
+*cuando el cliente solicite opciones
+
 Precio
 $19.00 MXN por pieza.
 

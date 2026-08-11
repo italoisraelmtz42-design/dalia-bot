@@ -2,6 +2,12 @@
 PRODUCTO 001
 OSITO DE TOALLA SENCILLO O SIN JABÓN
 
+mandar siempre la siguiente imagen del recuerdito:
+Osito sencillo sin jaboncito.jpeg 
+*cuando cliente pregunta por el producto
+*cuando se le recomiende el producto
+*cuando el cliente solicite opciones
+
 Categoría
 Ositos de Toalla
 

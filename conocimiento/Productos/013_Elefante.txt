@@ -1,6 +1,8 @@
 PRODUCTO 013
 ELEFANTE DE TOALLA 
 
+Precio $14.00 pesos
+
 mandar siempre la siguiente imagen del recuerdito:
 elefante de toalla.jpeg 
 *cuando cliente pregunta por el producto
@@ -10,7 +12,7 @@ elefante de toalla.jpeg
 ELEFANTE DE TOALLA CON JABONCITO O SIN JABONCITO (JABONCITO DE PIE, CRUZ, CORAZON, FLOR, OSITO, ESTRELLA)
 
 Descripción comercial
-Precio $14.00 pesos, Figura de toalla con forma de elefante con ojitos, medida de toalla 20x20cm, medida de elefante formado mide 7cm aproximadamente.
+Figura de toalla con forma de elefante con ojitos, medida de toalla 20x20cm, medida de elefante formado mide 7cm aproximadamente.
 
 Incluye:
 •toalla con figura de elefante

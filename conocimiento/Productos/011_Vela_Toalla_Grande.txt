@@ -1,6 +1,12 @@
 PRODUCTO 011
 VELA DE TOALLA GRANDE
 
+mandar siempre la siguiente imagen del recuerdito:
+velas de toalla cyG.jpeg 
+*cuando cliente pregunta por el producto
+*cuando se le recomiende el producto
+*cuando el cliente solicite opciones
+
 Descripción comercial:
 Precio: $16.50 pesos
 Recuerdo elaborado con una toallita doblada en forma de vela decorativa. Ideal para eventos religiosos.

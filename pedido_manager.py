@@ -390,12 +390,25 @@ def confirmar_anticipo_pedido_existente(pedido_id: int, telefono: str, borrador:
 def calcular_total(borrador: Optional[Dict] = None, pedido_id: Optional[int] = None) -> Dict[str, float]:
     """
     Devuelve dict con:
-      subtotal_items, cargo_urgente, costo_envio, total
+      subtotal_items, cargo_urgente, costo_envio, total, incompleto,
+      productos_sin_precio
     Fuente de verdad numérica — el modelo NO debe inventar el total.
+
+    🔧 CORREGIDO (bug real detectado en pruebas): antes, un item sin
+    precio_unitario resuelto simplemente sumaba $0 al total, sin ninguna
+    señal de que el total estaba incompleto -- un pedido de 30 ositos +
+    40 velitas dio "$710" en vez de "$1070" porque los ositos no
+    encontraron precio y nadie se enteró hasta que la clienta preguntó.
+    Ahora se detectan los items marcados como "_precio_pendiente" y se
+    exponen en "incompleto" / "productos_sin_precio" para que el sistema
+    (prompt del modelo, gates de anticipo, etc.) nunca trate un total
+    incompleto como si fuera el definitivo.
     """
     subtotal = 0.0
     cargo_urgente = 0.0
     costo_envio = 0.0
+    incompleto = False
+    productos_sin_precio = []
 
     if pedido_id:
         ped = obtener_pedido(pedido_id)
@@ -410,6 +423,8 @@ def calcular_total(borrador: Optional[Dict] = None, pedido_id: Optional[int] = N
                 "cargo_urgente": cargo_urgente,
                 "costo_envio": costo_envio,
                 "total": subtotal + cargo_urgente + costo_envio,
+                "incompleto": False,
+                "productos_sin_precio": [],
             }
 
     if borrador:
@@ -417,7 +432,11 @@ def calcular_total(borrador: Optional[Dict] = None, pedido_id: Optional[int] = N
         if items and isinstance(items, list):
             for it in items:
                 cant = float(it.get("cantidad") or 0)
-                precio = float(it.get("precio_unitario") or 0)
+                precio_raw = it.get("precio_unitario")
+                if it.get("_precio_pendiente") or precio_raw in (None, 0, 0.0):
+                    incompleto = True
+                    productos_sin_precio.append(it.get("producto") or "?")
+                precio = float(precio_raw or 0)
                 subtotal += cant * precio
         else:
             cant = float(borrador.get("cantidad") or 0)
@@ -430,6 +449,8 @@ def calcular_total(borrador: Optional[Dict] = None, pedido_id: Optional[int] = N
     return {
         "subtotal_items": subtotal,
         "cargo_urgente": cargo_urgente,
+        "incompleto": incompleto,
+        "productos_sin_precio": productos_sin_precio,
         "costo_envio": costo_envio,
         "total": subtotal + cargo_urgente + costo_envio,
     }

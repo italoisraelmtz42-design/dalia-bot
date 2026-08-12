@@ -1,0 +1,8 @@
+PRODUCTO 032
+NOMBRE: Encendedor personalizado
+PRECIO OFICIAL: $10.00 sin bolsa / $11.00 con bolsa celofán
+IMAGEN: encendedores.jpeg
+
+INCLUYE: encendedor con etiqueta/tarjetita personalizada.
+NOTA: diseño de la tarjetita se define DESPUÉS del anticipo.
+KEYWORDS: encendedor, encendedores personalizados

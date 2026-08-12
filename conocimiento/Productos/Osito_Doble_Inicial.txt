@@ -1,0 +1,8 @@
+PRODUCTO 006
+NOMBRE: Osito de toalla DOBLE INICIAL CHICA
+PRECIO OFICIAL: $19.00 MXN c/u
+IMAGEN: osito con doble inicial chica.jpeg
+
+INCLUYE: osito de toalla, bolsa, tarjeta, jaboncito doble inicial.
+NOTA: pedir las letras.
+KEYWORDS: osito doble inicial, osito dos iniciales

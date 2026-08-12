@@ -1,0 +1,14 @@
+PRODUCTO 019
+NOMBRE: Conejo de toalla
+PRECIO OFICIAL: $13.50 MXN c/u
+IMAGEN: conejito de toalla.jpeg
+(mandar imagen al preguntar, recomendar o pedir opciones)
+
+VARIANTES: con jaboncito o sin jaboncito (mismo precio).
+Si elige con jaboncito, figuras: pie, cruz, corazón, flor, osito, estrella.
+
+INCLUYE: toalla en forma del animal, bolsa celofán, tarjeta personalizada.
+(si con jabón) jaboncito de glicerina sin aroma.
+
+KEYWORDS: conejo, conejito
+REGLA: precio siempre $13.50.

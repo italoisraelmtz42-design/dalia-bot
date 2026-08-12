@@ -114,6 +114,19 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://dalia-bot.onrender.com")
 EXTENSIONES_IMAGEN_VALIDAS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
+def _clave_sin_acentos(s: str) -> str:
+    """Helper local (definido antes que _sin_acentos más abajo en el
+    archivo, porque cargar_catalogo_imagenes() se ejecuta al importar el
+    módulo, antes de llegar a esa definición). Quita acentos para que las
+    claves de imagen sean consistentes con normalizar_producto_clave --
+    antes una imagen con tilde en el nombre generaba una clave con acento
+    (ej. 'oración_con_velita') que era fácil de no emparejar bien."""
+    if not s:
+        return ""
+    rep = str.maketrans("áéíóúüñÁÉÍÓÚÜÑ", "aeiouunAEIOUUN")
+    return s.translate(rep)
+
+
 def cargar_catalogo_imagenes():
     catalogo = {}
     if not CARPETA_IMAGENES.exists():
@@ -126,8 +139,10 @@ def cargar_catalogo_imagenes():
     print("=" * 60)
     for archivo in archivos:
         if archivo.is_file() and archivo.suffix.lower() in EXTENSIONES_IMAGEN_VALIDAS:
-            clave = archivo.stem.strip().lower().replace(" ", "_")
+            clave = _clave_sin_acentos(archivo.stem.strip().lower().replace(" ", "_"))
             nombre_mostrar = archivo.stem.replace("_", " ").replace("-", " ").strip().capitalize()
+            if "#u00" in clave or "#U00" in archivo.stem:
+                print(f"🚨 Nombre de archivo con codificación rota, revisa el nombre real: {archivo.name}")
             catalogo[clave] = {
                 "nombre_mostrar": nombre_mostrar,
                 "archivo": archivo.name,
@@ -167,6 +182,54 @@ def url_imagen_producto(clave_producto):
     if not info:
         return None
     return f"{PUBLIC_BASE_URL}/imagenes/{info['archivo']}"
+
+
+# 🔧 Imágenes que se mandan de inmediato por palabra clave del CLIENTE,
+# sin depender de que el modelo se acuerde de llamar mostrar_foto_producto
+# (bug real detectado en pruebas: el bot no mandaba la foto de colores
+# aunque el cliente preguntara por colores). "colores_disponibles" es la
+# más importante -- evita dudas sobre qué colores existen. El resto son
+# productos de UNA sola variante (no necesitan preguntar nada antes, a
+# diferencia de los ositos, que sí tienen varias presentaciones y se
+# quedan con el flujo normal de mostrar_foto_producto para no adelantar
+# la foto equivocada).
+PALABRAS_CLAVE_IMAGEN_AUTOMATICA = {
+    "colores_disponibles": ("color", "colores"),
+    "velas_de_toalla_cyg": ("velita", "velitas", "vela de toalla", "velas de toalla", "vela grande", "vela chica"),
+    "elefante_de_toalla": ("elefante", "elefantito", "elefantes"),
+    "jirafa_de_toalla": ("jirafa", "jirafas"),
+    "buho_con_virrete_de_toalla": ("birrete", "virrete"),
+    "buho_de_toalla": ("buho", "buhos"),
+    "caballito_de_toalla": ("caballo", "caballito", "caballos"),
+    "conejito_de_toalla": ("conejo", "conejito", "conejos"),
+    "leoncito_de_toalla": ("leon", "leoncito", "leones"),
+    "mariposa_de_toalla": ("mariposa", "mariposas"),
+    "perrito_de_toalla": ("perro", "perrito", "perros"),
+    "unicornio_de_toalla": ("unicornio", "unicornios"),
+}
+
+
+def detectar_imagenes_automaticas(texto_cliente: str) -> list:
+    """Palabras clave del mensaje del CLIENTE -> claves de imagen a
+    mandar de inmediato. No reemplaza mostrar_foto_producto (el modelo
+    lo sigue usando para productos con variantes, como los ositos);
+    esto es un respaldo determinístico solo para colores y productos de
+    una sola presentación, donde no hay nada que preguntar antes."""
+    if not texto_cliente:
+        return []
+    texto_norm = normalizar_producto_clave(texto_cliente)
+    claves = []
+    for clave_imagen, palabras in PALABRAS_CLAVE_IMAGEN_AUTOMATICA.items():
+        if clave_imagen not in CATALOGO_IMAGENES:
+            continue
+        if any(normalizar_producto_clave(p) in texto_norm for p in palabras):
+            claves.append(clave_imagen)
+    # Caso especial: "buho con birrete" no debe mandar TAMBIÉN la foto
+    # del buho sencillo -- si se detectó la variante con birrete, se
+    # quita la genérica de la lista.
+    if "buho_con_virrete_de_toalla" in claves and "buho_de_toalla" in claves:
+        claves.remove("buho_de_toalla")
+    return claves
 
 
 # ===========================
@@ -287,7 +350,7 @@ ARCHIVOS_CONOCIMIENTO_SIEMPRE = {
     "Politicas generales/Anticipos.txt",
     "Politicas generales/Colores disponibles.txt",
     "Politicas generales/Datos bancarios  para pagos, transferencias y anticipos.txt",
-    "Politicas generales/Entregas y env#U00edos.txt",
+    "Politicas generales/Entregas y envíos.txt",
     "Politicas generales/Pedidos urgentes.txt",
     "Politicas generales/Precios de mayoreo.txt",
     "Politicas generales/REGLAS IRROMPIBLES DEL NEGOCIO.txt",
@@ -894,6 +957,12 @@ REGLAS DE FECHAS Y PEDIDOS URGENTES (usa SIEMPRE la fecha de hoy de arriba,
 - La fecha de entrega MÁS PRÓXIMA posible para un pedido NORMAL (no urgente)
   es el {dia_semana_minima} {fecha_minima.strftime('%d/%m/%Y')}. Un pedido
   normal podría tardar hasta el {fecha_maxima.strftime('%d/%m/%Y')}.
+- 🚨 {fecha_minima.strftime('%d/%m/%Y')} es SOLO el límite mínimo para
+  validar si un pedido es urgente o no -- NUNCA la uses como la fecha de
+  entrega del pedido a menos que el cliente la haya pedido explícitamente.
+  SIEMPRE pregunta "¿para cuándo lo necesitas?" antes de llenar
+  fecha_evento/fecha_entrega. Si todavía no lo has preguntado, NO llenes
+  ese campo, aunque el resto del pedido ya esté completo.
 - Si el cliente pide una fecha de entrega ANTES de {fecha_minima.strftime('%d/%m/%Y')},
   eso es un PEDIDO URGENTE. Para pedidos urgentes aplican estas restricciones:
   - Solo se puede entregar EN EL LOCAL (nunca a domicilio ni en puntos de entrega).
@@ -1851,6 +1920,11 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
     print(f"🚀 Procesando mensaje de {numero}")
     print(f"💬 Texto recibido: {texto_cliente}")
 
+    # 🔧 Se checa ANTES de guardar el mensaje entrante -- si se checara
+    # después, este mismo mensaje ya contaría como "1 mensaje previo" y
+    # nunca detectaríamos al cliente como nuevo.
+    es_primera_vez = pedido_manager.es_cliente_nuevo(numero)
+
     imagen_base64 = None
     imagen_mime = None
     tipo_para_crm = "texto"
@@ -1943,7 +2017,51 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         print(f"🙅 Bot en silencio para {numero} (modo_atencion={modo_atencion}); mensaje guardado, sin respuesta automática.")
         return
 
+    # 🔧 CORREGIDO (regla real detectada en pruebas): la Base de
+    # Conocimiento (00_PRIORIDAD_MAXIMA.txt, regla 9) exige que TODO
+    # cliente nuevo reciba un saludo canónico exacto + las imágenes
+    # A.jpeg y B.jpeg, sin importar qué haya escrito. Antes esto dependía
+    # 100% de que el modelo se acordara de seguir esa instrucción -- en
+    # pruebas reales, un cliente nuevo preguntó por las entregas y el bot
+    # se saltó directo a contestar, sin el saludo ni las fotos. Ahora se
+    # fuerza en Python, igual que ya se hace con los precios y los
+    # mensajes fijos post-anticipo: no se le pregunta al modelo, se manda
+    # directo. El mensaje real del cliente (su pregunta, lo que sea) se
+    # queda guardado en el historial y el bot lo atiende normal en
+    # cuanto el cliente vuelva a escribir algo.
+    if es_primera_vez:
+        saludo_canonico = (
+            "Hola! Buen día. Disponibles!! Te muestro algunos de nuestros "
+            "productos y te comparto información de las entregas que "
+            "manejamos!! Buscas algún recuerdito en especial?"
+        )
+        enviar_whatsapp(numero, saludo_canonico)
+        crm.guardar_respuesta(cliente, saludo_canonico)
+        for clave_img in ("a", "b"):
+            url_img = url_imagen_producto(clave_img)
+            if url_img:
+                enviar_whatsapp_imagen(numero, url_img)
+            else:
+                print(f"⚠️ No se encontró la imagen '{clave_img}' para el saludo de cliente nuevo")
+        print(f"👋 {numero}: saludo canónico + 2 imágenes enviados (cliente nuevo)")
+        return
+
     sesion = obtener_sesion(numero)
+
+    # 🔧 Envío determinístico de imágenes clave (colores + productos de
+    # una sola variante) -- ver detectar_imagenes_automaticas arriba.
+    # Se manda ANTES de consultar al modelo para que llegue de inmediato,
+    # no como una foto más entre varias respuestas de texto.
+    imagenes_enviadas = sesion["imagenes_enviadas"]
+    for clave_img in detectar_imagenes_automaticas(texto_cliente):
+        if clave_img in imagenes_enviadas:
+            continue
+        url_img = url_imagen_producto(clave_img)
+        if url_img:
+            enviar_whatsapp_imagen(numero, url_img)
+            imagenes_enviadas.add(clave_img)
+            print(f"🖼️ Imagen automática enviada a {numero}: {clave_img}")
+
     with sesion["lock"]:
         try:
             print("🧠 Consultando OpenAI...")

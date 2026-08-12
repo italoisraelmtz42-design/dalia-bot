@@ -510,8 +510,30 @@ def normalizar_producto_clave(nombre: str) -> str:
     n = " ".join(n.split())
     return n
 
+# Palabras sin valor para distinguir un producto de otro -- se ignoran al
+# comparar (permite que "osito DE TOALLA con jaboncito" empareje con la
+# clave de catálogo "osito con jaboncito" aunque el orden/las palabras de
+# relleno cambien).
+_STOPWORDS_PRODUCTO = {"de", "con", "sin", "para", "toalla", "un", "una", "el", "la", "los", "las"}
+
+
+def _palabras_clave(texto: str) -> set:
+    return {w for w in normalizar_producto_clave(texto).split() if w not in _STOPWORDS_PRODUCTO}
+
+
 def resolver_precio(nombre_producto: str, cantidad: int = 1) -> float | None:
-    """Devuelve precio oficial o None si no hay match."""
+    """Devuelve precio oficial o None si no hay match razonable.
+
+    🔧 CORREGIDO (bug real detectado en pruebas): antes esto solo hacía un
+    match de substring EXACTO ("osito con jaboncito" in "osito de toalla
+    con jaboncito" -> False, por el orden/palabras de relleno), y si no
+    encontraba nada, se quedaba en silencio sin precio -- el producto
+    terminaba contando como $0 en el total sin que nadie lo notara.
+    Ahora compara por CONJUNTO DE PALABRAS CLAVE (ignorando relleno como
+    "de", "con", "toalla"), y si hay más de un candidato posible, elige el
+    de MAYOR traslape para evitar falsos positivos entre productos
+    parecidos (ej. "osito con jaboncito" vs "osito doble inicial").
+    """
     if not nombre_producto:
         return None
     clave = normalizar_producto_clave(nombre_producto)
@@ -519,12 +541,29 @@ def resolver_precio(nombre_producto: str, cantidad: int = 1) -> float | None:
         precio = PRECIOS_CATALOGO[clave]
     else:
         precio = None
-        # match parcial: si la clave del catálogo está contenida en el nombre
+        palabras_pedido = _palabras_clave(nombre_producto)
+        mejor_score = 0
         for k, v in PRECIOS_CATALOGO.items():
-            if k in clave or clave in k:
-                precio = v
-                break
+            palabras_catalogo = _palabras_clave(k)
+            if not palabras_catalogo:
+                continue
+            # Todas las palabras clave del catálogo deben estar presentes
+            # en lo que pidió el cliente (evita medios-matches raros).
+            if palabras_catalogo.issubset(palabras_pedido):
+                score = len(palabras_catalogo)
+                if score > mejor_score:
+                    mejor_score = score
+                    precio = v
+        if precio is None:
+            # Último recurso: substring literal (comportamiento anterior,
+            # cubre casos que el match por palabras no contempla).
+            for k, v in PRECIOS_CATALOGO.items():
+                if k in clave or clave in k:
+                    precio = v
+                    break
     if precio is None:
+        print(f"🚨 PRECIO NO ENCONTRADO para producto '{nombre_producto}' -- "
+              f"revisa si falta agregarlo a PRECIOS_CATALOGO en app.py.")
         return None
     # Mayoreos simples
     c = normalizar_producto_clave(nombre_producto)
@@ -543,7 +582,16 @@ def resolver_precio(nombre_producto: str, cantidad: int = 1) -> float | None:
 
 
 def aplicar_precio_oficial(item: dict) -> dict:
-    """Sobrescribe precio_unitario con el del catálogo. Nunca confía en GPT."""
+    """Sobrescribe precio_unitario con el del catálogo. Nunca confía en GPT.
+
+    🔧 CORREGIDO (bug real detectado en pruebas): antes, si resolver_precio
+    no encontraba nada, esta función no hacía NADA -- el item se quedaba
+    con precio_unitario=None y calcular_total lo trataba como $0 sin
+    ninguna señal visible. Ahora, si no hay match, se marca explícitamente
+    con "_precio_pendiente": True para que calcular_total y el prompt del
+    modelo puedan detectarlo y avisar en vez de dar un total incompleto
+    con confianza.
+    """
     if not isinstance(item, dict):
         return item
     prod = item.get("producto") or ""
@@ -551,6 +599,9 @@ def aplicar_precio_oficial(item: dict) -> dict:
     oficial = resolver_precio(prod, cant)
     if oficial is not None:
         item["precio_unitario"] = oficial
+        item["_precio_pendiente"] = False
+    else:
+        item["_precio_pendiente"] = True
     return item
 
 
@@ -746,13 +797,33 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None):
     resumen = pedido_manager.generar_resumen(pedido_id=pedido_id, borrador=pedido)
     try:
         _tot = pedido_manager.calcular_total(pedido_id=pedido_id, borrador=pedido)
-        resumen += (
-            f"\n\n[TOTAL OFICIAL DEL SISTEMA — úsalo, no inventes otro]\n"
-            f"Subtotal items: ${_tot['subtotal_items']:.2f}\n"
-            f"Cargo urgente: ${_tot['cargo_urgente']:.2f}\n"
-            f"Costo envío: ${_tot['costo_envio']:.2f}\n"
-            f"TOTAL: ${_tot['total']:.2f} MXN"
-        )
+        if _tot.get("incompleto"):
+            # 🔧 CORREGIDO (bug real detectado en pruebas): antes, si un
+            # producto no encontraba precio, el total simplemente lo
+            # ignoraba (contaba como $0) y el modelo lo presentaba con
+            # toda confianza como si fuera el total real -- así se le dio
+            # a una clienta un total $360 más barato de lo debido sin que
+            # nadie lo notara. Ahora, si hay productos sin precio
+            # resuelto, el modelo recibe una instrucción explícita de NO
+            # dar ningún total todavía.
+            productos = ", ".join(_tot.get("productos_sin_precio") or [])
+            resumen += (
+                f"\n\n[⚠️ TOTAL INCOMPLETO — NO lo muestres al cliente todavía]\n"
+                f"Los siguientes productos no tienen precio resuelto en el "
+                f"sistema: {productos}.\n"
+                f"NO des ningún total ni digas cifras. En vez de eso, dile al "
+                f"cliente que en un momento le confirmas el precio de ese "
+                f"producto específico, y sigue la conversación con normalidad "
+                f"en lo demás. Nunca inventes un precio para ese producto."
+            )
+        else:
+            resumen += (
+                f"\n\n[TOTAL OFICIAL DEL SISTEMA — úsalo, no inventes otro]\n"
+                f"Subtotal items: ${_tot['subtotal_items']:.2f}\n"
+                f"Cargo urgente: ${_tot['cargo_urgente']:.2f}\n"
+                f"Costo envío: ${_tot['costo_envio']:.2f}\n"
+                f"TOTAL: ${_tot['total']:.2f} MXN"
+            )
     except Exception:
         pass
 
@@ -1276,6 +1347,27 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido):
             and pedido.get("anticipo_confirmado") is True
             and not ya_estaba_confirmado
         )
+        # 🔧 CAPA 3 DE SEGURIDAD (bug real detectado en pruebas): nunca
+        # dejar que se confirme un anticipo mientras haya productos sin
+        # precio resuelto en el pedido -- es el último punto de control
+        # antes de que el pedido se dé por cobrado. Aunque el matching de
+        # precios (capa 1) y la señal de "incompleto" en el prompt (capa
+        # 2) fallaran por cualquier motivo, esto es lo que evita que un
+        # pedido con un producto gratis por error llegue a confirmarse.
+        if anticipo_recien_confirmado:
+            _tot_check = pedido_manager.calcular_total(borrador=pedido)
+            if _tot_check.get("incompleto"):
+                pedido["anticipo_confirmado"] = False
+                productos = ", ".join(_tot_check.get("productos_sin_precio") or [])
+                print(f"🚨 Se bloqueó confirmación de anticipo: precio pendiente para {productos}")
+                return (
+                    f"BLOQUEADO: no se puede confirmar el anticipo todavía porque "
+                    f"estos productos no tienen precio resuelto: {productos}. "
+                    f"Dile al cliente que en un momento le confirmas el precio de "
+                    f"ese producto antes de continuar con el pago.",
+                    campos_modificados,
+                    False,
+                )
         return "ok", campos_modificados, anticipo_recien_confirmado
 
     if name == "agregar_item":
@@ -1472,9 +1564,12 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
 
 def pedido_tiene_total_valido(pedido) -> bool:
     """Gate: solo se permiten datos bancarios si hay al menos un item con
-    cantidad y precio, o un total calculado > 0."""
+    cantidad y precio, o un total calculado > 0, Y el total no está
+    incompleto (ningún producto con precio pendiente de resolver)."""
     try:
         tot = pedido_manager.calcular_total(borrador=pedido)
+        if tot.get("incompleto"):
+            return False
         if tot["total"] > 0:
             return True
     except Exception:

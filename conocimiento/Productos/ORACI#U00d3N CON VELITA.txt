@@ -1,8 +1,0 @@
-PRODUCTO 024
-NOMBRE: Oración con velita
-PRECIO OFICIAL: $10.00 MXN c/u
-IMAGEN: oración con velita.jpeg
-
-MEDIDAS: oración ~13x10 cm
-INCLUYE: oración, velita, bolsa celofán.
-KEYWORDS: oracion con velita

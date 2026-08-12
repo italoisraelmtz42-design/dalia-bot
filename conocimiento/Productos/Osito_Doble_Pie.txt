@@ -1,8 +1,0 @@
-PRODUCTO 004
-NOMBRE: Osito de toalla DOBLE PIE
-PRECIO OFICIAL: $14.00 MXN c/u
-IMAGEN: osito doble piecito.jpeg
-
-INCLUYE: osito de toalla, bolsa celofán, tarjeta, DOBLE jaboncito forma piecito (sin aroma).
-EVENTOS: baby shower, nacimiento.
-KEYWORDS: osito doble pie, osito dos piecitos

@@ -574,11 +574,30 @@ def obtener_modo_atencion(telefono: str) -> str:
 
 
 def resetear_cliente_completo(telefono: str) -> bool:
-    """Borra borrador + historial de chat del teléfono (útil para pruebas)."""
+    """Borra TODO lo relacionado a ese teléfono: historial de chat,
+    borrador, y pedido(s) oficial(es) con sus items/pagos/entrega
+    (en cascada). Destructivo e irreversible -- pensado para pruebas.
+
+    🔧 CORREGIDO (bug real detectado en pruebas): antes solo borraba
+    borradores_pedido e historial_chat -- la tabla `pedidos` (los
+    pedidos YA CONFIRMADOS con anticipo) nunca se tocaba. Si un cliente
+    de prueba había llegado a confirmar un anticipo (modo_atencion
+    pasa a DALIA en ese pedido), el reset "limpiaba" todo excepto esa
+    fila -- y como obtener_modo_atencion() lee el pedido más reciente en
+    la tabla `pedidos`, el bot se quedaba en silencio para siempre con
+    ese número después del reset, aunque pareciera haber funcionado (el
+    mensaje de confirmación del reset sí se mandaba bien).
+    """
     try:
         with get_db_connection() as conn:
             conn.execute("DELETE FROM borradores_pedido WHERE telefono = ?", (telefono,))
             conn.execute("DELETE FROM historial_chat WHERE telefono = ?", (telefono,))
+            # Con ON DELETE CASCADE + PRAGMA foreign_keys=ON (ver
+            # database.py), esto también borra en cascada: pedido_items,
+            # pagos, entregas, pedido_historial y pedido_eventos de ese
+            # pedido -- incluye el modo_atencion=DALIA que dejaba al bot
+            # en silencio.
+            conn.execute("DELETE FROM pedidos WHERE telefono = ?", (telefono,))
             conn.commit()
         return True
     except Exception as e:

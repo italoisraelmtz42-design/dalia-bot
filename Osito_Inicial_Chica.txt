@@ -1,8 +1,0 @@
-PRODUCTO 005
-NOMBRE: Osito de toalla con INICIAL CHICA
-PRECIO OFICIAL: $15.00 MXN c/u
-IMAGEN: osito con inicial chica.jpeg
-
-INCLUYE: osito de toalla, bolsa, tarjeta, jaboncito de glicerina forma inicial (~3x3 cm).
-NOTA: pedir la letra de la inicial.
-KEYWORDS: osito inicial chica, osito con letra

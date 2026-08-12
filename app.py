@@ -350,7 +350,14 @@ ARCHIVOS_CONOCIMIENTO_SIEMPRE = {
     "Politicas generales/Anticipos.txt",
     "Politicas generales/Colores disponibles.txt",
     "Politicas generales/Datos bancarios  para pagos, transferencias y anticipos.txt",
-    "Politicas generales/Entregas y envíos.txt",
+    # ⚠️ El nombre de este archivo en disco sigue con la codificación
+    # rota del nombre original ("env#U00edos" en vez de "envíos") --
+    # decidiste dejar ese arreglo pendiente por ahora, así que esta
+    # entrada usa el nombre TAL COMO EXISTE HOY para no romper la
+    # validación. Si algún día subes el archivo renombrado
+    # correctamente ("Entregas y envíos.txt"), actualiza esta línea
+    # también, o vas a ver la alerta 🚨 de "archivo no encontrado".
+    "Politicas generales/Entregas y env#U00edos.txt",
     "Politicas generales/Pedidos urgentes.txt",
     "Politicas generales/Precios de mayoreo.txt",
     "Politicas generales/REGLAS IRROMPIBLES DEL NEGOCIO.txt",

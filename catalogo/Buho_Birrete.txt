@@ -1,0 +1,14 @@
+PRODUCTO 021
+NOMBRE: Búho de toalla con birrete
+PRECIO OFICIAL: $14.00 MXN c/u
+IMAGEN: buho con virrete de toalla.jpeg
+(mandar imagen al preguntar, recomendar o pedir opciones)
+
+VARIANTES: con jaboncito o sin jaboncito (mismo precio).
+Si elige con jaboncito, figuras: pie, cruz, corazón, flor, osito, estrella.
+
+INCLUYE: toalla en forma del animal, bolsa celofán, tarjeta personalizada.
+(si con jabón) jaboncito de glicerina sin aroma.
+
+KEYWORDS: buho birrete, buho graduacion
+REGLA: precio siempre $14.00.

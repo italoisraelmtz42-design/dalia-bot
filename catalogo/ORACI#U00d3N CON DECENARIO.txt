@@ -1,0 +1,8 @@
+PRODUCTO 023
+NOMBRE: Oración con decenario
+PRECIO OFICIAL: $15.00 MXN c/u
+IMAGEN: oración con decenario.jpeg
+
+MEDIDAS: oración ~13x10 cm; decenario ~12 cm
+INCLUYE: oración, decenario, bolsa celofán.
+KEYWORDS: oracion con decenario, decenario

@@ -1,0 +1,8 @@
+PRODUCTO 007
+NOMBRE: Osito de toalla con INICIAL GRANDE
+PRECIO OFICIAL: $22.00 MXN c/u
+IMAGEN: osito con inicial grande.jpeg
+
+INCLUYE: osito de toalla, bolsa, tarjeta, jaboncito inicial grande.
+NOTA: pedir la letra.
+KEYWORDS: osito inicial grande

@@ -1,0 +1,12 @@
+PEDIDOS URGENTES
+
+Definición: el cliente necesita entrega ANTES del plazo normal
+(4 a 6 días hábiles después del anticipo).
+
+Condiciones:
+- Cargo extra: $50 MXN por pedido (una sola vez, no por producto)
+- Solo entrega en LOCAL (no domicilio ni puntos de entrega)
+- NO se aceptan pedidos urgentes los sábados
+- Domingos no se trabaja
+
+Al cotizar urgente, dilo claro: cargo +$50 y solo recolección en local.

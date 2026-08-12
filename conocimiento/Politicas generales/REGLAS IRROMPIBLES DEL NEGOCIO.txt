@@ -1,0 +1,22 @@
+REGLAS DEL NEGOCIO (complemento de 00_PRIORIDAD_MAXIMA)
+
+Saludo cliente nuevo: ver 00_PRIORIDAD_MAXIMA punto 9 + mandar A.jpeg y B.jpeg.
+
+Anticipo obligatorio antes de fabricar. Ver Anticipos.txt y 00_PRIORIDAD_MAXIMA.
+
+Antes del anticipo:
+- Tener TODOS los datos del pedido
+- Mostrar resumen con TOTAL
+- Cliente debe confirmar que el resumen está correcto
+
+Resumen debe incluir: todos los productos, cantidades, colores, fecha entrega,
+tipo de entrega, cargo urgente si aplica, envío si aplica, TOTAL.
+
+Entrega a domicilio: NUNCA prometer hora exacta (rango 1pm–10pm).
+
+No trabajamos domingos.
+Sábados: no se aceptan pedidos urgentes.
+
+Diferenciar FECHA DE EVENTO vs FECHA DE ENTREGA.
+
+Si no conoces la respuesta: no inventar.

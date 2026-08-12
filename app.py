@@ -2001,9 +2001,19 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             with sesiones_lock:
                 sesiones.pop(numero, None)
 
+            # 🔧 CORREGIDO (bug real detectado en pruebas): antes, justo
+            # después de vaciar historial_chat, se volvían a insertar 2
+            # filas ahí mismo (el "🧸☠️🧸" y la confirmación "✅ Listo,
+            # empezamos de cero...") -- entonces historial_chat YA NO
+            # quedaba realmente vacío, y es_cliente_nuevo() (que revisa
+            # justo eso) dejaba de detectar al cliente como nuevo en su
+            # siguiente mensaje. Resultado: después de un reset, el
+            # saludo canónico + las 2 imágenes obligatorias nunca se
+            # mandaban, porque el sistema ya no consideraba "nuevo" a ese
+            # número. Ahora la confirmación del reset se manda sin
+            # guardarse en historial_chat, para que el reset deje el
+            # número genuinamente en cero.
             respuesta_reset = "✅ Listo, empezamos de cero. ¿En qué te puedo ayudar?"
-            cliente_fresco = registrar_entrada_cliente(numero, "🧸☠️🧸", tipo="texto")
-            crm.guardar_respuesta(cliente_fresco, respuesta_reset)
             enviar_whatsapp(numero, respuesta_reset)
             return
 

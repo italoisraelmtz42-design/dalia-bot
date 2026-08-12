@@ -27,6 +27,9 @@ def get_db_connection():
     conn.execute("PRAGMA busy_timeout = 5000;")
     return conn
 
+# Alias usado por clientes.py, historial.py y pedido_manager
+get_connection = get_db_connection
+
 def init_order_tables():
     try:
         with get_db_connection() as conn:

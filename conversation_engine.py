@@ -75,6 +75,7 @@ def cargar_base_conocimiento() -> str:
     print("="*60)
     print("CARGANDO ARCHIVOS...")
     
+    knowledge_text = ""
     for file_path in archivos_encontrados:
         try:
             with open(file_path, 'r', encoding='utf-8') as f:

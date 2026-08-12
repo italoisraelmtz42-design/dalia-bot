@@ -42,7 +42,69 @@ def guardar_respuesta(cliente, respuesta, tipo="texto"):
     telefono = cliente['numero'] if isinstance(cliente, dict) else cliente
     pedido_manager.chat_guardar_mensaje(telefono, respuesta, "bot")
 
-def pedido_para_ram(*args, **kwargs): return {}
+def pedido_para_ram(pedido_db):
+    """Convierte un PedidoData (o None) a dict plano usable en la sesión RAM.
+    Soporta múltiples items."""
+    if not pedido_db:
+        return {}
+    try:
+        base = {
+            "producto": None,
+            "cantidad": None,
+            "precio_unitario": None,
+            "color_toalla": None,
+            "color_mono": None,
+            "tipo_entrega": None,
+            "fecha_evento": None,
+            "municipio": None,
+            "direccion": None,
+            "costo_envio": None,
+            "es_urgente": bool(getattr(pedido_db, "es_urgente", 0)),
+            "anticipo_confirmado": False,
+            "items": [],
+        }
+        items = getattr(pedido_db, "items", []) or []
+        if items:
+            base["items"] = [
+                {
+                    "producto": it.producto,
+                    "cantidad": it.cantidad,
+                    "precio_unitario": it.precio_unitario,
+                    "color_toalla": it.color_toalla,
+                    "color_mono": it.color_moño,
+                    "tipo_jaboncito": it.tipo_jaboncito,
+                    "color_jaboncito": it.color_jaboncito,
+                    "nombre_bebe": it.nombre_bebe,
+                    "tarjetita": it.tarjetita,
+                }
+                for it in items
+            ]
+            # Compatibilidad: copiar el primer item a campos planos
+            first = items[0]
+            base["producto"] = first.producto
+            base["cantidad"] = first.cantidad
+            base["precio_unitario"] = first.precio_unitario
+            base["color_toalla"] = first.color_toalla
+            base["color_mono"] = first.color_moño
+        entrega = getattr(pedido_db, "entrega", None)
+        if entrega:
+            base["tipo_entrega"] = entrega.tipo_entrega
+            base["municipio"] = entrega.municipio
+            base["direccion"] = entrega.direccion
+            base["fecha_evento"] = entrega.fecha_entrega
+            base["costo_envio"] = entrega.costo_envio
+        pagos = getattr(pedido_db, "pagos", []) or []
+        if any(getattr(p, "confirmado", 0) for p in pagos):
+            base["anticipo_confirmado"] = True
+            for p in pagos:
+                if getattr(p, "confirmado", 0):
+                    base["monto_anticipo"] = p.monto
+                    base["metodo_pago"] = p.metodo
+                    break
+        return base
+    except Exception as e:
+        logger_crm.error(f"pedido_para_ram error: {e}")
+        return {}
 
 def cargar_pedido(cliente):
     telefono = cliente['numero'] if isinstance(cliente, dict) else cliente

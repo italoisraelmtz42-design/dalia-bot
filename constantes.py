@@ -113,6 +113,39 @@ def campos_requeridos_para(nombre_producto: str) -> list:
 
     return FALTANTES_UNIVERSALES
 
+
+def campos_faltantes_pedido(pedido: dict) -> list:
+    """Evalúa campos faltantes por ITEM cuando hay lista multi-producto.
+    También valida campos a nivel pedido (entrega, fecha).
+    Devuelve lista de strings legibles para el prompt."""
+    faltantes = []
+    items = pedido.get("items") if isinstance(pedido.get("items"), list) else []
+    if not items:
+        # formato plano
+        req = campos_requeridos_para(pedido.get("producto") or "")
+        for c in req:
+            if not pedido.get(c):
+                faltantes.append(c)
+        return faltantes
+
+    for i, it in enumerate(items, 1):
+        req = campos_requeridos_para(it.get("producto") or "")
+        # campos que viven en el item
+        item_campos = {
+            "producto", "cantidad", "color_toalla", "color_mono", "color_velita",
+            "tipo_jaboncito", "color_jaboncito", "nombre_bebe", "tarjetita",
+            "precio_unitario",
+        }
+        for c in req:
+            if c in item_campos and not it.get(c):
+                faltantes.append(f"item{i}.{c} ({it.get('producto') or '?'})")
+            elif c not in item_campos and not pedido.get(c):
+                # fecha_evento, tipo_entrega, etc. a nivel pedido
+                tag = f"{c}"
+                if tag not in faltantes:
+                    faltantes.append(tag)
+    return faltantes
+
 # --- DATACLASSES (Movidas aquí para evitar ImportError) ---
 @dataclass
 class ItemData:

@@ -1,8 +1,0 @@
-PRODUCTO 033
-NOMBRE: Espejo redondo personalizado
-PRECIO OFICIAL: $14.00 MXN c/u
-IMAGEN: Espejito redondo.jpeg
-
-MEDIDA: 6 cm
-INCLUYE: etiqueta personalizada, bolsita celofán.
-KEYWORDS: espejo, espejito redondo

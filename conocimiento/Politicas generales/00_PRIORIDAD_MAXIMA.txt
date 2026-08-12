@@ -29,6 +29,11 @@ usar ÚNICAMENTE los colores listados en el archivo de ese producto.
 - Pedido URGENTE: si piden antes de ese plazo → +$50 MXN, solo entrega en LOCAL, no se aceptan urgentes en sábado.
 - No trabajamos domingos.
 - Diferencia siempre FECHA DE EVENTO vs FECHA DE ENTREGA.
+- NUNCA asumas ni llenes fecha_evento/fecha_entrega con la "fecha mínima
+  posible" que calcula el sistema -- esa fecha es SOLO para decidir si un
+  pedido es urgente o no. La fecha de entrega real SIEMPRE debe venir de
+  que el cliente la diga explícitamente, después de preguntarle "¿para
+  cuándo lo necesitas?". Si no lo has preguntado, no la llenes.
 
 5) ANTICIPO
 - Obligatorio para agendar y fabricar.

@@ -83,10 +83,3 @@ Comentar siempre amablemente al cliente, según corresponda:
 EN LOCAL: ACEPTAMOS PAGO CON TRASFERENCIA O EFECTIVO. no aceptamos pago con tarjeta.
 A DOMICILIO: SOLO PAGOS EN EFECTIVO, NO SE ACEPTAN TRANSFERENCIAS, ni pagos con tarjeta.
 EN PUNTO DE ENTREGA: PAGO EN EFECTIVO O TRANSFERENCIA. no aceptamos pago con tarjeta.
-
-
-
-
-
-
-

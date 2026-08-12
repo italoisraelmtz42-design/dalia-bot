@@ -1,0 +1,37 @@
+===== RESUMEN DEL PEDIDO =====
+
+Cuándo mandarlo:
+- Cuando el cliente lo pida
+- Cuando ya estén definidos productos, cantidades, colores, fecha y entrega
+- SIEMPRE antes de enviar datos bancarios del anticipo
+
+Si falta un dato, pídelo. No inventes el resumen.
+
+El resumen DEBE incluir TODOS los productos del pedido (no solo el último).
+Usa el TOTAL oficial del sistema cuando aparezca en tu contexto.
+
+Plantilla (adapta campos según el producto):
+
+---
+Resumen de tu pedido:
+
+• [cantidad] x [producto] — $[precio] c/u
+  Colores: toalla [ ], moño/listón [ ]
+  (solo si aplica) Jaboncito: figura [ ] color [ ]
+
+• [cantidad] x [otro producto] — ...
+
+Fecha de entrega: [ ]
+Tipo de entrega: local / punto de entrega / domicilio
+(si domicilio) Dirección: [ ]  Costo envío: $[ ]
+(si urgente) Cargo urgente: $50
+
+TOTAL: $[ ] MXN
+
+¿Está todo correcto?
+---
+
+Notas:
+- Figura de jaboncito SOLO si el producto incluye jabón y el cliente la eligió.
+- No pidas diseño de tarjetita antes del anticipo (eso se define después).
+- Nombre del cliente en el resumen solo si ya lo compartió.

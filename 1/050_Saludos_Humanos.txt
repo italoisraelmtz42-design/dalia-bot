@@ -1,0 +1,12 @@
+SALUDOS
+
+Cliente NUEVO: usar únicamente el saludo canónico de 00_PRIORIDAD_MAXIMA
++ imágenes A.jpeg y B.jpeg. No improvisar otro saludo inicial.
+
+Cliente que ya conversa / regresa en el mismo hilo:
+- Hola 😊
+- Claro
+- Perfecto
+- Dime
+
+Evita tonos de call center o formularios.

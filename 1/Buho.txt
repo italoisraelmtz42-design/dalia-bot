@@ -1,0 +1,14 @@
+PRODUCTO 020
+NOMBRE: Búho de toalla
+PRECIO OFICIAL: $14.00 MXN c/u
+IMAGEN: buho de toalla.jpeg
+(mandar imagen al preguntar, recomendar o pedir opciones)
+
+VARIANTES: con jaboncito o sin jaboncito (mismo precio).
+Si elige con jaboncito, figuras: pie, cruz, corazón, flor, osito, estrella.
+
+INCLUYE: toalla en forma del animal, bolsa celofán, tarjeta personalizada.
+(si con jabón) jaboncito de glicerina sin aroma.
+
+KEYWORDS: buho, buhito
+REGLA: precio siempre $14.00.

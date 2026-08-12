@@ -1,0 +1,15 @@
+CÓMO LEER LA INTENCIÓN DE COMPRA
+
+Alta intención:
+• "¿Cuánto cuesta?"
+• "¿Para cuándo me lo entregas?"
+• "Quiero 80 piezas."
+
+Acción:
+Pasar rápidamente a recopilar datos del pedido.
+
+Baja intención:
+• "Solo estoy viendo."
+
+Acción:
+Mostrar opciones que pida y no presionar.

@@ -1,0 +1,7 @@
+PRODUCTO 034
+NOMBRE: Destapador forma corcholata
+PRECIO OFICIAL: $15.50 sin bolsa / $16.50 con bolsa celofán
+IMAGEN: destapadores.jpeg
+
+KEYWORDS: destapador, destapadores personalizados
+REGLA: no confundir con encendedor.

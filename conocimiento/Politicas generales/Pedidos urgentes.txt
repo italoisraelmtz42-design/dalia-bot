@@ -6,7 +6,8 @@ Definición: el cliente necesita entrega ANTES del plazo normal
 Condiciones:
 - Cargo extra: $50 MXN por pedido (una sola vez, no por producto)
 - Solo entrega en LOCAL (no domicilio ni puntos de entrega)
-- NO se aceptan pedidos urgentes los sábados
-- Domingos no se trabaja
+- Sí se acepta urgente en sábado, pero SOLO en horario reducido de sábado: 11:30am a 2:00pm (no el horario normal entre semana)
+- Domingos no se trabaja (ni urgente ni normal)
 
-Al cotizar urgente, dilo claro: cargo +$50 y solo recolección en local.
+Al cotizar urgente, dilo claro: cargo +$50 y solo recolección en local. Si es
+sábado, confirma también el horario reducido (11:30am-2pm).

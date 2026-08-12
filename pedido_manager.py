@@ -79,6 +79,24 @@ def _row_to_entrega(row) -> Optional[EntregaData]:
 # Chat history (usado por crm.py)
 # ---------------------------------------------------------------------------
 
+def es_cliente_nuevo(telefono: str) -> bool:
+    """True si este teléfono nunca le ha escrito antes al bot (cero
+    mensajes en historial_chat). Se usa para forzar el saludo canónico +
+    las 2 imágenes obligatorias en el primer contacto, en vez de dejarlo
+    a que el modelo se acuerde de hacerlo (regla de la Base de
+    Conocimiento que antes no tenía ningún respaldo en código)."""
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) as c FROM historial_chat WHERE telefono = ?",
+                (telefono,),
+            ).fetchone()
+        return (row["c"] if row else 0) == 0
+    except Exception as e:
+        logger.error(f"es_cliente_nuevo: {e}")
+        return False
+
+
 def chat_guardar_mensaje(telefono: str, mensaje: str, emisor: str):
     """emisor = 'usuario' | 'bot'"""
     try:

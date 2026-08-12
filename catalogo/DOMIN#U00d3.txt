@@ -1,9 +1,0 @@
-PRODUCTO 031
-NOMBRE: Dominó de madera
-PRECIO OFICIAL: $35.00 MXN c/u
-PRECIO MAYOREO: $30.00 c/u a partir de 50 piezas
-IMAGEN: domino.jpeg
-
-INCLUYE: dominó de madera personalizado.
-EVENTOS: graduaciones, cumpleaños, baby shower, boda, bautizo.
-KEYWORDS: domino, dominó, dominó personalizado

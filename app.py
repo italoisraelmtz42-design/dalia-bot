@@ -569,6 +569,47 @@ PRECIOS_CATALOGO = {
     "oracion con velita": 10.0,
 }
 
+# 🔧 Costo de envío a domicilio por municipio -- antes esto vivía SOLO en
+# texto (00_INDICE_PRECIOS.txt) y el modelo tenía que acordarse del monto
+# exacto para cada municipio y llamar actualizar_pedido con costo_envio=X
+# a mano. Mismo riesgo que ya vimos con los precios de producto: si el
+# modelo se equivoca o se le olvida, el total queda mal sin que nadie lo
+# note. Ahora es una tabla determinística en Python, igual que
+# PRECIOS_CATALOGO -- el municipio SIEMPRE gana sobre lo que diga el
+# modelo.
+COSTOS_ENVIO_MUNICIPIO = {
+    "monterrey": 90.0,
+    "apodaca": 90.0,
+    "san nicolas": 90.0,
+    "san nicolas de los garza": 90.0,
+    "escobedo": 90.0,
+    "general escobedo": 90.0,
+    "guadalupe": 90.0,
+    "santa catarina": 100.0,
+    "san pedro": 120.0,
+    "san pedro garza garcia": 120.0,
+    "juarez": 120.0,
+    "pesqueria": 150.0,
+}
+COSTO_ENVIO_FUERA_DE_ZONA = 300.0  # DHL, requiere pedido 100% liquidado
+
+
+def resolver_costo_envio(municipio: str) -> float | None:
+    """Devuelve el costo oficial de envío para un municipio, o None si el
+    municipio no viene en la lista (fuera de zona -- requiere el precio
+    especial de DHL, no un monto normal de domicilio)."""
+    if not municipio:
+        return None
+    clave = normalizar_producto_clave(municipio)
+    if clave in COSTOS_ENVIO_MUNICIPIO:
+        return COSTOS_ENVIO_MUNICIPIO[clave]
+    for k, v in COSTOS_ENVIO_MUNICIPIO.items():
+        if k in clave or clave in k:
+            return v
+    print(f"⚠️ Municipio '{municipio}' no está en COSTOS_ENVIO_MUNICIPIO -- "
+          f"tratado como fuera de zona (${COSTO_ENVIO_FUERA_DE_ZONA} DHL).")
+    return None
+
 def _sin_acentos(s: str) -> str:
     if not s:
         return ""
@@ -668,6 +709,20 @@ def aplicar_precio_oficial(item: dict) -> dict:
     cant = item.get("cantidad") or 1
     oficial = resolver_precio(prod, cant)
     if oficial is not None:
+        # 🔧 Cargo por cambio de moño (osito peluche / osito toalla
+        # afelpada): antes esto solo vivía como texto en la Base de
+        # Conocimiento ("cambio de moño +$2.00 c/u") y dependía 100% de
+        # que el modelo se acordara de sumarlo aparte -- mismo riesgo que
+        # ya vimos con los precios base. Ahora, si el modelo marcó
+        # mono_personalizado=true en el item, Python agrega el cargo
+        # directo al precio unitario, sin depender de que se acuerde de
+        # nada más.
+        clave_prod = normalizar_producto_clave(prod)
+        es_peluche_o_afelpada = (
+            "peluche" in clave_prod or "afelpad" in clave_prod
+        )
+        if es_peluche_o_afelpada and item.get("mono_personalizado"):
+            oficial += 2.0
         item["precio_unitario"] = oficial
         item["_precio_pendiente"] = False
     else:
@@ -865,6 +920,17 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None):
         conocimiento = KNOWLEDGE
 
     resumen = pedido_manager.generar_resumen(pedido_id=pedido_id, borrador=pedido)
+    if isinstance(pedido, dict) and pedido.get("_envio_fuera_de_zona"):
+        resumen += (
+            f"\n\n[⚠️ MUNICIPIO FUERA DE ZONA]\n"
+            f"El municipio '{pedido.get('municipio')}' no está en la lista de "
+            f"zonas normales de envío (no tiene costo fijo de $90-$150). Esto "
+            f"significa envío especial por DHL: dile al cliente que ese envío "
+            f"es por paquetería y que el pedido debe estar 100% liquidado "
+            f"(no solo anticipo) antes de enviarse, y consulta el costo real "
+            f"de DHL con Dalia en vez de inventar un monto. NO llames "
+            f"actualizar_pedido con un costo_envio inventado para este caso."
+        )
     try:
         _tot = pedido_manager.calcular_total(pedido_id=pedido_id, borrador=pedido)
         if _tot.get("incompleto"):
@@ -973,7 +1039,10 @@ REGLAS DE FECHAS Y PEDIDOS URGENTES (usa SIEMPRE la fecha de hoy de arriba,
 - Si el cliente pide una fecha de entrega ANTES de {fecha_minima.strftime('%d/%m/%Y')},
   eso es un PEDIDO URGENTE. Para pedidos urgentes aplican estas restricciones:
   - Solo se puede entregar EN EL LOCAL (nunca a domicilio ni en puntos de entrega).
-  - No se aceptan pedidos urgentes los días sábado.
+  - 🔧 Sí se puede entregar urgente EN SÁBADO, pero SOLO dentro del horario
+    reducido de sábado: 11:30am a 2:00pm. Si el cliente pide urgente para
+    sábado, confírmalo con ese horario específico (no el horario normal
+    entre semana de 3:30pm-6:30pm).
   - No se aceptan pedidos urgentes para entregarse en domingo (no abrimos domingos).
   - Avisa al cliente de estas restricciones ANTES de confirmar el pedido, de
     forma amable, y no confirmes un pedido urgente con entrega a domicilio o
@@ -1163,6 +1232,15 @@ TOOLS = [
                     "color_jaboncito": {"type": "string"},
                     "nombre_bebe": {"type": "string"},
                     "tarjetita": {"type": "string"},
+                    "mono_personalizado": {
+                        "type": "boolean",
+                        "description": (
+                            "SOLO para osito peluche llavero u osito toalla afelpada: "
+                            "true si el cliente pidió un color de moño DISTINTO al que "
+                            "ya viene incluido de fábrica en ese color de osito (tiene "
+                            "cargo extra de $2.00 c/u). false o no enviar si no aplica."
+                        ),
+                    },
                 },
                 "required": ["producto", "cantidad"],
             },
@@ -1189,6 +1267,15 @@ TOOLS = [
                     "color_jaboncito": {"type": "string"},
                     "nombre_bebe": {"type": "string"},
                     "tarjetita": {"type": "string"},
+                    "mono_personalizado": {
+                        "type": "boolean",
+                        "description": (
+                            "SOLO para osito peluche llavero u osito toalla afelpada: "
+                            "true si el cliente pidió un color de moño DISTINTO al que "
+                            "ya viene incluido de fábrica en ese color de osito (tiene "
+                            "cargo extra de $2.00 c/u). false o no enviar si no aplica."
+                        ),
+                    },
                 },
                 "required": ["producto"],
             },
@@ -1292,6 +1379,26 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
             campos_modificados.append("es_urgente")
 
     print("📝 Pedido (meta) actualizado:", {k: pedido.get(k) for k in campos_modificados})
+
+    # 🔧 Costo de envío determinístico -- ver COSTOS_ENVIO_MUNICIPIO. En
+    # cuanto se sepa el municipio, Python decide el costo real, sin
+    # importar qué monto haya dicho el modelo (igual que ya se hace con
+    # aplicar_precio_oficial para productos).
+    if "municipio" in campos_modificados and pedido.get("tipo_entrega") != "local":
+        costo_oficial = resolver_costo_envio(pedido.get("municipio"))
+        if costo_oficial is not None:
+            if pedido.get("costo_envio") != costo_oficial:
+                pedido["costo_envio"] = costo_oficial
+                if "costo_envio" not in campos_modificados:
+                    campos_modificados.append("costo_envio")
+            pedido["_envio_fuera_de_zona"] = False
+        else:
+            # Municipio no reconocido -- fuera de zona, requiere el precio
+            # especial de DHL y pedido 100% liquidado antes de enviarse.
+            # No se asume $300 en automático porque además cambia la
+            # condición de pago (liquidado, no solo anticipo).
+            pedido["_envio_fuera_de_zona"] = True
+
     return campos_modificados
 
 
@@ -1322,7 +1429,7 @@ def agregar_item_pedido(pedido, argumentos_json):
         if datos.get("cantidad"):
             existing["cantidad"] = int(datos["cantidad"])
         for k in ("color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
-                  "color_jaboncito", "nombre_bebe", "tarjetita"):
+                  "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado"):
             if datos.get(k) not in (None, ""):
                 existing[k] = datos[k]
         aplicar_precio_oficial(existing)
@@ -1338,7 +1445,7 @@ def agregar_item_pedido(pedido, argumentos_json):
         "cantidad": int(datos.get("cantidad") or 1),
     }
     for k in ("color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
-              "color_jaboncito", "nombre_bebe", "tarjetita"):
+              "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado"):
         if datos.get(k) not in (None, ""):
             item[k] = datos[k]
     # IGNORAR cualquier precio que mande el modelo
@@ -1369,7 +1476,7 @@ def actualizar_item_pedido(pedido, argumentos_json):
     if datos.get("cantidad") not in (None, ""):
         existing["cantidad"] = int(datos["cantidad"])
     for k in ("color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
-              "color_jaboncito", "nombre_bebe", "tarjetita", "producto"):
+              "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado", "producto"):
         if k == "producto":
             continue
         if datos.get(k) not in (None, ""):

@@ -608,7 +608,43 @@ def generar_resumen(pedido_id: Optional[int] = None, borrador: Optional[Dict] = 
 # Utilidades de sesión
 # ---------------------------------------------------------------------------
 
+def conversacion_silenciada(telefono: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM conversaciones_silenciadas WHERE telefono = ?",
+                (telefono,),
+            ).fetchone()
+        return row is not None
+    except Exception as e:
+        logger.error(f"conversacion_silenciada: {e}")
+        return False
+
+
+def silenciar_conversacion(telefono: str) -> None:
+    with get_db_connection() as conn:
+        conn.execute(
+            "INSERT INTO conversaciones_silenciadas (telefono, fecha_actualizacion) "
+            "VALUES (?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(telefono) DO UPDATE SET fecha_actualizacion = CURRENT_TIMESTAMP",
+            (telefono,),
+        )
+        conn.commit()
+
+
+def reactivar_conversacion(telefono: str) -> None:
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM conversaciones_silenciadas WHERE telefono = ?", (telefono,))
+        conn.commit()
+
+
 def obtener_modo_atencion(telefono: str) -> str:
+    # 🔧 El silencio manual por conversación (ver conversacion_silenciada)
+    # tiene prioridad sobre lo que diga la tabla pedidos -- así funciona
+    # incluso en conversaciones que todavía no llegan a tener un pedido
+    # oficial creado.
+    if conversacion_silenciada(telefono):
+        return ModoAtencion.DALIA.value
     try:
         with get_db_connection() as conn:
             row = conn.execute(

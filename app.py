@@ -31,7 +31,7 @@ load_dotenv()
 import crm
 import pedido_manager
 import audio_handler
-from constantes import ModoAtencion
+from constantes import ModoAtencion, campos_faltantes_pedido
 
 # ===========================
 # CONFIGURACIÓN
@@ -748,10 +748,6 @@ def resolver_precio(nombre_producto: str, cantidad: int = 1) -> float | None:
         return 30.0
     if "peluche" in c and cant >= 50:
         return 16.0
-    if "encendedor" in c and "bolsa" in c:
-        return 11.0
-    if "destapador" in c and "bolsa" in c:
-        return 16.5
     return float(precio)
 
 
@@ -786,6 +782,20 @@ def aplicar_precio_oficial(item: dict) -> dict:
         )
         if es_peluche_o_afelpada and item.get("mono_personalizado"):
             oficial += 2.0
+
+        # 🔧 Cargo por bolsa de celofán (encendedores / destapadores):
+        # antes esto dependía de que el modelo escribiera literalmente
+        # "con bolsa" dentro del texto del producto para que
+        # resolver_precio lo detectara -- frágil, mismo riesgo que ya
+        # vimos con otros cargos basados en texto libre. Ahora es un
+        # campo estructurado (con_bolsa: true/false) que el cliente
+        # responde explícitamente y Python aplica el cargo directo.
+        es_encendedor_o_destapador = (
+            "encendedor" in clave_prod or "destapador" in clave_prod
+        )
+        if es_encendedor_o_destapador and item.get("con_bolsa"):
+            oficial += 1.0
+
         item["precio_unitario"] = oficial
         item["_precio_pendiente"] = False
     else:
@@ -983,6 +993,29 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None):
         conocimiento = KNOWLEDGE
 
     resumen = pedido_manager.generar_resumen(pedido_id=pedido_id, borrador=pedido)
+
+    # 🔧 CORREGIDO (gap real detectado en pruebas): este cálculo
+    # (campos_requeridos_para / campos_faltantes_pedido en constantes.py)
+    # ya existía en el código pero nunca se conectaba a ningún lado --
+    # el bot a veces cerraba pedidos sin haber preguntado datos
+    # obligatorios (ej. color de moño) porque nadie se lo señalaba de
+    # forma explícita. Ahora se calcula cada turno y, si falta algo, se
+    # le avisa directo al modelo cuáles campos exactos faltan por
+    # producto, en vez de depender de que se acuerde solo.
+    try:
+        if isinstance(pedido, dict):
+            faltantes = campos_faltantes_pedido(pedido)
+            if faltantes:
+                resumen += (
+                    f"\n\n[📋 DATOS QUE TODAVÍA FALTAN POR PREGUNTAR]\n"
+                    f"{', '.join(faltantes)}\n"
+                    f"Antes de armar el resumen final o pedir el anticipo, pregunta "
+                    f"estos datos que faltan (uno o dos a la vez, no todos de golpe). "
+                    f"No asumas ni inventes ninguno de estos valores."
+                )
+    except Exception as e:
+        print(f"⚠️ Error calculando campos faltantes: {e}")
+
     if isinstance(pedido, dict) and pedido.get("_envio_fuera_de_zona"):
         resumen += (
             f"\n\n[⚠️ MUNICIPIO FUERA DE ZONA]\n"
@@ -1318,6 +1351,16 @@ TOOLS = [
                             "cargo extra de $2.00 c/u). false o no enviar si no aplica."
                         ),
                     },
+                    "con_bolsa": {
+                        "type": "boolean",
+                        "description": (
+                            "SOLO para encendedores o destapadores: true si el cliente "
+                            "quiere el producto CON bolsa de celofán (cuesta $1.00 extra "
+                            "c/u), false si lo quiere SIN bolsa (precio base). Siempre "
+                            "pregúntale al cliente cuál prefiere antes de cotizar estos "
+                            "productos -- no asumas."
+                        ),
+                    },
                 },
                 "required": ["producto", "cantidad"],
             },
@@ -1351,6 +1394,16 @@ TOOLS = [
                             "true si el cliente pidió un color de moño DISTINTO al que "
                             "ya viene incluido de fábrica en ese color de osito (tiene "
                             "cargo extra de $2.00 c/u). false o no enviar si no aplica."
+                        ),
+                    },
+                    "con_bolsa": {
+                        "type": "boolean",
+                        "description": (
+                            "SOLO para encendedores o destapadores: true si el cliente "
+                            "quiere el producto CON bolsa de celofán (cuesta $1.00 extra "
+                            "c/u), false si lo quiere SIN bolsa (precio base). Siempre "
+                            "pregúntale al cliente cuál prefiere antes de cotizar estos "
+                            "productos -- no asumas."
                         ),
                     },
                 },
@@ -1517,7 +1570,7 @@ def agregar_item_pedido(pedido, argumentos_json):
         if datos.get("cantidad"):
             existing["cantidad"] = int(datos["cantidad"])
         for k in ("color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
-                  "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado"):
+                  "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado", "con_bolsa"):
             if datos.get(k) not in (None, ""):
                 existing[k] = datos[k]
         aplicar_precio_oficial(existing)
@@ -1533,7 +1586,7 @@ def agregar_item_pedido(pedido, argumentos_json):
         "cantidad": int(datos.get("cantidad") or 1),
     }
     for k in ("color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
-              "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado"):
+              "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado", "con_bolsa"):
         if datos.get(k) not in (None, ""):
             item[k] = datos[k]
     # IGNORAR cualquier precio que mande el modelo
@@ -1564,7 +1617,7 @@ def actualizar_item_pedido(pedido, argumentos_json):
     if datos.get("cantidad") not in (None, ""):
         existing["cantidad"] = int(datos["cantidad"])
     for k in ("color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
-              "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado", "producto"):
+              "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado", "con_bolsa", "producto"):
         if k == "producto":
             continue
         if datos.get(k) not in (None, ""):

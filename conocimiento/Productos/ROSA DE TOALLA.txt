@@ -2,6 +2,12 @@
 ROSA DE TOALLA
 PRECIO $16.00 C/U
 
+mandar siempre la siguiente imagen del recuerdito:
+toalla en forma de rosa.png 
+*cuando cliente pregunta por el producto
+*cuando se le recomiende el producto
+*cuando el cliente solicite opciones
+
 
 Descripción comercial
 Toalla con forma de rosa, envuelta en acetato. 

@@ -143,6 +143,19 @@ def init_order_tables():
                 fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
 
+            # 🔧 Conversaciones silenciadas por Dalia (por cliente
+            # individual, no global). Se usa cuando Dalia contesta manual
+            # a un cliente específico desde Messenger porque notó que el
+            # bot se equivocó -- el bot deja de responder SOLO en esa
+            # conversación, sin afectar a nadie más. Independiente de si
+            # ya existe un pedido oficial confirmado o no (a diferencia
+            # de modo_atencion en la tabla pedidos, que solo aplica una
+            # vez que hay un pedido creado).
+            cursor.execute("""CREATE TABLE IF NOT EXISTS conversaciones_silenciadas (
+                telefono TEXT PRIMARY KEY,
+                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+
             if current_version == 0:
                 cursor.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, fecha TEXT DEFAULT CURRENT_TIMESTAMP)")
                 cursor.execute("INSERT INTO schema_version (version) VALUES (1)")

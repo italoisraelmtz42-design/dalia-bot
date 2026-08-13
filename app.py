@@ -1006,6 +1006,49 @@ def sumar_dias_habiles(fecha_inicio, dias_habiles):
     return fecha
 
 
+def parsear_fecha_pedido(texto_fecha):
+    """Convierte el texto de fecha_evento/fecha_entrega (como lo haya
+    escrito el modelo) a un date real de Python, o None si no se pudo
+    interpretar. Prueba varios formatos, con DD/MM/YYYY primero (el que
+    se usa en todo el resto del sistema)."""
+    if not texto_fecha:
+        return None
+    texto_fecha = str(texto_fecha).strip()
+    formatos = ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y")
+    for fmt in formatos:
+        try:
+            return datetime.strptime(texto_fecha, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def es_pedido_urgente(texto_fecha_entrega) -> bool | None:
+    """Decide de forma determinística si una fecha de entrega es urgente,
+    comparando contra la fecha de HOY real del servidor -- nunca contra
+    lo que el modelo "crea" que es hoy.
+
+    🔧 CORREGIDO (bug real detectado en pruebas, con una clienta real):
+    antes, si el pedido era urgente o no lo decidía el modelo con
+    actualizar_pedido(es_urgente=true/false) -- y el modelo se equivocó
+    feo: le cobró $50 de cargo urgente a una clienta por una fecha
+    (18 de septiembre) que en realidad estaba a más de un mes de
+    distancia del día real (13 de agosto), muy lejos de necesitar cargo
+    urgente. Parece que comparó los números de día sueltos ("18" vs
+    "19") en vez de las fechas completas contra hoy. Ahora Python decide
+    esto siempre, sin excepción, y sobreescribe cualquier es_urgente que
+    haya puesto el modelo (aplicar_actualizacion_pedido en ejecutar_tool_call).
+
+    Devuelve None si la fecha no se pudo interpretar (para no adivinar).
+    """
+    fecha = parsear_fecha_pedido(texto_fecha_entrega)
+    if fecha is None:
+        return None
+    ahora = datetime.now(ZONA_HORARIA_NEGOCIO)
+    fecha_minima = sumar_dias_habiles(ahora.date(), 4)
+    return fecha < fecha_minima
+
+
 def seccion_catalogo_pdf():
     if not URL_CATALOGO_PDF:
         return ""
@@ -1121,6 +1164,15 @@ REGLAS (prioridad máxima — leen antes que cualquier otra instrucción):
 - Si un dato ya dicho contradice el catálogo oficial, CORRIGE con la verdad del catálogo (precio, color, disponibilidad).
 - Precios: copia EXACTOS del archivo del producto. Nunca redondees ni mezcles precios de otro producto.
 - El TOTAL del pedido lo calcula el sistema (ver bloque TOTAL en el resumen). No inventes totales.
+- 🔧 Si es urgente o no lo calcula el sistema, no tú: cuando llames
+  actualizar_pedido con fecha_evento, Python decide es_urgente comparando
+  la fecha REAL de hoy contra la fecha que dio el cliente, y sobreescribe
+  cualquier valor que hayas puesto. No intentes calcular tú si algo es
+  urgente comparando los números de día sueltos (ej. "18 vs 19") -- eso
+  ya causó un error real donde se le cobró un cargo urgente injustificado
+  a una clienta por una fecha que en realidad estaba a más de un mes de
+  distancia. Solo asegúrate de mandar fecha_evento en formato DD/MM/YYYY
+  completo (con el año correcto que el cliente haya dicho o confirmado).
 - Responde como una asesora humana por WhatsApp.
 - Sé amable, natural y orientada a cerrar ventas.
 - Responde PRIMERO y de forma directa a lo que el cliente pidió en su último
@@ -1335,7 +1387,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "evento": {"type": "string"},
-                    "fecha_evento": {"type": "string", "description": "Fecha de entrega acordada"},
+                    "fecha_evento": {"type": "string", "description": "Fecha de entrega acordada, SIEMPRE en formato DD/MM/YYYY (ej. 18/09/2026). Nunca otro formato."},
                     "tipo_entrega": {
                         "type": "string",
                         "description": "Uno de: local, punto_de_entrega, domicilio",
@@ -1543,6 +1595,21 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
         pedido["es_urgente"] = True
         if "es_urgente" not in campos_modificados:
             campos_modificados.append("es_urgente")
+
+    # 🔧 Urgencia determinística -- ver es_pedido_urgente() arriba. En
+    # cuanto se sepa fecha_evento, Python decide si es urgente o no
+    # comparando contra la fecha real de HOY, sin importar qué haya
+    # decidido el modelo. Esto sobreescribe cualquier es_urgente/urgente
+    # que el modelo haya puesto (bug real: confundió una fecha a más de
+    # un mes de distancia con una urgente).
+    if "fecha_evento" in campos_modificados:
+        urgente_real = es_pedido_urgente(pedido.get("fecha_evento"))
+        if urgente_real is not None and pedido.get("es_urgente") != urgente_real:
+            pedido["es_urgente"] = urgente_real
+            pedido["urgente"] = urgente_real
+            if "es_urgente" not in campos_modificados:
+                campos_modificados.append("es_urgente")
+            print(f"📅 Urgencia recalculada para fecha_evento={pedido.get('fecha_evento')!r}: es_urgente={urgente_real}")
 
     print("📝 Pedido (meta) actualizado:", {k: pedido.get(k) for k in campos_modificados})
 

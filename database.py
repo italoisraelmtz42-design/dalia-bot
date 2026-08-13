@@ -132,6 +132,17 @@ def init_order_tables():
                 fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
 
+            # 🆘 Configuración global simple (clave/valor) -- se usa para
+            # el candado de emergencia por WhatsApp (pausar/reanudar el
+            # bot para TODOS los clientes sin tocar Render). Pensada para
+            # crecer a futuro si se necesita guardar algún otro ajuste
+            # global sin agregar una tabla nueva cada vez.
+            cursor.execute("""CREATE TABLE IF NOT EXISTS configuracion (
+                clave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL,
+                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+
             if current_version == 0:
                 cursor.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, fecha TEXT DEFAULT CURRENT_TIMESTAMP)")
                 cursor.execute("INSERT INTO schema_version (version) VALUES (1)")

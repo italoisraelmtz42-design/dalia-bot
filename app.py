@@ -91,6 +91,14 @@ NUMEROS_AUTORIZADOS_RESET = {
 if DALIA_WHATSAPP_NUMERO:
     NUMEROS_AUTORIZADOS_RESET.add(DALIA_WHATSAPP_NUMERO)
 
+# 🔧 Mismo mecanismo, pero para el PSID de Dalia en Messenger -- el
+# candado de emergencia (🛑🛑🛑) y el reset (🧸☠️🧸) comparan "numero"
+# tal cual llega, y en Messenger ese valor es el PSID (no un teléfono),
+# así que necesita su propia entrada en la lista de autorizados.
+DALIA_MESSENGER_PSID = os.getenv("DALIA_MESSENGER_PSID", "")
+if DALIA_MESSENGER_PSID:
+    NUMEROS_AUTORIZADOS_RESET.add(DALIA_MESSENGER_PSID)
+
 # 🔧 Datos bancarios reales: antes vivían escritos directo en el código
 # fuente (visibles para quien tenga acceso al repo, aunque sea privado).
 # Ahora se leen del .env, igual que las API keys y tokens.
@@ -118,6 +126,17 @@ MESSENGER_GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messag
 if not MESSENGER_PAGE_ACCESS_TOKEN:
     print("⚠️ MESSENGER_PAGE_ACCESS_TOKEN no configurado -- el bot no podrá "
           "responder mensajes de Facebook Messenger hasta que se configure.")
+
+# 🔧 Interruptor para apagar SOLO Messenger sin tocar nada de la
+# configuración en Meta (webhook, token, suscripciones se quedan tal
+# cual, listos para cuando se quiera reactivar). Por defecto está
+# activo; para apagarlo, en Render → Environment agrega
+# MESSENGER_ACTIVO=false. WhatsApp no se ve afectado por esto en
+# absoluto -- son interruptores completamente independientes.
+MESSENGER_ACTIVO = os.getenv("MESSENGER_ACTIVO", "true").strip().lower() == "true"
+if not MESSENGER_ACTIVO:
+    print("🔕 MESSENGER_ACTIVO=false -- el bot va a ignorar todos los mensajes de Messenger.")
+
 GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
 
 BASE = Path(__file__).resolve().parent
@@ -2664,6 +2683,13 @@ def verify_webhook_messenger():
 
 @app.route("/webhook/messenger", methods=["POST"])
 def handle_message_messenger():
+    # 🔧 Apagado explícito de Messenger (ver MESSENGER_ACTIVO arriba) --
+    # se responde 200 (para que Meta no reintente ni marque error el
+    # webhook), pero no se procesa nada. La verificación, el token y las
+    # suscripciones se quedan intactos, listos para cuando se reactive.
+    if not MESSENGER_ACTIVO:
+        return jsonify({"status": "messenger desactivado"}), 200
+
     # 🔧 A diferencia de WhatsApp, el webhook de Messenger no manda una
     # firma HMAC en el mismo header -- Meta sí soporta X-Hub-Signature-256
     # para Messenger también, pero se reutiliza el mismo WHATSAPP_APP_SECRET
@@ -2686,14 +2712,35 @@ def handle_message_messenger():
                 if not psid:
                     continue
 
-                # 🔧 Los "echoes" son mensajes que Dalia manda ELLA MISMA
-                # desde la app de Facebook Pages / Meta Business Suite --
-                # no son mensajes de un cliente. Por ahora se ignoran
-                # (el Meta 3 -- que Dalia tome control automático al
-                # contestar manual, igual que se planeó para WhatsApp --
-                # sigue pendiente de construir).
+                # 🔧 "Meta 3" para Messenger: cuando Dalia contesta manual
+                # a un cliente desde el buzón de la página (Meta Business
+                # Suite o la app de Facebook), Meta manda este mismo
+                # mensaje de vuelta al webhook marcado como "echo" --
+                # sender=la página, recipient=el cliente al que le
+                # contestó. Se usa para silenciar el bot SOLO en esa
+                # conversación, automático, sin que Dalia tenga que
+                # acordarse de ningún comando.
                 mensaje = evento.get("message")
-                if not mensaje or mensaje.get("is_echo"):
+                if mensaje and mensaje.get("is_echo"):
+                    psid_cliente = (evento.get("recipient") or {}).get("id")
+                    if not psid_cliente:
+                        continue
+                    texto_echo = (mensaje.get("text") or "").strip().lower()
+                    # Frase de reactivación: Dalia la escribe directo en
+                    # esa misma conversación de Facebook cuando ya
+                    # resolvió el problema y quiere que el bot retome esa
+                    # conversación específica.
+                    if "reactivar bot" in texto_echo:
+                        pedido_manager.reactivar_conversacion(psid_cliente)
+                        with sesiones_lock:
+                            sesiones.pop(psid_cliente, None)
+                        print(f"✅ Dalia reactivó el bot para {psid_cliente} (Messenger, vía echo)")
+                    else:
+                        pedido_manager.silenciar_conversacion(psid_cliente)
+                        print(f"🙅 Dalia contestó manual a {psid_cliente} -- bot silenciado en esa conversación (Messenger)")
+                    continue
+
+                if not mensaje:
                     continue
 
                 mensaje_id = mensaje.get("mid")

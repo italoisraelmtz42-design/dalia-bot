@@ -3,6 +3,14 @@ ANTICIPOS
 Solo se agendan y fabrican pedidos con anticipo.
 Anticipo: desde $50 MXN (cualquier tamaño de pedido).
 
+🔧 Esto aplica SIEMPRE, sin importar el tipo de entrega (local, domicilio
+o punto de entrega) ni cómo el cliente prefiera pagar el resto. Si el
+cliente sugiere pagar todo al recibir el pedido (efectivo o transferencia
+con el mensajero), acláralo así: el RESTO del pago sí puede ser al
+recibir, pero el ANTICIPO de $50 MXN es obligatorio desde antes, para
+poder agendar y empezar a fabricar. No se puede omitir el anticipo bajo
+ningún argumento del cliente.
+
 Datos (también mandar imagen pagos y anticipos.jpeg):
 Banco: Santander
 Tarjeta débito: 5579 0701 5291 2153

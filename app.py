@@ -478,9 +478,28 @@ COLORES_VALIDOS = {
     # excepción moño/listón
     "rojo", "dorado",
 }
-# Colores extra solo para productos especiales (afelpada / peluche)
-COLORES_ESPECIALES = {
-    "morado", "vino tinto", "vinotinto", "beige", "rojo",
+
+# 🔧 CORREGIDO (gap real detectado en auditoría): antes había un solo set
+# "COLORES_ESPECIALES" compartido entre osito de peluche Y osito toalla
+# afelpada -- pero según sus archivos de producto, cada uno tiene colores
+# especiales DISTINTOS, no intercambiables. Con el set compartido, Python
+# aceptaba por error "beige" o "vino tinto" en un peluche (solo válido en
+# afelpada), y viceversa.
+#
+# Osito de peluche: según OSITO DE PELUCHE.txt, el único color EXTRA
+# (fuera de la lista general) es "morado".
+COLORES_ESPECIALES_PELUCHE = {"morado"}
+
+# Osito toalla afelpada: según Osito_Toalla_Afelpada.txt, no es una lista
+# de colores sueltos -- son 6 PAREJAS FIJAS de (toalla, moño). No se
+# pueden combinar colores de parejas distintas.
+PAREJAS_VALIDAS_AFELPADA = {
+    ("celeste", "azul rey"),
+    ("morado", "morado"),
+    ("rosa pastel", "rosa pastel"),
+    ("hueso", "hueso"),
+    ("rojo", "vino tinto"),
+    ("café claro", "beige"),
 }
 
 def _normalizar_color(valor: str) -> str:
@@ -491,16 +510,42 @@ def _normalizar_color(valor: str) -> str:
     return v
 
 def color_es_valido(valor: str, producto: str = "") -> bool:
+    """Válido para cualquier campo de color EXCEPTO la pareja
+    toalla+moño de osito toalla afelpada, que se valida aparte con
+    pareja_afelpada_es_valida() porque depende de los DOS campos juntos,
+    no de cada uno por separado."""
     if not valor:
         return True
     v = _normalizar_color(valor)
     if v in {_normalizar_color(c) for c in COLORES_VALIDOS}:
         return True
     prod = (producto or "").lower()
-    if any(x in prod for x in ("afelpada", "peluche")):
-        if v in {_normalizar_color(c) for c in COLORES_ESPECIALES}:
+    if "peluche" in prod:
+        if v in {_normalizar_color(c) for c in COLORES_ESPECIALES_PELUCHE}:
+            return True
+    if "afelpada" in prod or "afelpado" in prod:
+        # Los colores de afelpada solo son válidos como PAREJA completa;
+        # aquí solo se permite que pase el filtro por campo individual
+        # (para no rechazar de más antes de tiempo mientras el cliente
+        # todavía no ha dado el segundo color) -- la validación real de
+        # la pareja ocurre en pareja_afelpada_es_valida().
+        colores_afelpada_sueltos = {c for par in PAREJAS_VALIDAS_AFELPADA for c in par}
+        if v in {_normalizar_color(c) for c in colores_afelpada_sueltos}:
             return True
     return False
+
+
+def pareja_afelpada_es_valida(color_toalla: str, color_mono: str) -> bool:
+    """Valida que la combinación toalla+moño de un osito toalla afelpada
+    sea una de las 6 parejas oficiales -- no basta con que cada color
+    individual sea válido por separado."""
+    if not color_toalla or not color_mono:
+        return True  # todavía falta un dato, no hay nada que rechazar aún
+    par = (_normalizar_color(color_toalla), _normalizar_color(color_mono))
+    parejas_normalizadas = {
+        (_normalizar_color(a), _normalizar_color(b)) for a, b in PAREJAS_VALIDAS_AFELPADA
+    }
+    return par in parejas_normalizadas
 
 
 
@@ -1423,6 +1468,17 @@ def _validar_colores_item(item):
         if item.get(campo) and not color_es_valido(item[campo], pref):
             print(f"🚫 Color inválido rechazado: {campo}={item[campo]}")
             item[campo] = None
+    # 🔧 Validación extra para osito toalla afelpada: la pareja
+    # toalla+moño debe ser una de las 6 combinaciones oficiales, no
+    # cualquier combinación de colores individualmente válidos.
+    prod_norm = normalizar_producto_clave(pref)
+    if "afelpad" in prod_norm:
+        ct, cm = item.get("color_toalla"), item.get("color_mono")
+        if ct and cm and not pareja_afelpada_es_valida(ct, cm):
+            print(f"🚫 Pareja de colores inválida para afelpada: toalla={ct}, moño={cm}")
+            item["color_toalla"] = None
+            item["color_mono"] = None
+            item["_pareja_afelpada_invalida"] = True
     return item
 
 

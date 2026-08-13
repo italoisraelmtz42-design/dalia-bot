@@ -630,6 +630,12 @@ PRECIOS_CATALOGO = {
     "destapador": 15.5,
     "oracion con decenario": 15.0,
     "oracion con velita": 10.0,
+    # 🔧 Agregado (gap real detectado en pruebas): "rosa" tenía imagen
+    # (ROSA.jpeg) pero no existía en ningún catálogo real -- el modelo
+    # inventaba el precio por su cuenta ($16 la primera vez, $15 la
+    # imagen decía). Confirmado contigo: $16.00 c/u es el precio oficial.
+    "rosa": 16.0,
+    "rosa de toalla": 16.0,
 }
 
 # 🔧 Costo de envío a domicilio por municipio -- antes esto vivía SOLO en
@@ -1680,15 +1686,28 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido):
         # pedido con un producto gratis por error llegue a confirmarse.
         if anticipo_recien_confirmado:
             _tot_check = pedido_manager.calcular_total(borrador=pedido)
-            if _tot_check.get("incompleto"):
+            items_actuales = pedido.get("items") if isinstance(pedido.get("items"), list) else []
+            # 🔧 CORREGIDO (bug real detectado en pruebas): el bloqueo de
+            # arriba solo cachaba productos CON precio pendiente -- pero
+            # si el modelo confirmaba el anticipo sin haber agregado
+            # NINGÚN producto todavía (pedido vacío), el total daba $0.00
+            # "limpio" (no "incompleto"), así que este bloqueo no se
+            # activaba. Resultado real visto en pruebas: un anticipo de
+            # $200 se confirmó para "1 x Producto sin nombre @ $0.00 =
+            # $0.00" -- una venta fantasma sin ningún producto real, que
+            # además silenció al bot con ese cliente sin motivo. Ahora
+            # también se bloquea si no hay ningún item en el pedido, o si
+            # el total da $0 o menos.
+            if _tot_check.get("incompleto") or not items_actuales or _tot_check.get("total", 0) <= 0:
                 pedido["anticipo_confirmado"] = False
                 productos = ", ".join(_tot_check.get("productos_sin_precio") or [])
-                print(f"🚨 Se bloqueó confirmación de anticipo: precio pendiente para {productos}")
+                motivo = productos if productos else "el pedido no tiene ningún producto agregado todavía"
+                print(f"🚨 Se bloqueó confirmación de anticipo: {motivo} (total=${_tot_check.get('total', 0):.2f})")
                 return (
-                    f"BLOQUEADO: no se puede confirmar el anticipo todavía porque "
-                    f"estos productos no tienen precio resuelto: {productos}. "
-                    f"Dile al cliente que en un momento le confirmas el precio de "
-                    f"ese producto antes de continuar con el pago.",
+                    f"BLOQUEADO: no se puede confirmar el anticipo todavía -- {motivo}. "
+                    f"Primero agrega los productos del pedido con agregar_item antes de "
+                    f"registrar cualquier pago. Dile al cliente que necesitas confirmar "
+                    f"primero qué está pidiendo antes de procesar el comprobante.",
                     campos_modificados,
                     False,
                 )

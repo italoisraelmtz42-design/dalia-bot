@@ -1023,6 +1023,20 @@ mensaje): el anticipo para CUALQUIER pedido es "desde $50 MXN", nunca un
 monto distinto, y nunca varía según el tamaño o total del pedido. Jamás
 menciones una cifra distinta de $50 como el anticipo requerido.
 
+🔧 El anticipo es OBLIGATORIO sin excepción, sin importar el tipo de
+entrega (local, domicilio, punto de entrega) ni cómo el cliente prefiera
+pagar el resto. Bug real detectado en pruebas: un cliente dijo "puedo
+pagar al recibir" y el bot aceptó el pedido completo sin pedir el
+anticipo -- eso está PROHIBIDO. Si el cliente sugiere pagar todo al
+recibir, pagar contra entrega, o cualquier variante para evitar el
+anticipo: acláralo con amabilidad -- el RESTO sí puede pagarse al
+recibir, pero el ANTICIPO de $50 MXN es obligatorio desde antes para
+poder agendar y fabricar. NUNCA digas frases como "tu pedido está listo
+para elaboración", "queda agendado" o "confirmado" si el anticipo
+todavía no se ha pedido y confirmado -- que el cliente diga "sí" al
+resumen NO es lo mismo que el anticipo pagado, son dos pasos distintos y
+los dos son obligatorios antes de dar por cerrado un pedido.
+
 REGLAS DE FECHAS Y PEDIDOS URGENTES (usa SIEMPRE la fecha de hoy de arriba,
 {dia_semana} {fecha}, para todo cálculo; nunca calcules fechas por tu cuenta):
 

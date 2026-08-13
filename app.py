@@ -2518,6 +2518,31 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
                 enviar_mensaje_canal(numero, "✅ Bot reactivado. Ya vuelve a responder normal a todos los clientes.", canal)
         return
 
+    # 🆕 Silenciar/reactivar UNA conversación específica, sin borrar nada
+    # y sin apagar el bot para nadie más. Dalia manda "SILENCIAR
+    # <numero_o_psid>" desde CUALQUIER canal (no importa dónde esté
+    # hablando ella), y el bot deja de contestarle a ese cliente puntual
+    # -- pensado para cuando el bot cometió un error con un cliente real
+    # y Dalia necesita contactarlo personalmente sin que el bot le
+    # conteste encima. "REACTIVAR <numero_o_psid>" hace lo contrario.
+    if texto_cliente and numero in NUMEROS_AUTORIZADOS_RESET:
+        texto_normalizado = texto_cliente.strip()
+        partes = texto_normalizado.split(None, 1)
+        if len(partes) == 2 and partes[0].upper() == "SILENCIAR":
+            objetivo = partes[1].strip()
+            pedido_manager.silenciar_conversacion(objetivo)
+            print(f"🙅 {numero}: silenció manualmente la conversación con {objetivo}")
+            enviar_mensaje_canal(numero, f"🛑 Listo, el bot ya no le va a responder a {objetivo}. El resto de clientes sigue normal.", canal)
+            return
+        if len(partes) == 2 and partes[0].upper() == "REACTIVAR":
+            objetivo = partes[1].strip()
+            pedido_manager.reactivar_conversacion(objetivo)
+            with sesiones_lock:
+                sesiones.pop(objetivo, None)
+            print(f"✅ {numero}: reactivó manualmente la conversación con {objetivo}")
+            enviar_mensaje_canal(numero, f"✅ Listo, el bot vuelve a responderle a {objetivo} normal.", canal)
+            return
+
     # 🆘 Si el candado de emergencia (capa 2, por WhatsApp) está activo,
     # el bot se queda callado con CUALQUIER cliente -- el mensaje ya
     # quedó guardado en el historial arriba, pero no se gasta una llamada

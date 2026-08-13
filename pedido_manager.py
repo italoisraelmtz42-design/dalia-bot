@@ -79,6 +79,37 @@ def _row_to_entrega(row) -> Optional[EntregaData]:
 # Chat history (usado por crm.py)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 🆘 Candado de emergencia (capa 2 -- comando por WhatsApp/Messenger)
+# ---------------------------------------------------------------------------
+
+def bot_pausado_globalmente() -> bool:
+    """True si alguien con autorización mandó el comando de pausa y
+    todavía no lo ha reactivado. Se revisa en cada mensaje entrante,
+    para TODOS los clientes, sin importar el canal."""
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT valor FROM configuracion WHERE clave = 'bot_pausado'"
+            ).fetchone()
+        return bool(row and row["valor"] == "true")
+    except Exception as e:
+        logger.error(f"bot_pausado_globalmente: {e}")
+        return False  # si falla la consulta, más seguro NO pausar por accidente
+
+
+def set_bot_pausado(valor: bool) -> None:
+    with get_db_connection() as conn:
+        conn.execute(
+            "INSERT INTO configuracion (clave, valor, fecha_actualizacion) "
+            "VALUES ('bot_pausado', ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, "
+            "fecha_actualizacion = CURRENT_TIMESTAMP",
+            ("true" if valor else "false",),
+        )
+        conn.commit()
+
+
 def es_cliente_nuevo(telefono: str) -> bool:
     """True si este teléfono nunca le ha escrito antes al bot (cero
     mensajes en historial_chat). Se usa para forzar el saludo canónico +

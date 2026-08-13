@@ -375,14 +375,10 @@ ARCHIVOS_CONOCIMIENTO_SIEMPRE = {
     "Politicas generales/Anticipos.txt",
     "Politicas generales/Colores disponibles.txt",
     "Politicas generales/Datos bancarios  para pagos, transferencias y anticipos.txt",
-    # ⚠️ El nombre de este archivo en disco sigue con la codificación
-    # rota del nombre original ("env#U00edos" en vez de "envíos") --
-    # decidiste dejar ese arreglo pendiente por ahora, así que esta
-    # entrada usa el nombre TAL COMO EXISTE HOY para no romper la
-    # validación. Si algún día subes el archivo renombrado
-    # correctamente ("Entregas y envíos.txt"), actualiza esta línea
-    # también, o vas a ver la alerta 🚨 de "archivo no encontrado".
-    "Politicas generales/Entregas y env#U00edos.txt",
+    # 🔧 Actualizado: ya renombraste el archivo correctamente en GitHub
+    # ("Entregas y envíos.txt", con la tilde bien puesta) -- esta entrada
+    # ya coincide con el nombre real en disco.
+    "Politicas generales/Entregas y envíos.txt",
     "Politicas generales/Pagina_De_Facebook.txt",
     # 🔧 Agregado (bug real detectado en pruebas): un cliente preguntó
     # "tienes pag. de fb?" y el bot contestó que no tenía esa info -- el

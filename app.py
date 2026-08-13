@@ -103,6 +103,21 @@ if not (DATOS_BANCARIOS_TARJETA and DATOS_BANCARIOS_CLABE):
           "envío prematuro no van a funcionar correctamente hasta llenarlos.")
 
 GRAPH_API_VERSION = "v20.0"
+
+# --- MESSENGER (Facebook Page) ---
+# Page Access Token de la página de Facebook -- se genera al conectar la
+# página a la App de Meta (misma App que ya usas para WhatsApp Cloud
+# API). Es DISTINTO del WHATSAPP_TOKEN.
+MESSENGER_PAGE_ACCESS_TOKEN = os.getenv("MESSENGER_PAGE_ACCESS_TOKEN", "")
+# Reutiliza el mismo verify token de WhatsApp -- Meta permite usar el
+# mismo valor para varios productos dentro de la misma App, así que no
+# hace falta inventar uno nuevo. Debe coincidir con lo que pongas en el
+# panel de Meta al configurar el webhook de Messenger.
+MESSENGER_VERIFY_TOKEN = VERIFY_TOKEN
+MESSENGER_GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
+if not MESSENGER_PAGE_ACCESS_TOKEN:
+    print("⚠️ MESSENGER_PAGE_ACCESS_TOKEN no configurado -- el bot no podrá "
+          "responder mensajes de Facebook Messenger hasta que se configure.")
 GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
 
 BASE = Path(__file__).resolve().parent
@@ -1665,7 +1680,7 @@ def eliminar_item_pedido(pedido, argumentos_json):
     return ["items"] if len(nuevos) != antes else []
 
 
-def ejecutar_tool_call(tool_call, sesion, numero, pedido):
+def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp"):
     name = tool_call.function.name
     args = tool_call.function.arguments
 
@@ -1742,14 +1757,14 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido):
             return f"no hay foto disponible para '{clave}', no ofrezcas una foto de esto", [], False
 
         nombre_mostrar = CATALOGO_IMAGENES[clave]["nombre_mostrar"]
-        enviar_whatsapp_imagen(numero, url_imagen, caption=nombre_mostrar)
+        enviar_imagen_canal(numero, url_imagen, canal, caption=nombre_mostrar)
         imagenes_enviadas.add(clave)
         return "imagen enviada correctamente", [], False
 
     return "función desconocida", [], False
 
 
-def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
+def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, canal="whatsapp"):
     sesion = obtener_sesion(numero)
     historial = sesion["messages"]
     pedido = sesion["pedido"]
@@ -1831,7 +1846,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None):
             anticipo_recien_confirmado_este_turno = False
             for tool_call in mensaje.tool_calls:
                 resultado, campos_modificados, anticipo_recien_confirmado = ejecutar_tool_call(
-                    tool_call, sesion, numero, pedido
+                    tool_call, sesion, numero, pedido, canal
                 )
                 campos_modificados_total.extend(campos_modificados)
                 if anticipo_recien_confirmado:
@@ -2138,6 +2153,97 @@ def descargar_imagen_whatsapp(media_id):
 
 
 # ===========================
+# ENVIAR MENSAJE POR MESSENGER (Facebook Page)
+# ===========================
+
+def enviar_messenger(psid, texto):
+    data = {
+        "recipient": {"id": psid},
+        "message": {"text": texto},
+        "messaging_type": "RESPONSE",
+    }
+    try:
+        r = requests.post(
+            MESSENGER_GRAPH_URL,
+            params={"access_token": MESSENGER_PAGE_ACCESS_TOKEN},
+            json=data,
+            timeout=15,
+        )
+        if r.status_code >= 400:
+            print("⚠️ Error enviando mensaje por Messenger:", r.status_code, r.text)
+        return r
+    except requests.RequestException as e:
+        print("⚠️ Excepción enviando Messenger:", e)
+        return None
+
+
+def enviar_messenger_imagen(psid, image_url):
+    data = {
+        "recipient": {"id": psid},
+        "message": {
+            "attachment": {
+                "type": "image",
+                "payload": {"url": image_url, "is_reusable": True},
+            }
+        },
+        "messaging_type": "RESPONSE",
+    }
+    try:
+        r = requests.post(
+            MESSENGER_GRAPH_URL,
+            params={"access_token": MESSENGER_PAGE_ACCESS_TOKEN},
+            json=data,
+            timeout=15,
+        )
+        if r.status_code >= 400:
+            print("⚠️ Error enviando imagen por Messenger:", r.status_code, r.text)
+        else:
+            print(f"📤 Imagen enviada por Messenger a {psid}: {image_url}")
+        return r
+    except requests.RequestException as e:
+        print("⚠️ Excepción enviando imagen por Messenger:", e)
+        return None
+
+
+def descargar_imagen_messenger(url_imagen):
+    """Las imágenes que manda un cliente por Messenger llegan como una URL
+    pública directa (a diferencia de WhatsApp, que da un media_id privado
+    que hay que resolver con el token) -- no necesita autenticación."""
+    try:
+        r = requests.get(url_imagen, timeout=20)
+        if r.status_code >= 400:
+            print("⚠️ Error descargando imagen de Messenger:", r.status_code)
+            return None, None
+        mime = r.headers.get("Content-Type", "image/jpeg")
+        return r.content, mime
+    except requests.RequestException as e:
+        print("⚠️ Excepción descargando imagen de Messenger:", e)
+        return None, None
+
+
+def enviar_mensaje_canal(destinatario, texto, canal="whatsapp"):
+    """Dispatcher: manda el mensaje por el canal correcto según de dónde
+    vino la conversación. Así el resto del código (procesar_mensaje_en_
+    fondo y todo lo que ya funcionaba para WhatsApp) no necesita saber ni
+    importarle qué canal es -- solo llama a esta función."""
+    if canal == "messenger":
+        return enviar_messenger(destinatario, texto)
+    return enviar_whatsapp(destinatario, texto)
+
+
+def enviar_imagen_canal(destinatario, image_url, canal="whatsapp", caption=""):
+    if canal == "messenger":
+        r = enviar_messenger_imagen(destinatario, image_url)
+        # Messenger no soporta caption inline en la imagen (a diferencia
+        # de WhatsApp) -- si hay caption, se manda como mensaje de texto
+        # aparte justo después.
+        if caption:
+            enviar_messenger(destinatario, caption)
+        return r
+    return enviar_whatsapp_imagen(destinatario, image_url, caption=caption)
+
+
+# ===========================
 # SERVIR ARCHIVOS ESTÁTICOS
 # ===========================
 
@@ -2182,14 +2288,14 @@ def registrar_entrada_cliente(numero, texto_para_guardar, tipo="texto"):
     return cliente
 
 
-def procesar_mensaje_no_soportado(numero, tipo):
+def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp"):
     cliente = registrar_entrada_cliente(numero, f"[mensaje no soportado: {tipo}]", tipo=tipo)
     respuesta = "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?"
     crm.guardar_respuesta(cliente, respuesta)
-    enviar_whatsapp(numero, respuesta)
+    enviar_mensaje_canal(numero, respuesta, canal)
 
 
-def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None):
+def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None):
     print("=" * 70)
     print(f"🚀 Procesando mensaje de {numero}")
     print(f"💬 Texto recibido: {texto_cliente}")
@@ -2221,7 +2327,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             respuesta_fallo = "No pude descargar tu audio 😔 ¿me lo puedes mandar otra vez, o escribirlo?"
             cliente = registrar_entrada_cliente(numero, "(audio no descargable)", tipo="audio")
             crm.guardar_respuesta(cliente, respuesta_fallo)
-            enviar_whatsapp(numero, respuesta_fallo)
+            enviar_mensaje_canal(numero, respuesta_fallo, canal)
             return
 
         print(f"✅ Audio descargado ({len(contenido_audio)} bytes, {mime_audio}), transcribiendo...")
@@ -2231,16 +2337,19 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             respuesta_fallo = "No logré entender tu audio 😔 ¿me lo puedes escribir, por favor?"
             cliente = registrar_entrada_cliente(numero, "(audio no se pudo transcribir)", tipo="audio")
             crm.guardar_respuesta(cliente, respuesta_fallo)
-            enviar_whatsapp(numero, respuesta_fallo)
+            enviar_mensaje_canal(numero, respuesta_fallo, canal)
             return
 
         print(f"📝 Audio transcrito: {texto_transcrito}")
         texto_cliente = texto_transcrito
         tipo_para_crm = "audio"
 
-    elif media_id_imagen:
+    elif media_id_imagen or media_url_imagen_messenger:
         print("🖼️ El cliente mandó una imagen (Vision), descargándola...")
-        contenido, mime = descargar_imagen_whatsapp(media_id_imagen)
+        if canal == "messenger" and media_url_imagen_messenger:
+            contenido, mime = descargar_imagen_messenger(media_url_imagen_messenger)
+        else:
+            contenido, mime = descargar_imagen_whatsapp(media_id_imagen)
         if contenido:
             imagen_base64 = base64.b64encode(contenido).decode("utf-8")
             imagen_mime = mime
@@ -2298,16 +2407,16 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             # guardarse en historial_chat, para que el reset deje el
             # número genuinamente en cero.
             respuesta_reset = "✅ Listo, empezamos de cero. ¿En qué te puedo ayudar?"
-            enviar_whatsapp(numero, respuesta_reset)
+            enviar_mensaje_canal(numero, respuesta_reset, canal)
             return
 
-    # 🆘 CANDADO DE EMERGENCIA -- capa 2, comando rápido por WhatsApp.
-    # Solo números autorizados (los mismos que pueden usar 🧸☠️🧸) pueden
-    # pausar/reanudar el bot para TODOS los clientes, sin tocar Render.
-    # Pensado para el lanzamiento: si algo se ve mal en los primeros
-    # mensajes reales, Dalia puede apagarlo desde su celular en segundos.
-    # Es un interruptor (mandar el mismo código lo prende o apaga según
-    # el estado actual).
+    # 🆘 CANDADO DE EMERGENCIA -- capa 2, comando rápido por WhatsApp o
+    # Messenger. Solo números autorizados (los mismos que pueden usar
+    # 🧸☠️🧸) pueden pausar/reanudar el bot para TODOS los clientes de
+    # AMBOS canales, sin tocar Render. Pensado para el lanzamiento: si
+    # algo se ve mal en los primeros mensajes reales, Dalia puede
+    # apagarlo desde su celular en segundos. Es un interruptor (mandar
+    # el mismo código lo prende o apaga según el estado actual).
     if texto_cliente and "🛑🛑🛑" in texto_cliente:
         if numero not in NUMEROS_AUTORIZADOS_RESET:
             print(f"🚫 {numero}: intentó usar el candado de emergencia pero no está autorizado.")
@@ -2315,15 +2424,16 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             pausado_actual = pedido_manager.bot_pausado_globalmente()
             pedido_manager.set_bot_pausado(not pausado_actual)
             if not pausado_actual:
-                print(f"🆘 {numero}: BOT PAUSADO globalmente vía comando de WhatsApp.")
-                enviar_whatsapp(
+                print(f"🆘 {numero}: BOT PAUSADO globalmente vía comando de {canal}.")
+                enviar_mensaje_canal(
                     numero,
                     "🛑 Bot pausado. No le va a responder a NINGÚN cliente hasta "
                     "que mandes este mismo código otra vez para reactivarlo.",
+                    canal,
                 )
             else:
-                print(f"✅ {numero}: BOT reactivado globalmente vía comando de WhatsApp.")
-                enviar_whatsapp(numero, "✅ Bot reactivado. Ya vuelve a responder normal a todos los clientes.")
+                print(f"✅ {numero}: BOT reactivado globalmente vía comando de {canal}.")
+                enviar_mensaje_canal(numero, "✅ Bot reactivado. Ya vuelve a responder normal a todos los clientes.", canal)
         return
 
     # 🆘 Si el candado de emergencia (capa 2, por WhatsApp) está activo,
@@ -2364,15 +2474,15 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             "productos y te comparto información de las entregas que "
             "manejamos!! Buscas algún recuerdito en especial?"
         )
-        enviar_whatsapp(numero, saludo_canonico)
+        enviar_mensaje_canal(numero, saludo_canonico, canal)
         crm.guardar_respuesta(cliente, saludo_canonico)
         for clave_img in ("a", "b"):
             url_img = url_imagen_producto(clave_img)
             if url_img:
-                enviar_whatsapp_imagen(numero, url_img)
+                enviar_imagen_canal(numero, url_img, canal)
             else:
                 print(f"⚠️ No se encontró la imagen '{clave_img}' para el saludo de cliente nuevo")
-        print(f"👋 {numero}: saludo canónico + 2 imágenes enviados (cliente nuevo)")
+        print(f"👋 {numero}: saludo canónico + 2 imágenes enviados (cliente nuevo, canal={canal})")
         return
 
     sesion = obtener_sesion(numero)
@@ -2387,14 +2497,14 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             continue
         url_img = url_imagen_producto(clave_img)
         if url_img:
-            enviar_whatsapp_imagen(numero, url_img)
+            enviar_imagen_canal(numero, url_img, canal)
             imagenes_enviadas.add(clave_img)
             print(f"🖼️ Imagen automática enviada a {numero}: {clave_img}")
 
     with sesion["lock"]:
         try:
             print("🧠 Consultando OpenAI...")
-            respuesta = preguntar_ia(numero, texto_cliente, imagen_base64=imagen_base64, imagen_mime=imagen_mime)
+            respuesta = preguntar_ia(numero, texto_cliente, imagen_base64=imagen_base64, imagen_mime=imagen_mime, canal=canal)
             if respuesta is not None:
                 print("✅ Respuesta generada")
                 print(respuesta[:300])
@@ -2429,9 +2539,9 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
 
             time.sleep(random.uniform(2, 4))
             print("📤 Enviando mensajes fijos de confirmación de anticipo...")
-            enviar_whatsapp(numero, mensaje_1)
+            enviar_mensaje_canal(numero, mensaje_1, canal)
             time.sleep(1.5)
-            enviar_whatsapp(numero, mensaje_2)
+            enviar_mensaje_canal(numero, mensaje_2, canal)
 
             print("📣 Notificando a Dalia...")
             notificar_a_dalia(pedido_db, sesion["pedido"])
@@ -2458,12 +2568,12 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         time.sleep(random.uniform(2, 4))
         # Gate: no mandar datos bancarios sin total calculado
         respuesta = filtrar_datos_bancarios_si_no_hay_total(respuesta, sesion.get("pedido") or {})
-        print("📤 Enviando respuesta a WhatsApp...")
-        r = enviar_whatsapp(numero, respuesta)
+        print(f"📤 Enviando respuesta por {canal}...")
+        r = enviar_mensaje_canal(numero, respuesta, canal)
         if r is not None:
-            print(f"📨 WhatsApp respondió: {r.status_code}")
+            print(f"📨 {canal} respondió: {r.status_code}")
         else:
-            print("❌ enviar_whatsapp devolvió None")
+            print(f"❌ enviar_mensaje_canal ({canal}) devolvió None")
 
     print("🏁 Fin procesamiento")
     print("=" * 70)
@@ -2537,6 +2647,96 @@ def handle_message():
 
     except (KeyError, IndexError, TypeError) as e:
         print("Evento sin mensaje de texto reconocible:", e)
+
+    return jsonify({"status": "ok"}), 200
+
+
+# ===========================
+# WEBHOOK: MESSENGER (Facebook Page)
+# ===========================
+
+@app.route("/webhook/messenger", methods=["GET"])
+def verify_webhook_messenger():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    if mode == "subscribe" and token == MESSENGER_VERIFY_TOKEN:
+        return challenge, 200
+    return "Error, verificación fallida", 403
+
+
+@app.route("/webhook/messenger", methods=["POST"])
+def handle_message_messenger():
+    # 🔧 A diferencia de WhatsApp, el webhook de Messenger no manda una
+    # firma HMAC en el mismo header -- Meta sí soporta X-Hub-Signature-256
+    # para Messenger también, pero se reutiliza el mismo WHATSAPP_APP_SECRET
+    # (viven en la misma App de Meta) para verificarlo con la misma
+    # función que ya existe.
+    firma = request.headers.get("X-Hub-Signature-256", "")
+    if WHATSAPP_APP_SECRET and not verificar_firma_webhook(request.get_data(), firma):
+        print("🚫 Webhook de Messenger rechazado: la firma no coincide")
+        return jsonify({"status": "firma inválida"}), 403
+
+    data = request.get_json(silent=True) or {}
+
+    if data.get("object") != "page":
+        return jsonify({"status": "ignorado"}), 200
+
+    try:
+        for entry in data.get("entry", []):
+            for evento in entry.get("messaging", []):
+                psid = (evento.get("sender") or {}).get("id")
+                if not psid:
+                    continue
+
+                # 🔧 Los "echoes" son mensajes que Dalia manda ELLA MISMA
+                # desde la app de Facebook Pages / Meta Business Suite --
+                # no son mensajes de un cliente. Por ahora se ignoran
+                # (el Meta 3 -- que Dalia tome control automático al
+                # contestar manual, igual que se planeó para WhatsApp --
+                # sigue pendiente de construir).
+                mensaje = evento.get("message")
+                if not mensaje or mensaje.get("is_echo"):
+                    continue
+
+                mensaje_id = mensaje.get("mid")
+                if mensaje_id and ya_fue_procesado(mensaje_id):
+                    print(f"🔁 Mensaje de Messenger duplicado ignorado: {mensaje_id}")
+                    continue
+
+                texto_cliente = mensaje.get("text", "") or ""
+                adjuntos = mensaje.get("attachments") or []
+                imagen_url = None
+                for adj in adjuntos:
+                    if adj.get("type") == "image":
+                        imagen_url = (adj.get("payload") or {}).get("url")
+                        break
+
+                if imagen_url:
+                    threading.Thread(
+                        target=procesar_mensaje_en_fondo,
+                        args=(psid, texto_cliente),
+                        kwargs={"media_url_imagen_messenger": imagen_url, "canal": "messenger"},
+                        daemon=True,
+                    ).start()
+                elif texto_cliente:
+                    threading.Thread(
+                        target=procesar_mensaje_en_fondo,
+                        args=(psid, texto_cliente),
+                        kwargs={"canal": "messenger"},
+                        daemon=True,
+                    ).start()
+                else:
+                    threading.Thread(
+                        target=procesar_mensaje_no_soportado,
+                        args=(psid, "adjunto no soportado"),
+                        kwargs={"canal": "messenger"},
+                        daemon=True,
+                    ).start()
+
+    except Exception as e:
+        print("⚠️ Error procesando webhook de Messenger:", repr(e))
 
     return jsonify({"status": "ok"}), 200
 

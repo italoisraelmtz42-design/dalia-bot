@@ -61,6 +61,16 @@ WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "cambia_este_token")
 WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "")
 
+# 🆘 CANDADO DE EMERGENCIA (capa 1 -- la definitiva). Si algo sale mal en
+# producción y necesitas apagar el bot YA, sin depender de que ninguna
+# otra parte del código esté funcionando bien: entra a Render →
+# Environment → agrega (o cambia) BOT_PAUSADO=true y guarda. Se
+# redespliega solo en un par de minutos y el bot deja de contestar a
+# CUALQUIER cliente, sin excepción -- ni siquiera llega a intentar nada,
+# es el primer chequeo de todo el flujo. Para reactivar, bórrala o
+# ponla en "false".
+BOT_PAUSADO_GLOBAL = os.getenv("BOT_PAUSADO", "false").strip().lower() == "true"
+
 # Número personal de Dalia (con lada, sin signos: ej. "5218114905653"),
 # al que se le manda una notificación cada vez que se confirma un
 # anticipo. Si no está configurado, simplemente no se manda la
@@ -358,6 +368,14 @@ ARCHIVOS_CONOCIMIENTO_SIEMPRE = {
     # correctamente ("Entregas y envíos.txt"), actualiza esta línea
     # también, o vas a ver la alerta 🚨 de "archivo no encontrado".
     "Politicas generales/Entregas y env#U00edos.txt",
+    "Politicas generales/Pagina_De_Facebook.txt",
+    # 🔧 Agregado (bug real detectado en pruebas): un cliente preguntó
+    # "tienes pag. de fb?" y el bot contestó que no tenía esa info -- el
+    # selector de archivos por palabra clave descarta "fb" y "pag" por
+    # tener 3 caracteres o menos, así que Pagina_De_Facebook.txt nunca se
+    # le mandaba al modelo salvo que el cliente escribiera "facebook"
+    # completo. Como es un archivo muy corto (~600 caracteres), se manda
+    # siempre en vez de depender de coincidencia de palabras.
     "Politicas generales/Pedidos urgentes.txt",
     "Politicas generales/Precios de mayoreo.txt",
     "Politicas generales/REGLAS IRROMPIBLES DEL NEGOCIO.txt",
@@ -2104,6 +2122,16 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
     print(f"🚀 Procesando mensaje de {numero}")
     print(f"💬 Texto recibido: {texto_cliente}")
 
+    # 🆘 CANDADO DE EMERGENCIA -- capa 1, la definitiva. Si
+    # BOT_PAUSADO=true está puesto en Render, el bot no hace absolutamente
+    # nada más: ni guarda el mensaje distinto de un log, ni llama a
+    # OpenAI, ni responde. Esto va primero que cualquier otra lógica a
+    # propósito, para que sea inmune a cualquier bug que pudiera existir
+    # más abajo en el código.
+    if BOT_PAUSADO_GLOBAL:
+        print(f"🆘 BOT_PAUSADO=true -- ignorando mensaje de {numero} por completo.")
+        return
+
     # 🔧 Se checa ANTES de guardar el mensaje entrante -- si se checara
     # después, este mismo mensaje ya contaría como "1 mensaje previo" y
     # nunca detectaríamos al cliente como nuevo.
@@ -2200,6 +2228,41 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             respuesta_reset = "✅ Listo, empezamos de cero. ¿En qué te puedo ayudar?"
             enviar_whatsapp(numero, respuesta_reset)
             return
+
+    # 🆘 CANDADO DE EMERGENCIA -- capa 2, comando rápido por WhatsApp.
+    # Solo números autorizados (los mismos que pueden usar 🧸☠️🧸) pueden
+    # pausar/reanudar el bot para TODOS los clientes, sin tocar Render.
+    # Pensado para el lanzamiento: si algo se ve mal en los primeros
+    # mensajes reales, Dalia puede apagarlo desde su celular en segundos.
+    # Es un interruptor (mandar el mismo código lo prende o apaga según
+    # el estado actual).
+    if texto_cliente and "🛑🛑🛑" in texto_cliente:
+        if numero not in NUMEROS_AUTORIZADOS_RESET:
+            print(f"🚫 {numero}: intentó usar el candado de emergencia pero no está autorizado.")
+        else:
+            pausado_actual = pedido_manager.bot_pausado_globalmente()
+            pedido_manager.set_bot_pausado(not pausado_actual)
+            if not pausado_actual:
+                print(f"🆘 {numero}: BOT PAUSADO globalmente vía comando de WhatsApp.")
+                enviar_whatsapp(
+                    numero,
+                    "🛑 Bot pausado. No le va a responder a NINGÚN cliente hasta "
+                    "que mandes este mismo código otra vez para reactivarlo.",
+                )
+            else:
+                print(f"✅ {numero}: BOT reactivado globalmente vía comando de WhatsApp.")
+                enviar_whatsapp(numero, "✅ Bot reactivado. Ya vuelve a responder normal a todos los clientes.")
+        return
+
+    # 🆘 Si el candado de emergencia (capa 2, por WhatsApp) está activo,
+    # el bot se queda callado con CUALQUIER cliente -- el mensaje ya
+    # quedó guardado en el historial arriba, pero no se gasta una llamada
+    # a OpenAI ni se manda respuesta. Los comandos de arriba (🧸☠️🧸 y
+    # 🛑🛑🛑) siguen funcionando aunque esté pausado, para que se pueda
+    # reactivar sin necesidad de tocar Render.
+    if pedido_manager.bot_pausado_globalmente():
+        print(f"🛑 Bot pausado globalmente -- mensaje de {numero} guardado, sin respuesta.")
+        return
 
     # 🆕 Meta 2: si Dalia (humana) ya tomó el control de esta conversación
     # (esto pasa automáticamente en cuanto se confirma el anticipo), el

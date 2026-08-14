@@ -1,6 +1,6 @@
 REGLAS DEL NEGOCIO (complemento de 00_PRIORIDAD_MAXIMA)
 
-Saludo cliente nuevo: ver 00_PRIORIDAD_MAXIMA punto 9 + mandar A.jpeg y B.jpeg.
+Saludo cliente nuevo: ver 00_PRIORIDAD_MAXIMA punto 9 -- contesta directo lo que pregunte, sin saludo forzado ni imágenes automáticas.
 
 Anticipo obligatorio antes de fabricar. Ver Anticipos.txt y 00_PRIORIDAD_MAXIMA.
 

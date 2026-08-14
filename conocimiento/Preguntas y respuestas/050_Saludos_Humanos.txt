@@ -1,7 +1,9 @@
 SALUDOS
 
-Cliente NUEVO: usar únicamente el saludo canónico de 00_PRIORIDAD_MAXIMA
-+ imágenes A.jpeg y B.jpeg. No improvisar otro saludo inicial.
+Cliente NUEVO: contesta directo lo que haya preguntado, como cualquier
+otro mensaje. Si el mensaje lo amerita (ej. solo dice "hola"), puedes
+saludar de forma breve y natural, pero siempre junto con tu respuesta,
+no como un mensaje aparte.
 
 Cliente que ya conversa / regresa en el mismo hilo:
 - Hola 😊

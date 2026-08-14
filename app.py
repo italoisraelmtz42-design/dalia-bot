@@ -2598,34 +2598,14 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         print(f"🙅 Bot en silencio para {numero} (modo_atencion={modo_atencion}); mensaje guardado, sin respuesta automática.")
         return
 
-    # 🔧 CORREGIDO (regla real detectada en pruebas): la Base de
-    # Conocimiento (00_PRIORIDAD_MAXIMA.txt, regla 9) exige que TODO
-    # cliente nuevo reciba un saludo canónico exacto + las imágenes
-    # A.jpeg y B.jpeg, sin importar qué haya escrito. Antes esto dependía
-    # 100% de que el modelo se acordara de seguir esa instrucción -- en
-    # pruebas reales, un cliente nuevo preguntó por las entregas y el bot
-    # se saltó directo a contestar, sin el saludo ni las fotos. Ahora se
-    # fuerza en Python, igual que ya se hace con los precios y los
-    # mensajes fijos post-anticipo: no se le pregunta al modelo, se manda
-    # directo. El mensaje real del cliente (su pregunta, lo que sea) se
-    # queda guardado en el historial y el bot lo atiende normal en
-    # cuanto el cliente vuelva a escribir algo.
-    if es_primera_vez:
-        saludo_canonico = (
-            "Hola! Buen día. Disponibles!! Te muestro algunos de nuestros "
-            "productos y te comparto información de las entregas que "
-            "manejamos!! Buscas algún recuerdito en especial?"
-        )
-        enviar_mensaje_canal(numero, saludo_canonico, canal, pagina_id=pagina_id)
-        crm.guardar_respuesta(cliente, saludo_canonico)
-        for clave_img in ("a", "b"):
-            url_img = url_imagen_producto(clave_img)
-            if url_img:
-                enviar_imagen_canal(numero, url_img, canal, pagina_id=pagina_id)
-            else:
-                print(f"⚠️ No se encontró la imagen '{clave_img}' para el saludo de cliente nuevo")
-        print(f"👋 {numero}: saludo canónico + 2 imágenes enviados (cliente nuevo, canal={canal})")
-        return
+    # 🔧 CAMBIO DE DECISIÓN DE NEGOCIO (ya no se fuerza el saludo
+    # canónico + 2 imágenes en el primer mensaje): antes esto se mandaba
+    # siempre antes de contestar cualquier cosa, incluso si el cliente ya
+    # había hecho una pregunta específica en su primer mensaje -- la
+    # decisión ahora es que el bot conteste directo lo que se le
+    # pregunte desde el primer mensaje, como cualquier otro. El cálculo
+    # de es_primera_vez se deja arriba por si se usa para algo más a
+    # futuro, pero ya no dispara ningún envío especial aquí.
 
     sesion = obtener_sesion(numero)
 

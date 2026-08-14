@@ -113,10 +113,41 @@ if not (DATOS_BANCARIOS_TARJETA and DATOS_BANCARIOS_CLABE):
 GRAPH_API_VERSION = "v20.0"
 
 # --- MESSENGER (Facebook Page) ---
-# Page Access Token de la página de Facebook -- se genera al conectar la
-# página a la App de Meta (misma App que ya usas para WhatsApp Cloud
-# API). Es DISTINTO del WHATSAPP_TOKEN.
+# Page Access Token de la página PRINCIPAL de Facebook (Recuerditos
+# Dalia) -- se genera al conectar la página a la App de Meta (misma App
+# que ya usas para WhatsApp Cloud API). Es DISTINTO del WHATSAPP_TOKEN.
 MESSENGER_PAGE_ACCESS_TOKEN = os.getenv("MESSENGER_PAGE_ACCESS_TOKEN", "")
+
+# 🔧 Soporte para MÁS de una página de Facebook con el mismo bot (mismo
+# catálogo/precios/reglas, solo cambia por dónde entra el cliente). Para
+# agregar páginas extra, en Render pon MESSENGER_PAGE_ID_2 /
+# MESSENGER_PAGE_ACCESS_TOKEN_2, luego _3, _4... (numeración consecutiva,
+# se detiene en cuanto falte un par). La página "principal"
+# (MESSENGER_PAGE_ACCESS_TOKEN de arriba) no necesita su propio
+# MESSENGER_PAGE_ID -- se usa como respaldo si el ID de la página
+# entrante no coincide con ninguna de las extra.
+MESSENGER_TOKENS_POR_PAGINA = {}
+_i = 2
+while True:
+    _page_id = os.getenv(f"MESSENGER_PAGE_ID_{_i}", "").strip()
+    _token = os.getenv(f"MESSENGER_PAGE_ACCESS_TOKEN_{_i}", "").strip()
+    if not _page_id or not _token:
+        break
+    MESSENGER_TOKENS_POR_PAGINA[_page_id] = _token
+    print(f"✅ Página de Messenger extra configurada: {_page_id}")
+    _i += 1
+
+
+def token_para_pagina(page_id: str) -> str:
+    """Devuelve el Page Access Token correcto según qué página recibió
+    el mensaje. Si no coincide con ninguna página extra configurada,
+    usa la principal como respaldo (cubre el caso normal de una sola
+    página, y evita romper nada si algún evento no trae el ID)."""
+    if page_id and page_id in MESSENGER_TOKENS_POR_PAGINA:
+        return MESSENGER_TOKENS_POR_PAGINA[page_id]
+    return MESSENGER_PAGE_ACCESS_TOKEN
+
+
 # Reutiliza el mismo verify token de WhatsApp -- Meta permite usar el
 # mismo valor para varios productos dentro de la misma App, así que no
 # hace falta inventar uno nuevo. Debe coincidir con lo que pongas en el
@@ -1762,7 +1793,7 @@ def eliminar_item_pedido(pedido, argumentos_json):
     return ["items"] if len(nuevos) != antes else []
 
 
-def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp"):
+def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagina_id=None):
     name = tool_call.function.name
     args = tool_call.function.arguments
 
@@ -1839,14 +1870,14 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp"):
             return f"no hay foto disponible para '{clave}', no ofrezcas una foto de esto", [], False
 
         nombre_mostrar = CATALOGO_IMAGENES[clave]["nombre_mostrar"]
-        enviar_imagen_canal(numero, url_imagen, canal, caption=nombre_mostrar)
+        enviar_imagen_canal(numero, url_imagen, canal, caption=nombre_mostrar, pagina_id=pagina_id)
         imagenes_enviadas.add(clave)
         return "imagen enviada correctamente", [], False
 
     return "función desconocida", [], False
 
 
-def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, canal="whatsapp"):
+def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, canal="whatsapp", pagina_id=None):
     sesion = obtener_sesion(numero)
     historial = sesion["messages"]
     pedido = sesion["pedido"]
@@ -1928,7 +1959,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
             anticipo_recien_confirmado_este_turno = False
             for tool_call in mensaje.tool_calls:
                 resultado, campos_modificados, anticipo_recien_confirmado = ejecutar_tool_call(
-                    tool_call, sesion, numero, pedido, canal
+                    tool_call, sesion, numero, pedido, canal, pagina_id
                 )
                 campos_modificados_total.extend(campos_modificados)
                 if anticipo_recien_confirmado:
@@ -2238,7 +2269,7 @@ def descargar_imagen_whatsapp(media_id):
 # ENVIAR MENSAJE POR MESSENGER (Facebook Page)
 # ===========================
 
-def enviar_messenger(psid, texto):
+def enviar_messenger(psid, texto, pagina_id=None):
     data = {
         "recipient": {"id": psid},
         "message": {"text": texto},
@@ -2247,7 +2278,7 @@ def enviar_messenger(psid, texto):
     try:
         r = requests.post(
             MESSENGER_GRAPH_URL,
-            params={"access_token": MESSENGER_PAGE_ACCESS_TOKEN},
+            params={"access_token": token_para_pagina(pagina_id)},
             json=data,
             timeout=15,
         )
@@ -2259,7 +2290,7 @@ def enviar_messenger(psid, texto):
         return None
 
 
-def enviar_messenger_imagen(psid, image_url):
+def enviar_messenger_imagen(psid, image_url, pagina_id=None):
     data = {
         "recipient": {"id": psid},
         "message": {
@@ -2273,7 +2304,7 @@ def enviar_messenger_imagen(psid, image_url):
     try:
         r = requests.post(
             MESSENGER_GRAPH_URL,
-            params={"access_token": MESSENGER_PAGE_ACCESS_TOKEN},
+            params={"access_token": token_para_pagina(pagina_id)},
             json=data,
             timeout=15,
         )
@@ -2303,26 +2334,29 @@ def descargar_imagen_messenger(url_imagen):
         return None, None
 
 
-def enviar_mensaje_canal(destinatario, texto, canal="whatsapp"):
+def enviar_mensaje_canal(destinatario, texto, canal="whatsapp", pagina_id=None):
     """Dispatcher: manda el mensaje por el canal correcto según de dónde
     vino la conversación. Así el resto del código (procesar_mensaje_en_
     fondo y todo lo que ya funcionaba para WhatsApp) no necesita saber ni
-    importarle qué canal es -- solo llama a esta función."""
+    importarle qué canal es -- solo llama a esta función. pagina_id solo
+    aplica a Messenger, para usar el token de la página correcta cuando
+    hay más de una conectada."""
     if canal == "messenger":
-        return enviar_messenger(destinatario, texto)
+        return enviar_messenger(destinatario, texto, pagina_id=pagina_id)
     return enviar_whatsapp(destinatario, texto)
 
 
-def enviar_imagen_canal(destinatario, image_url, canal="whatsapp", caption=""):
+def enviar_imagen_canal(destinatario, image_url, canal="whatsapp", caption="", pagina_id=None):
     if canal == "messenger":
-        r = enviar_messenger_imagen(destinatario, image_url)
+        r = enviar_messenger_imagen(destinatario, image_url, pagina_id=pagina_id)
         # Messenger no soporta caption inline en la imagen (a diferencia
         # de WhatsApp) -- si hay caption, se manda como mensaje de texto
         # aparte justo después.
         if caption:
-            enviar_messenger(destinatario, caption)
+            enviar_messenger(destinatario, caption, pagina_id=pagina_id)
         return r
     return enviar_whatsapp_imagen(destinatario, image_url, caption=caption)
+
 
 
 # ===========================
@@ -2370,14 +2404,14 @@ def registrar_entrada_cliente(numero, texto_para_guardar, tipo="texto"):
     return cliente
 
 
-def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp"):
+def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp", pagina_id=None):
     cliente = registrar_entrada_cliente(numero, f"[mensaje no soportado: {tipo}]", tipo=tipo)
     respuesta = "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?"
     crm.guardar_respuesta(cliente, respuesta)
-    enviar_mensaje_canal(numero, respuesta, canal)
+    enviar_mensaje_canal(numero, respuesta, canal, pagina_id=pagina_id)
 
 
-def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None):
+def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None):
     print("=" * 70)
     print(f"🚀 Procesando mensaje de {numero}")
     print(f"💬 Texto recibido: {texto_cliente}")
@@ -2409,7 +2443,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             respuesta_fallo = "No pude descargar tu audio 😔 ¿me lo puedes mandar otra vez, o escribirlo?"
             cliente = registrar_entrada_cliente(numero, "(audio no descargable)", tipo="audio")
             crm.guardar_respuesta(cliente, respuesta_fallo)
-            enviar_mensaje_canal(numero, respuesta_fallo, canal)
+            enviar_mensaje_canal(numero, respuesta_fallo, canal, pagina_id=pagina_id)
             return
 
         print(f"✅ Audio descargado ({len(contenido_audio)} bytes, {mime_audio}), transcribiendo...")
@@ -2419,7 +2453,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             respuesta_fallo = "No logré entender tu audio 😔 ¿me lo puedes escribir, por favor?"
             cliente = registrar_entrada_cliente(numero, "(audio no se pudo transcribir)", tipo="audio")
             crm.guardar_respuesta(cliente, respuesta_fallo)
-            enviar_mensaje_canal(numero, respuesta_fallo, canal)
+            enviar_mensaje_canal(numero, respuesta_fallo, canal, pagina_id=pagina_id)
             return
 
         print(f"📝 Audio transcrito: {texto_transcrito}")
@@ -2489,7 +2523,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             # guardarse en historial_chat, para que el reset deje el
             # número genuinamente en cero.
             respuesta_reset = "✅ Listo, empezamos de cero. ¿En qué te puedo ayudar?"
-            enviar_mensaje_canal(numero, respuesta_reset, canal)
+            enviar_mensaje_canal(numero, respuesta_reset, canal, pagina_id=pagina_id)
             return
 
     # 🆘 CANDADO DE EMERGENCIA -- capa 2, comando rápido por WhatsApp o
@@ -2512,10 +2546,11 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
                     "🛑 Bot pausado. No le va a responder a NINGÚN cliente hasta "
                     "que mandes este mismo código otra vez para reactivarlo.",
                     canal,
+                    pagina_id=pagina_id,
                 )
             else:
                 print(f"✅ {numero}: BOT reactivado globalmente vía comando de {canal}.")
-                enviar_mensaje_canal(numero, "✅ Bot reactivado. Ya vuelve a responder normal a todos los clientes.", canal)
+                enviar_mensaje_canal(numero, "✅ Bot reactivado. Ya vuelve a responder normal a todos los clientes.", canal, pagina_id=pagina_id)
         return
 
     # 🆕 Silenciar/reactivar UNA conversación específica, sin borrar nada
@@ -2532,7 +2567,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             objetivo = partes[1].strip()
             pedido_manager.silenciar_conversacion(objetivo)
             print(f"🙅 {numero}: silenció manualmente la conversación con {objetivo}")
-            enviar_mensaje_canal(numero, f"🛑 Listo, el bot ya no le va a responder a {objetivo}. El resto de clientes sigue normal.", canal)
+            enviar_mensaje_canal(numero, f"🛑 Listo, el bot ya no le va a responder a {objetivo}. El resto de clientes sigue normal.", canal, pagina_id=pagina_id)
             return
         if len(partes) == 2 and partes[0].upper() == "REACTIVAR":
             objetivo = partes[1].strip()
@@ -2540,7 +2575,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             with sesiones_lock:
                 sesiones.pop(objetivo, None)
             print(f"✅ {numero}: reactivó manualmente la conversación con {objetivo}")
-            enviar_mensaje_canal(numero, f"✅ Listo, el bot vuelve a responderle a {objetivo} normal.", canal)
+            enviar_mensaje_canal(numero, f"✅ Listo, el bot vuelve a responderle a {objetivo} normal.", canal, pagina_id=pagina_id)
             return
 
     # 🆘 Si el candado de emergencia (capa 2, por WhatsApp) está activo,
@@ -2581,12 +2616,12 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             "productos y te comparto información de las entregas que "
             "manejamos!! Buscas algún recuerdito en especial?"
         )
-        enviar_mensaje_canal(numero, saludo_canonico, canal)
+        enviar_mensaje_canal(numero, saludo_canonico, canal, pagina_id=pagina_id)
         crm.guardar_respuesta(cliente, saludo_canonico)
         for clave_img in ("a", "b"):
             url_img = url_imagen_producto(clave_img)
             if url_img:
-                enviar_imagen_canal(numero, url_img, canal)
+                enviar_imagen_canal(numero, url_img, canal, pagina_id=pagina_id)
             else:
                 print(f"⚠️ No se encontró la imagen '{clave_img}' para el saludo de cliente nuevo")
         print(f"👋 {numero}: saludo canónico + 2 imágenes enviados (cliente nuevo, canal={canal})")
@@ -2604,14 +2639,14 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             continue
         url_img = url_imagen_producto(clave_img)
         if url_img:
-            enviar_imagen_canal(numero, url_img, canal)
+            enviar_imagen_canal(numero, url_img, canal, pagina_id=pagina_id)
             imagenes_enviadas.add(clave_img)
             print(f"🖼️ Imagen automática enviada a {numero}: {clave_img}")
 
     with sesion["lock"]:
         try:
             print("🧠 Consultando OpenAI...")
-            respuesta = preguntar_ia(numero, texto_cliente, imagen_base64=imagen_base64, imagen_mime=imagen_mime, canal=canal)
+            respuesta = preguntar_ia(numero, texto_cliente, imagen_base64=imagen_base64, imagen_mime=imagen_mime, canal=canal, pagina_id=pagina_id)
             if respuesta is not None:
                 print("✅ Respuesta generada")
                 print(respuesta[:300])
@@ -2646,9 +2681,9 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
 
             time.sleep(random.uniform(2, 4))
             print("📤 Enviando mensajes fijos de confirmación de anticipo...")
-            enviar_mensaje_canal(numero, mensaje_1, canal)
+            enviar_mensaje_canal(numero, mensaje_1, canal, pagina_id=pagina_id)
             time.sleep(1.5)
-            enviar_mensaje_canal(numero, mensaje_2, canal)
+            enviar_mensaje_canal(numero, mensaje_2, canal, pagina_id=pagina_id)
 
             print("📣 Notificando a Dalia...")
             notificar_a_dalia(pedido_db, sesion["pedido"])
@@ -2676,7 +2711,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         # Gate: no mandar datos bancarios sin total calculado
         respuesta = filtrar_datos_bancarios_si_no_hay_total(respuesta, sesion.get("pedido") or {})
         print(f"📤 Enviando respuesta por {canal}...")
-        r = enviar_mensaje_canal(numero, respuesta, canal)
+        r = enviar_mensaje_canal(numero, respuesta, canal, pagina_id=pagina_id)
         if r is not None:
             print(f"📨 {canal} respondió: {r.status_code}")
         else:
@@ -2799,6 +2834,12 @@ def handle_message_messenger():
 
     try:
         for entry in data.get("entry", []):
+            # 🔧 entry["id"] es el ID de la página de Facebook que
+            # recibió este evento -- con esto sabemos con cuál de las
+            # páginas conectadas (Recuerditos Dalia, Ventas Iris, u
+            # otra que se agregue) hay que responder, para usar el
+            # token correcto de esa página específica.
+            pagina_id_actual = entry.get("id")
             for evento in entry.get("messaging", []):
                 psid = (evento.get("sender") or {}).get("id")
                 if not psid:
@@ -2852,21 +2893,21 @@ def handle_message_messenger():
                     threading.Thread(
                         target=procesar_mensaje_en_fondo,
                         args=(psid, texto_cliente),
-                        kwargs={"media_url_imagen_messenger": imagen_url, "canal": "messenger"},
+                        kwargs={"media_url_imagen_messenger": imagen_url, "canal": "messenger", "pagina_id": pagina_id_actual},
                         daemon=True,
                     ).start()
                 elif texto_cliente:
                     threading.Thread(
                         target=procesar_mensaje_en_fondo,
                         args=(psid, texto_cliente),
-                        kwargs={"canal": "messenger"},
+                        kwargs={"canal": "messenger", "pagina_id": pagina_id_actual},
                         daemon=True,
                     ).start()
                 else:
                     threading.Thread(
                         target=procesar_mensaje_no_soportado,
                         args=(psid, "adjunto no soportado"),
-                        kwargs={"canal": "messenger"},
+                        kwargs={"canal": "messenger", "pagina_id": pagina_id_actual},
                         daemon=True,
                     ).start()
 

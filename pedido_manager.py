@@ -162,12 +162,34 @@ def chat_cargar_memoria(telefono: str, limite: int = 40) -> List[Dict]:
         return []
 
 
-def uso_registrar_openai(telefono: str):
+def uso_registrar_openai(telefono: str, modelo: str = None, tokens_entrada: int = 0,
+                          tokens_salida: int = 0, tokens_cache: int = 0):
+    # 🔧 Precios de gpt-4.1-mini (verificados agosto 2026): $0.40 por
+    # millón de tokens de entrada normales, $0.10 por millón si vienen
+    # del caché de OpenAI (75% de descuento), $1.60 por millón de salida.
+    # Si cambias de modelo, actualiza estos 3 números.
+    PRECIO_ENTRADA_POR_MILLON = 0.40
+    PRECIO_ENTRADA_CACHE_POR_MILLON = 0.10
+    PRECIO_SALIDA_POR_MILLON = 1.60
+
+    tokens_entrada = tokens_entrada or 0
+    tokens_salida = tokens_salida or 0
+    tokens_cache = tokens_cache or 0
+    tokens_normales = max(0, tokens_entrada - tokens_cache)
+
+    costo = (
+        (tokens_normales / 1_000_000) * PRECIO_ENTRADA_POR_MILLON
+        + (tokens_cache / 1_000_000) * PRECIO_ENTRADA_CACHE_POR_MILLON
+        + (tokens_salida / 1_000_000) * PRECIO_SALIDA_POR_MILLON
+    )
+
     try:
         with get_db_connection() as conn:
             conn.execute(
-                "INSERT INTO uso_openai (telefono) VALUES (?)",
-                (telefono,),
+                """INSERT INTO uso_openai
+                   (telefono, modelo, tokens_entrada, tokens_salida, tokens_cache, costo_estimado_usd)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (telefono, modelo, tokens_entrada, tokens_salida, tokens_cache, costo),
             )
             conn.commit()
     except Exception as e:

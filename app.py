@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from urllib.parse import quote as url_quote
 
 ZONA_HORARIA_NEGOCIO = ZoneInfo("America/Monterrey")
 
@@ -248,7 +249,7 @@ def encontrar_catalogo_pdf():
 
 NOMBRE_CATALOGO_PDF = encontrar_catalogo_pdf()
 URL_CATALOGO_PDF = (
-    f"{PUBLIC_BASE_URL}/catalogo/{NOMBRE_CATALOGO_PDF}" if NOMBRE_CATALOGO_PDF else None
+    f"{PUBLIC_BASE_URL}/catalogo/{url_quote(NOMBRE_CATALOGO_PDF)}" if NOMBRE_CATALOGO_PDF else None
 )
 
 
@@ -256,7 +257,14 @@ def url_imagen_producto(clave_producto):
     info = CATALOGO_IMAGENES.get(clave_producto)
     if not info:
         return None
-    return f"{PUBLIC_BASE_URL}/imagenes/{info['archivo']}"
+    # 🔧 CORREGIDO (bug real detectado con clienta real): antes se pegaba
+    # el nombre del archivo tal cual a la URL, sin codificar espacios ni
+    # acentos -- con nombres simples nunca se notó, pero con acentos (ej.
+    # "oración con decenario.jpeg") produce una URL inválida que Meta no
+    # puede descargar. El bot decía "aquí tienes la foto" pero la imagen
+    # nunca llegaba, solo el texto. url_quote codifica correctamente
+    # cualquier caracter especial en el nombre del archivo.
+    return f"{PUBLIC_BASE_URL}/imagenes/{url_quote(info['archivo'])}"
 
 
 # 🔧 Imágenes que se mandan de inmediato por palabra clave del CLIENTE,

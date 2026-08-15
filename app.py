@@ -1839,6 +1839,29 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                     campos_modificados,
                     False,
                 )
+            # 🔧 CAPA EXTRA (bug real con clienta real): antes, con una
+            # imagen de por medio, el modelo quedaba obligado a decidir
+            # algo (tool_choice forzado) -- y llegó a confirmar un
+            # anticipo real solo porque la clienta reaccionó con un
+            # sticker de 👍, sin haber mandado ningún comprobante. La
+            # causa raíz (Messenger clasifica el sticker de "Me gusta"
+            # como si fuera una foto) ya se corrigió en el webhook, pero
+            # esta es la red de seguridad de respaldo: nunca confirmar
+            # el anticipo si no hay ni un monto ni una descripción de
+            # comprobante registrados.
+            if not pedido.get("monto_anticipo") and not (pedido.get("comprobante") or "").strip():
+                pedido["anticipo_confirmado"] = False
+                print("🚨 Se bloqueó confirmación de anticipo: no hay monto_anticipo ni comprobante registrados")
+                return (
+                    "BLOQUEADO: no se puede confirmar el anticipo sin un monto o una "
+                    "descripción real del comprobante de pago. Si el cliente solo "
+                    "reaccionó con un emoji/sticker o dijo que 'ya va a pagar', eso NO "
+                    "es un comprobante -- espera a que mande el comprobante real "
+                    "(captura de transferencia, foto del depósito, etc.) antes de "
+                    "confirmar.",
+                    campos_modificados,
+                    False,
+                )
         return "ok", campos_modificados, anticipo_recien_confirmado
 
     if name == "agregar_item":
@@ -2864,12 +2887,42 @@ def handle_message_messenger():
                 texto_cliente = mensaje.get("text", "") or ""
                 adjuntos = mensaje.get("attachments") or []
                 imagen_url = None
+                es_sticker = False
                 for adj in adjuntos:
+                    payload = adj.get("payload") or {}
                     if adj.get("type") == "image":
-                        imagen_url = (adj.get("payload") or {}).get("url")
+                        # 🔧 CORREGIDO (bug real detectado con clienta real):
+                        # el botón de "👍 Me gusta" de Messenger (y
+                        # cualquier otro sticker) llega en el webhook
+                        # marcado como type="image" -- indistinguible de
+                        # una foto real EXCEPTO por este campo extra
+                        # "sticker_id" que solo tienen los stickers, nunca
+                        # una foto de verdad. Sin este chequeo, el bot le
+                        # mandaba el sticker del pulgar arriba al modelo
+                        # como si fuera un comprobante de pago -- y como
+                        # llegar una imagen FUERZA que el modelo decida
+                        # algo en automático (para no perder comprobantes
+                        # reales), terminó confirmando un anticipo que la
+                        # clienta nunca pagó, solo por reaccionar 👍 a un
+                        # mensaje.
+                        if payload.get("sticker_id"):
+                            es_sticker = True
+                            break
+                        imagen_url = payload.get("url")
                         break
 
-                if imagen_url:
+                if es_sticker:
+                    # Se trata como un mensaje normal sin imagen -- el
+                    # bot puede seguir la conversación con naturalidad
+                    # (ej. "👍" como confirmación de que leyó algo), pero
+                    # SIN forzar ninguna decisión de pedido/anticipo.
+                    threading.Thread(
+                        target=procesar_mensaje_en_fondo,
+                        args=(psid, texto_cliente or "(el cliente reaccionó con un sticker/👍)"),
+                        kwargs={"canal": "messenger", "pagina_id": pagina_id_actual},
+                        daemon=True,
+                    ).start()
+                elif imagen_url:
                     threading.Thread(
                         target=procesar_mensaje_en_fondo,
                         args=(psid, texto_cliente),

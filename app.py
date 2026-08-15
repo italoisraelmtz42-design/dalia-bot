@@ -2629,14 +2629,26 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         print(f"🙅 Bot en silencio para {numero} (modo_atencion={modo_atencion}); mensaje guardado, sin respuesta automática.")
         return
 
-    # 🔧 CAMBIO DE DECISIÓN DE NEGOCIO (ya no se fuerza el saludo
-    # canónico + 2 imágenes en el primer mensaje): antes esto se mandaba
-    # siempre antes de contestar cualquier cosa, incluso si el cliente ya
-    # había hecho una pregunta específica en su primer mensaje -- la
-    # decisión ahora es que el bot conteste directo lo que se le
-    # pregunte desde el primer mensaje, como cualquier otro. El cálculo
-    # de es_primera_vez se deja arriba por si se usa para algo más a
-    # futuro, pero ya no dispara ningún envío especial aquí.
+    # 🔧 CAMBIO DE DECISIÓN DE NEGOCIO (segunda vuelta): ahora sí se
+    # fuerza otra vez un saludo garantizado en el primer mensaje de cada
+    # cliente nuevo -- pero a diferencia de la primera versión (que
+    # cortaba la respuesta y obligaba al cliente a escribir de nuevo
+    # para que le contestaran su pregunta), esta vez el saludo se manda
+    # como mensaje aparte y LUEGO el flujo sigue normal: el modelo
+    # contesta la pregunta real del cliente en el mismo turno, sin que
+    # tenga que repetirla.
+    if es_primera_vez:
+        saludo_catalogo = (
+            "Buen día, te comparto nuestro catálogo con información de "
+            "nuestros recuerditos."
+        )
+        if URL_CATALOGO_PDF:
+            saludo_catalogo += f"\n{URL_CATALOGO_PDF}"
+        enviar_mensaje_canal(numero, saludo_catalogo, canal, pagina_id=pagina_id)
+        crm.guardar_respuesta(cliente, saludo_catalogo)
+        print(f"👋 {numero}: saludo + link de catálogo enviado (cliente nuevo, canal={canal})")
+        # Sin return -- el flujo sigue abajo y el modelo contesta la
+        # pregunta real del cliente como un mensaje aparte.
 
     sesion = obtener_sesion(numero)
 

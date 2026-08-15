@@ -474,7 +474,7 @@ else:
     print(f"✅ Los {len(ARCHIVOS_CONOCIMIENTO_SIEMPRE)} archivos 'siempre incluidos' existen correctamente\n")
 
 
-def seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=None, top_k=16):
+def seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=None, top_k=22):
     if not CONOCIMIENTO_POR_ARCHIVO:
         return KNOWLEDGE
 
@@ -497,20 +497,36 @@ def seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=None, t
         puntajes.append((puntaje, nombre))
 
     puntajes.sort(key=lambda x: x[0], reverse=True)
-    seleccionados = {nombre for _, nombre in puntajes[:top_k]}
-    seleccionados |= ARCHIVOS_CONOCIMIENTO_SIEMPRE
+    seleccionados_extra = {nombre for _, nombre in puntajes[:top_k]} - ARCHIVOS_CONOCIMIENTO_SIEMPRE
 
-    # Prioridad 2: TODO el catálogo de productos siempre disponible
-    # (evita precios inventados/mezclados cuando el modelo no ve el archivo)
-    for nombre in CONOCIMIENTO_POR_ARCHIVO:
-        if nombre.startswith("Productos/") or nombre.startswith("Productos\\"):
-            seleccionados.add(nombre)
-
-    return "".join(
+    # 🔧 CORREGIDO (ahorro real de costo): antes se forzaba TODO el
+    # catálogo de Productos (28 archivos) en cada mensaje sin importar de
+    # qué hablara el cliente -- eso mandaba el 80% de toda la base de
+    # conocimiento en cada turno. Se hizo así originalmente para evitar
+    # precios inventados/mezclados, pero esa protección ya no depende del
+    # texto: el precio real siempre lo asigna Python (PRECIOS_CATALOGO),
+    # sin importar qué diga o no vea el modelo. Ahora los productos
+    # también se seleccionan por palabra clave como todo lo demás
+    # (top_k subió de 16 a 22 como margen de seguridad extra).
+    #
+    # 🔧 CORREGIDO (aprovechar el caché de prompts de OpenAI): los
+    # archivos "siempre incluidos" van PRIMERO y en el mismo orden en
+    # TODOS los mensajes de TODOS los clientes -- ese bloque es idéntico
+    # letra por letra en cada llamada a la API, así que OpenAI lo cachea
+    # automáticamente (75% más barato en esa parte). Los archivos
+    # elegidos por palabra clave (que sí cambian según el mensaje) van
+    # después, para no romper ese prefijo estable.
+    texto_siempre = "".join(
         CONOCIMIENTO_POR_ARCHIVO[nombre]
-        for nombre in sorted(seleccionados)
+        for nombre in sorted(ARCHIVOS_CONOCIMIENTO_SIEMPRE)
         if nombre in CONOCIMIENTO_POR_ARCHIVO
     )
+    texto_extra = "".join(
+        CONOCIMIENTO_POR_ARCHIVO[nombre]
+        for nombre in sorted(seleccionados_extra)
+        if nombre in CONOCIMIENTO_POR_ARCHIVO
+    )
+    return texto_siempre + texto_extra
 
 
 # ===========================
@@ -1191,9 +1207,6 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None):
     return f"""
 Eres DALIA, asesora de ventas de Recuerditos Dalia.
 
-Hoy es {dia_semana} {fecha}.
-La hora actual es {hora} (hora de Monterrey, México).
-
 Toda la información oficial está en la Base de Conocimiento.
 
 REGLAS (prioridad máxima — leen antes que cualquier otra instrucción):
@@ -1260,8 +1273,9 @@ todavía no se ha pedido y confirmado -- que el cliente diga "sí" al
 resumen NO es lo mismo que el anticipo pagado, son dos pasos distintos y
 los dos son obligatorios antes de dar por cerrado un pedido.
 
-REGLAS DE FECHAS Y PEDIDOS URGENTES (usa SIEMPRE la fecha de hoy de arriba,
-{dia_semana} {fecha}, para todo cálculo; nunca calcules fechas por tu cuenta):
+REGLAS DE FECHAS Y PEDIDOS URGENTES (usa SIEMPRE la fecha de hoy que se te
+da más abajo, en la sección de estado del pedido, para todo cálculo;
+nunca calcules fechas por tu cuenta):
 
 - El tiempo normal de elaboración de un pedido es de 4 a 6 días hábiles.
 - La fecha de entrega MÁS PRÓXIMA posible para un pedido NORMAL (no urgente)
@@ -1286,10 +1300,6 @@ REGLAS DE FECHAS Y PEDIDOS URGENTES (usa SIEMPRE la fecha de hoy de arriba,
     en punto de entrega bajo ninguna circunstancia.
 - Nunca confirmes una fecha de entrega sin haber verificado si es un pedido
   normal o urgente según las reglas de arriba.
-
-ESTADO ACTUAL DEL PEDIDO DE ESTE CLIENTE (desde base de datos):
-
-{resumen}
 
 No vuelvas a preguntar datos ya confirmados.
 Pregunta únicamente los datos faltantes.
@@ -1368,15 +1378,6 @@ categorías y actúa según corresponda:
 4. OTRA IMAGEN (no encaja en ninguna de las anteriores): coméntalo con
    naturalidad y sigue la conversación normal, sin asumir que es un pago.
 
-INFORMACIÓN QUE YA SE LE ENVIÓ A ESTE CLIENTE EN MENSAJES ANTERIORES
-(no la repitas salvo que el cliente la pida explícitamente de nuevo):
-
-{resumen_info_enviada(info_enviada)}
-
-BASE DE CONOCIMIENTO:
-
-{conocimiento}
-
 ===========================================================
 🚨 REGLA DE SEGURIDAD Y CIERRE AUTOMÁTICO (LEE ESTO CON ATENCIÓN):
 ===========================================================
@@ -1406,6 +1407,27 @@ Cuando SÍ se confirme el pago (por imagen o por texto con monto), llama a
 actualizar_pedido de inmediato, sin que el cliente tenga que pedírtelo de
 nuevo. El cliente no debe saber que estás llamando a una herramienta.
 ===========================================================
+
+BASE DE CONOCIMIENTO:
+
+{conocimiento}
+
+-----------------------------------------------------------
+🔧 A PARTIR DE AQUÍ: información específica de ESTA conversación
+(esto sí cambia en cada mensaje, todo lo de arriba es fijo).
+-----------------------------------------------------------
+
+Hoy es {dia_semana} {fecha}.
+La hora actual es {hora} (hora de Monterrey, México).
+
+INFORMACIÓN QUE YA SE LE ENVIÓ A ESTE CLIENTE EN MENSAJES ANTERIORES
+(no la repitas salvo que el cliente la pida explícitamente de nuevo):
+
+{resumen_info_enviada(info_enviada)}
+
+ESTADO ACTUAL DEL PEDIDO DE ESTE CLIENTE (desde base de datos):
+
+{resumen}
 """
 
 

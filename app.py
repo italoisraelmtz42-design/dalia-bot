@@ -32,6 +32,7 @@ load_dotenv()
 import crm
 import pedido_manager
 import audio_handler
+import database
 from constantes import ModoAtencion, campos_faltantes_pedido
 
 # ===========================
@@ -452,6 +453,14 @@ ARCHIVOS_CONOCIMIENTO_SIEMPRE = {
     "Preguntas y respuestas/033_Reglas_Conversacion.txt",
     "Preguntas y respuestas/045_Guia_Tono_y_Personalidad.txt",
     "Preguntas y respuestas/050_Saludos_Humanos.txt",
+    # 🔧 Agregado (bug real detectado con clienta real): el bot dijo "en
+    # la Base de Conocimiento no aparece..." -- revela que es un sistema
+    # automatizado usando su propia terminología interna, justo lo que
+    # esta regla existe para evitar. Antes dependía de coincidencia de
+    # palabras clave para aparecer en la conversación; ahora se manda
+    # siempre, sin importar de qué se hable (es un archivo chico, no
+    # afecta el costo).
+    "Preguntas y respuestas/051_Frases_Que_Un_Humano_No_Dice.txt",
     "Trato al cliente/035_Variantes_De_Producto.txt",
     "Ventas/ERRORES_PROHIBIDOS.txt",
     "Ventas/MEMORIA_CONVERSACIONAL.txt",
@@ -2067,10 +2076,17 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
         try:
             uso = getattr(r, "usage", None)
             if uso is not None:
+                # 🔧 Ahora sí se captura y guarda cached_tokens (viene en
+                # prompt_tokens_details) -- sirve para confirmar en el
+                # dashboard que el reordenamiento del prompt de verdad
+                # está aprovechando el caché de OpenAI, no solo en teoría.
+                detalles_prompt = getattr(uso, "prompt_tokens_details", None)
+                tokens_cache = getattr(detalles_prompt, "cached_tokens", 0) if detalles_prompt else 0
                 crm.registrar_uso_openai(
                     numero, MODELO,
                     getattr(uso, "prompt_tokens", None),
                     getattr(uso, "completion_tokens", None),
+                    tokens_cache=tokens_cache,
                 )
         except Exception as e:
             print("⚠️ No se pudo registrar uso de OpenAI:", repr(e))
@@ -2433,8 +2449,248 @@ def servir_nota_pdf(nombre_archivo):
 
 
 # ===========================
-# WEBHOOK: VERIFICACIÓN (Meta)
+# DASHBOARD DEL NEGOCIO
 # ===========================
+
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
+if not DASHBOARD_PASSWORD:
+    print("⚠️ DASHBOARD_PASSWORD no configurado -- el dashboard no va a "
+          "estar accesible hasta que se configure (por seguridad, sin "
+          "contraseña queda bloqueado por completo, no abierto).")
+
+
+def _rango_fechas(periodo: str):
+    """Devuelve (fecha_inicio, etiqueta) según el período pedido, en la
+    zona horaria del negocio."""
+    ahora = datetime.now(ZONA_HORARIA_NEGOCIO)
+    hoy = ahora.date()
+    if periodo == "hoy":
+        inicio = datetime.combine(hoy, datetime.min.time(), tzinfo=ZONA_HORARIA_NEGOCIO)
+        etiqueta = f"Hoy ({hoy.strftime('%d/%m/%Y')})"
+    elif periodo == "mes":
+        inicio = datetime.combine(hoy.replace(day=1), datetime.min.time(), tzinfo=ZONA_HORARIA_NEGOCIO)
+        etiqueta = f"Este mes ({hoy.strftime('%B %Y')})"
+    else:  # semana (default)
+        inicio_semana = hoy - timedelta(days=hoy.weekday())
+        inicio = datetime.combine(inicio_semana, datetime.min.time(), tzinfo=ZONA_HORARIA_NEGOCIO)
+        etiqueta = f"Esta semana (desde {inicio_semana.strftime('%d/%m/%Y')})"
+    return inicio.strftime("%Y-%m-%d %H:%M:%S"), etiqueta
+
+
+@app.route("/dashboard")
+def dashboard():
+    # 🔒 Protección simple con contraseña por URL (?clave=...) -- no es
+    # un sistema de login completo, pero evita que cualquiera con el
+    # link del bot vea datos del negocio. Si no hay contraseña
+    # configurada en Render, el dashboard queda bloqueado por completo
+    # (más seguro que dejarlo abierto por accidente).
+    clave_recibida = request.args.get("clave", "")
+    if not DASHBOARD_PASSWORD or clave_recibida != DASHBOARD_PASSWORD:
+        return "🔒 Acceso no autorizado. Agrega ?clave=TU_CLAVE a la URL.", 401
+
+    periodo = request.args.get("periodo", "semana")
+    if periodo not in ("hoy", "semana", "mes"):
+        periodo = "semana"
+    fecha_inicio, etiqueta_periodo = _rango_fechas(periodo)
+
+    try:
+        with database.get_db_connection() as conn:
+            # --- Ingresos (pagos confirmados) ---
+            fila = conn.execute(
+                "SELECT COALESCE(SUM(monto), 0) as total, COUNT(*) as n FROM pagos "
+                "WHERE confirmado = 1 AND fecha >= ?",
+                (fecha_inicio,),
+            ).fetchone()
+            ingresos_total, ingresos_n = fila["total"], fila["n"]
+
+            # --- Pedidos: total, urgentes vs normales, por canal ---
+            fila = conn.execute(
+                "SELECT COUNT(*) as n FROM pedidos WHERE fecha_creacion >= ?",
+                (fecha_inicio,),
+            ).fetchone()
+            pedidos_total = fila["n"]
+
+            fila = conn.execute(
+                "SELECT COUNT(*) as n FROM pedidos WHERE fecha_creacion >= ? AND es_urgente = 1",
+                (fecha_inicio,),
+            ).fetchone()
+            pedidos_urgentes = fila["n"]
+
+            filas_canal_pedidos = conn.execute(
+                "SELECT COALESCE(canal, 'whatsapp') as canal, COUNT(*) as n FROM pedidos "
+                "WHERE fecha_creacion >= ? GROUP BY canal",
+                (fecha_inicio,),
+            ).fetchall()
+
+            # --- Mensajes por canal ---
+            filas_canal_msj = conn.execute(
+                "SELECT COALESCE(canal, 'whatsapp') as canal, "
+                "SUM(CASE WHEN emisor = 'bot' THEN 1 ELSE 0 END) as respondidos, "
+                "COUNT(*) as total "
+                "FROM historial_chat WHERE timestamp >= ? GROUP BY canal",
+                (fecha_inicio,),
+            ).fetchall()
+
+            # --- Productos más vendidos ---
+            filas_productos = conn.execute(
+                "SELECT pi.producto, SUM(pi.cantidad) as cantidad, SUM(pi.subtotal) as ingresos "
+                "FROM pedido_items pi JOIN pedidos p ON pi.pedido_id = p.id "
+                "WHERE p.fecha_creacion >= ? "
+                "GROUP BY pi.producto ORDER BY cantidad DESC LIMIT 10",
+                (fecha_inicio,),
+            ).fetchall()
+
+            # --- Entregas por municipio (domicilio) ---
+            filas_municipios = conn.execute(
+                "SELECT COALESCE(e.municipio, '(local o punto de entrega)') as lugar, COUNT(*) as n "
+                "FROM entregas e JOIN pedidos p ON e.pedido_id = p.id "
+                "WHERE p.fecha_creacion >= ? "
+                "GROUP BY lugar ORDER BY n DESC",
+                (fecha_inicio,),
+            ).fetchall()
+
+            # --- Gasto de OpenAI ---
+            fila = conn.execute(
+                "SELECT COALESCE(SUM(costo_estimado_usd), 0) as costo, "
+                "COALESCE(SUM(tokens_entrada), 0) as tok_in, "
+                "COALESCE(SUM(tokens_cache), 0) as tok_cache, "
+                "COUNT(*) as llamadas "
+                "FROM uso_openai WHERE timestamp >= ?",
+                (fecha_inicio,),
+            ).fetchone()
+            openai_costo = fila["costo"]
+            openai_llamadas = fila["llamadas"]
+            pct_cache = round(100 * fila["tok_cache"] / fila["tok_in"], 1) if fila["tok_in"] else 0
+
+            # --- Pedidos recientes (lista) ---
+            filas_recientes = conn.execute(
+                "SELECT folio, telefono, estado, es_urgente, COALESCE(canal, 'whatsapp') as canal, fecha_creacion "
+                "FROM pedidos WHERE fecha_creacion >= ? "
+                "ORDER BY fecha_creacion DESC LIMIT 15",
+                (fecha_inicio,),
+            ).fetchall()
+
+    except Exception as e:
+        return f"Error consultando la base de datos: {e}", 500
+
+    def _fila_canal_pedidos(canal_nombre):
+        for f in filas_canal_pedidos:
+            if f["canal"] == canal_nombre:
+                return f["n"]
+        return 0
+
+    def _fila_canal_msj(canal_nombre):
+        for f in filas_canal_msj:
+            if f["canal"] == canal_nombre:
+                return f["respondidos"], f["total"]
+        return 0, 0
+
+    respondidos_wa, total_wa = _fila_canal_msj("whatsapp")
+    respondidos_msg, total_msg = _fila_canal_msj("messenger")
+
+    filas_productos_html = "".join(
+        f"<tr><td>{p['producto']}</td><td>{p['cantidad']}</td><td>${p['ingresos']:.2f}</td></tr>"
+        for p in filas_productos
+    ) or "<tr><td colspan='3'>Sin ventas en este período</td></tr>"
+
+    filas_municipios_html = "".join(
+        f"<tr><td>{m['lugar']}</td><td>{m['n']}</td></tr>" for m in filas_municipios
+    ) or "<tr><td colspan='2'>Sin entregas a domicilio en este período</td></tr>"
+
+    filas_recientes_html = "".join(
+        f"<tr><td>{r['folio']}</td><td>{r['telefono']}</td><td>{r['estado']}</td>"
+        f"<td>{'🚨 Urgente' if r['es_urgente'] else 'Normal'}</td>"
+        f"<td>{'📱 Messenger' if r['canal']=='messenger' else '💬 WhatsApp'}</td>"
+        f"<td>{r['fecha_creacion']}</td></tr>"
+        for r in filas_recientes
+    ) or "<tr><td colspan='6'>Sin pedidos en este período</td></tr>"
+
+    def _link_periodo(p, texto):
+        activo = "background:#f2385a;color:white;" if p == periodo else "background:#eee;color:#333;"
+        return f'<a href="/dashboard?clave={clave_recibida}&periodo={p}" style="padding:8px 16px;border-radius:20px;text-decoration:none;margin-right:8px;{activo}">{texto}</a>'
+
+    html = f"""
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Dashboard — Recuerditos Dalia</title>
+<style>
+  body {{ font-family: -apple-system, Arial, sans-serif; background:#faf7f5; margin:0; padding:24px; color:#333; }}
+  h1 {{ color:#c2185b; margin-bottom:4px; }}
+  .subtitulo {{ color:#888; margin-top:0; margin-bottom:20px; }}
+  .nav {{ margin-bottom:24px; }}
+  .grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:16px; margin-bottom:28px; }}
+  .card {{ background:white; border-radius:12px; padding:18px 20px; box-shadow:0 1px 4px rgba(0,0,0,0.08); }}
+  .card .valor {{ font-size:28px; font-weight:700; color:#c2185b; margin:4px 0; }}
+  .card .etiqueta {{ font-size:13px; color:#888; text-transform:uppercase; letter-spacing:0.5px; }}
+  .card .detalle {{ font-size:13px; color:#666; }}
+  table {{ width:100%; border-collapse:collapse; background:white; border-radius:12px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,0.08); margin-bottom:28px; }}
+  th {{ background:#c2185b; color:white; text-align:left; padding:10px 14px; font-size:13px; }}
+  td {{ padding:9px 14px; border-bottom:1px solid #f0f0f0; font-size:14px; }}
+  h2 {{ font-size:17px; color:#444; margin-top:32px; margin-bottom:10px; }}
+</style>
+</head>
+<body>
+  <h1>🧸 Recuerditos Dalia</h1>
+  <p class="subtitulo">{etiqueta_periodo}</p>
+  <div class="nav">
+    {_link_periodo('hoy', 'Hoy')}
+    {_link_periodo('semana', 'Esta semana')}
+    {_link_periodo('mes', 'Este mes')}
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="etiqueta">Ingresos confirmados</div>
+      <div class="valor">${ingresos_total:,.2f}</div>
+      <div class="detalle">{ingresos_n} pago(s)/anticipo(s)</div>
+    </div>
+    <div class="card">
+      <div class="etiqueta">Pedidos</div>
+      <div class="valor">{pedidos_total}</div>
+      <div class="detalle">{pedidos_urgentes} urgente(s)</div>
+    </div>
+    <div class="card">
+      <div class="etiqueta">Pedidos por canal</div>
+      <div class="valor" style="font-size:18px;">💬 {_fila_canal_pedidos('whatsapp')} &nbsp; 📱 {_fila_canal_pedidos('messenger')}</div>
+      <div class="detalle">WhatsApp &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Messenger</div>
+    </div>
+    <div class="card">
+      <div class="etiqueta">Mensajes respondidos</div>
+      <div class="valor" style="font-size:18px;">💬 {respondidos_wa}/{total_wa} &nbsp; 📱 {respondidos_msg}/{total_msg}</div>
+      <div class="detalle">contestados / recibidos, por canal</div>
+    </div>
+    <div class="card">
+      <div class="etiqueta">Gasto de OpenAI</div>
+      <div class="valor">${openai_costo:.4f}</div>
+      <div class="detalle">{openai_llamadas} llamada(s) · {pct_cache}% de tokens desde caché</div>
+    </div>
+  </div>
+
+  <h2>📦 Productos vendidos</h2>
+  <table>
+    <tr><th>Producto</th><th>Cantidad</th><th>Ingresos</th></tr>
+    {filas_productos_html}
+  </table>
+
+  <h2>📍 Entregas a domicilio por municipio</h2>
+  <table>
+    <tr><th>Municipio</th><th>Pedidos</th></tr>
+    {filas_municipios_html}
+  </table>
+
+  <h2>🧾 Pedidos recientes</h2>
+  <table>
+    <tr><th>Folio</th><th>Teléfono</th><th>Estado</th><th>Tipo</th><th>Canal</th><th>Fecha</th></tr>
+    {filas_recientes_html}
+  </table>
+
+</body>
+</html>
+"""
+    return html
+
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():

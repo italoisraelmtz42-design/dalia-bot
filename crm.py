@@ -31,12 +31,26 @@ def cargar_memoria(cliente, limite: int = 20) -> List[Dict[str, str]]:
 
 def registrar_uso_openai(*args, **kwargs):
     telefono = None
+    modelo = None
+    tokens_entrada = 0
+    tokens_salida = 0
+    tokens_cache = 0
     if args and args[0]:
         telefono = args[0]
         if isinstance(telefono, dict):
             telefono = telefono.get('numero')
+    if len(args) > 1:
+        modelo = args[1]
+    if len(args) > 2:
+        tokens_entrada = args[2]
+    if len(args) > 3:
+        tokens_salida = args[3]
+    tokens_cache = kwargs.get("tokens_cache", 0)
     if telefono:
-        pedido_manager.uso_registrar_openai(telefono)
+        pedido_manager.uso_registrar_openai(
+            telefono, modelo=modelo, tokens_entrada=tokens_entrada,
+            tokens_salida=tokens_salida, tokens_cache=tokens_cache,
+        )
 
 def guardar_respuesta(cliente, respuesta, tipo="texto", canal="whatsapp"):
     telefono = cliente['numero'] if isinstance(cliente, dict) else cliente

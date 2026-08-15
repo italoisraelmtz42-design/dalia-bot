@@ -156,6 +156,23 @@ def init_order_tables():
                 fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
 
+            # 🔧 Migración segura: agrega la columna "canal" (whatsapp /
+            # messenger) a historial_chat y pedidos, si todavía no
+            # existe. SQLite no soporta "ALTER TABLE ... ADD COLUMN IF
+            # NOT EXISTS" directamente, así que se revisa primero con
+            # PRAGMA table_info -- así no truena en despliegues donde la
+            # columna ya se agregó antes.
+            def _agregar_columna_si_falta(tabla, columna, tipo_sql):
+                cursor.execute(f"PRAGMA table_info({tabla})")
+                columnas_existentes = {fila[1] for fila in cursor.fetchall()}
+                if columna not in columnas_existentes:
+                    cursor.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo_sql}")
+                    logger_db.info(f"[DB] Columna '{columna}' agregada a '{tabla}'.")
+
+            _agregar_columna_si_falta("historial_chat", "canal", "TEXT DEFAULT 'whatsapp'")
+            _agregar_columna_si_falta("pedidos", "canal", "TEXT DEFAULT 'whatsapp'")
+            conn.commit()
+
             if current_version == 0:
                 cursor.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, fecha TEXT DEFAULT CURRENT_TIMESTAMP)")
                 cursor.execute("INSERT INTO schema_version (version) VALUES (1)")

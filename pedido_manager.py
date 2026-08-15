@@ -635,6 +635,20 @@ def silenciar_conversacion(telefono: str) -> None:
 def reactivar_conversacion(telefono: str) -> None:
     with get_db_connection() as conn:
         conn.execute("DELETE FROM conversaciones_silenciadas WHERE telefono = ?", (telefono,))
+        # 🔧 CORREGIDO (hueco real detectado): el comando REACTIVAR solo
+        # limpiaba conversaciones_silenciadas, pero el silencio también
+        # puede venir de otra fuente -- el pedido oficial más reciente en
+        # la tabla `pedidos` con modo_atencion=DALIA (esto pasa
+        # automático en cuanto se confirma -- o se confirma por error,
+        # como pasó con Blanca -- un anticipo). Sin esto, REACTIVAR no
+        # hacía nada si el silencio venía de esa otra fuente.
+        conn.execute(
+            """UPDATE pedidos SET modo_atencion = ?
+               WHERE telefono = ? AND id = (
+                   SELECT id FROM pedidos WHERE telefono = ? ORDER BY id DESC LIMIT 1
+               )""",
+            (ModoAtencion.BOT.value, telefono, telefono),
+        )
         conn.commit()
 
 

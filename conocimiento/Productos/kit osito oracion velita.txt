@@ -46,4 +46,14 @@ Oraciones
 velita
 recuerdo religioso
 
-
+🔧 NO CONFUNDIR CON:
+- "Osito con jaboncito" ($12): este kit NO lleva jaboncito. Si el
+  cliente pregunta por "osito con velita" o "osito con oración", NO le
+  preguntes "con o sin jaboncito" -- ese atributo no aplica a este
+  producto.
+- "Vela de toalla chica/grande" ($12/$16.50): esa es una toallita
+  doblada en forma de vela, con tamaños distintos. La velita de ESTE
+  kit es una pieza física fija de 3.5cm, sin variantes de tamaño. Si el
+  cliente menciona "velita" junto con "osito" u "oración", es CASI
+  seguro este kit, no la vela de toalla -- no le preguntes "chica o
+  grande".

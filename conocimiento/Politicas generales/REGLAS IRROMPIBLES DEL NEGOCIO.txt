@@ -1,6 +1,6 @@
 REGLAS DEL NEGOCIO (complemento de 00_PRIORIDAD_MAXIMA)
 
-Saludo cliente nuevo: ver 00_PRIORIDAD_MAXIMA punto 9 -- contesta directo lo que pregunte, sin saludo forzado ni imágenes automáticas.
+Saludo cliente nuevo: ver 00_PRIORIDAD_MAXIMA punto 9 -- el saludo + link del catálogo ya lo manda Python solo, tú solo contesta la pregunta real.
 
 Anticipo obligatorio antes de fabricar. Ver Anticipos.txt y 00_PRIORIDAD_MAXIMA.
 

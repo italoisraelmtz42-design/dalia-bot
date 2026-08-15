@@ -2559,6 +2559,19 @@ def dashboard():
                 (fecha_inicio,),
             ).fetchall()
 
+            # 🆕 Clientes/conversaciones distintas atendidas (no confundir
+            # con "mensajes respondidos" -- una sola conversación puede
+            # tener 100 mensajes contestados, pero sigue siendo 1
+            # cliente). Cuenta teléfonos distintos a los que el bot les
+            # contestó al menos una vez en el período.
+            filas_canal_clientes = conn.execute(
+                "SELECT COALESCE(canal, 'whatsapp') as canal, "
+                "COUNT(DISTINCT telefono) as clientes "
+                "FROM historial_chat WHERE timestamp >= ? AND emisor = 'bot' "
+                "GROUP BY canal",
+                (fecha_inicio,),
+            ).fetchall()
+
             # --- Productos más vendidos ---
             filas_productos = conn.execute(
                 "SELECT pi.producto, SUM(pi.cantidad) as cantidad, SUM(pi.subtotal) as ingresos "
@@ -2613,8 +2626,16 @@ def dashboard():
                 return f["respondidos"], f["total"]
         return 0, 0
 
+    def _fila_canal_clientes(canal_nombre):
+        for f in filas_canal_clientes:
+            if f["canal"] == canal_nombre:
+                return f["clientes"]
+        return 0
+
     respondidos_wa, total_wa = _fila_canal_msj("whatsapp")
     respondidos_msg, total_msg = _fila_canal_msj("messenger")
+    clientes_wa = _fila_canal_clientes("whatsapp")
+    clientes_msg = _fila_canal_clientes("messenger")
 
     filas_productos_html = "".join(
         f"<tr><td>{p['producto']}</td><td>{p['cantidad']}</td><td>${p['ingresos']:.2f}</td></tr>"
@@ -2690,6 +2711,11 @@ def dashboard():
       <div class="etiqueta">Mensajes respondidos</div>
       <div class="valor" style="font-size:18px;">💬 {respondidos_wa}/{total_wa} &nbsp; 📱 {respondidos_msg}/{total_msg}</div>
       <div class="detalle">contestados / recibidos, por canal</div>
+    </div>
+    <div class="card">
+      <div class="etiqueta">Clientes/conversaciones atendidas</div>
+      <div class="valor" style="font-size:18px;">💬 {clientes_wa} &nbsp; 📱 {clientes_msg}</div>
+      <div class="detalle">personas distintas a las que se les respondió (no mensajes)</div>
     </div>
     <div class="card">
       <div class="etiqueta">Gasto de OpenAI</div>

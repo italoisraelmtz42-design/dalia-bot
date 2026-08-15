@@ -2458,6 +2458,26 @@ if not DASHBOARD_PASSWORD:
           "estar accesible hasta que se configure (por seguridad, sin "
           "contraseña queda bloqueado por completo, no abierto).")
 
+# Tipo de cambio USD->MXN para mostrar el gasto de OpenAI en pesos (el
+# costo real que factura OpenAI siempre es en dólares). Verificado a
+# mediados de agosto 2026 en ~17.10 -- como el dólar se mueve, si quieres
+# más precisión agrega DASHBOARD_USD_MXN en Render con el valor del día.
+USD_MXN = float(os.getenv("DASHBOARD_USD_MXN", "17.10"))
+
+
+def _utc_a_hora_local(timestamp_str):
+    """SQLite guarda CURRENT_TIMESTAMP en UTC -- esto lo convierte a hora
+    de Monterrey para mostrarlo en el dashboard (los datos NO se
+    modifican en la base, solo se convierten al desplegarlos)."""
+    if not timestamp_str:
+        return timestamp_str
+    try:
+        dt_utc = datetime.strptime(str(timestamp_str)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("UTC"))
+        dt_local = dt_utc.astimezone(ZONA_HORARIA_NEGOCIO)
+        return dt_local.strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return timestamp_str
+
 
 def _rango_fechas(periodo: str):
     """Devuelve (fecha_inicio, etiqueta) según el período pedido, en la
@@ -2474,7 +2494,15 @@ def _rango_fechas(periodo: str):
         inicio_semana = hoy - timedelta(days=hoy.weekday())
         inicio = datetime.combine(inicio_semana, datetime.min.time(), tzinfo=ZONA_HORARIA_NEGOCIO)
         etiqueta = f"Esta semana (desde {inicio_semana.strftime('%d/%m/%Y')})"
-    return inicio.strftime("%Y-%m-%d %H:%M:%S"), etiqueta
+    # 🔧 CORREGIDO (bug real detectado): "inicio" se calcula en hora de
+    # Monterrey, pero las fechas guardadas en la base de datos son UTC
+    # (CURRENT_TIMESTAMP de SQLite siempre es UTC). Sin esta conversión,
+    # "Hoy" comparaba medianoche de Monterrey directo contra timestamps
+    # UTC -- 6 horas de diferencia, filtrando mal justo en los bordes
+    # del período (por eso los pedidos de la madrugada/tarde se veían
+    # en el período equivocado).
+    inicio_utc = inicio.astimezone(ZoneInfo("UTC"))
+    return inicio_utc.strftime("%Y-%m-%d %H:%M:%S"), etiqueta
 
 
 @app.route("/dashboard")
@@ -2601,9 +2629,11 @@ def dashboard():
         f"<tr><td>{r['folio']}</td><td>{r['telefono']}</td><td>{r['estado']}</td>"
         f"<td>{'🚨 Urgente' if r['es_urgente'] else 'Normal'}</td>"
         f"<td>{'📱 Messenger' if r['canal']=='messenger' else '💬 WhatsApp'}</td>"
-        f"<td>{r['fecha_creacion']}</td></tr>"
+        f"<td>{_utc_a_hora_local(r['fecha_creacion'])}</td>"
+        f"<td><a href='/dashboard/conversacion?clave={clave_recibida}&telefono={r['telefono']}&canal={r['canal']}' "
+        f"style='color:#c2185b;font-weight:600;'>Ver conversación →</a></td></tr>"
         for r in filas_recientes
-    ) or "<tr><td colspan='6'>Sin pedidos en este período</td></tr>"
+    ) or "<tr><td colspan='7'>Sin pedidos en este período</td></tr>"
 
     def _link_periodo(p, texto):
         activo = "background:#f2385a;color:white;" if p == periodo else "background:#eee;color:#333;"
@@ -2663,8 +2693,8 @@ def dashboard():
     </div>
     <div class="card">
       <div class="etiqueta">Gasto de OpenAI</div>
-      <div class="valor">${openai_costo:.4f}</div>
-      <div class="detalle">{openai_llamadas} llamada(s) · {pct_cache}% de tokens desde caché</div>
+      <div class="valor">${openai_costo * USD_MXN:.2f} MXN</div>
+      <div class="detalle">{openai_llamadas} llamada(s) · {pct_cache}% de tokens desde caché · (${openai_costo:.4f} USD)</div>
     </div>
   </div>
 
@@ -2682,10 +2712,93 @@ def dashboard():
 
   <h2>🧾 Pedidos recientes</h2>
   <table>
-    <tr><th>Folio</th><th>Teléfono</th><th>Estado</th><th>Tipo</th><th>Canal</th><th>Fecha</th></tr>
+    <tr><th>Folio</th><th>Teléfono</th><th>Estado</th><th>Tipo</th><th>Canal</th><th>Fecha</th><th></th></tr>
     {filas_recientes_html}
   </table>
 
+</body>
+</html>
+"""
+    return html
+
+
+@app.route("/dashboard/conversacion")
+def dashboard_conversacion():
+    """Visor de la conversación real de un cliente específico -- usa
+    historial_chat, que ya guarda cada mensaje (cliente y bot) con su
+    canal y hora. No depende de nada externo, así que siempre funciona,
+    a diferencia de los links a WhatsApp/Messenger de abajo."""
+    clave_recibida = request.args.get("clave", "")
+    if not DASHBOARD_PASSWORD or clave_recibida != DASHBOARD_PASSWORD:
+        return "🔒 Acceso no autorizado. Agrega ?clave=TU_CLAVE a la URL.", 401
+
+    telefono = request.args.get("telefono", "")
+    canal = request.args.get("canal", "whatsapp")
+    if not telefono:
+        return "Falta el parámetro 'telefono'.", 400
+
+    try:
+        with database.get_db_connection() as conn:
+            mensajes = conn.execute(
+                "SELECT mensaje, emisor, timestamp FROM historial_chat "
+                "WHERE telefono = ? ORDER BY id ASC",
+                (telefono,),
+            ).fetchall()
+    except Exception as e:
+        return f"Error consultando la base de datos: {e}", 500
+
+    burbujas_html = "".join(
+        f"""<div style="display:flex;justify-content:{'flex-end' if m['emisor']=='bot' else 'flex-start'};margin-bottom:10px;">
+              <div style="max-width:70%;background:{'#c2185b' if m['emisor']=='bot' else 'white'};
+                          color:{'white' if m['emisor']=='bot' else '#333'};
+                          padding:10px 14px;border-radius:14px;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+                <div style="font-size:14px;white-space:pre-wrap;">{m['mensaje']}</div>
+                <div style="font-size:11px;opacity:0.7;margin-top:4px;">{_utc_a_hora_local(m['timestamp'])}</div>
+              </div>
+            </div>"""
+        for m in mensajes
+    ) or "<p>No hay mensajes guardados para este número.</p>"
+
+    # 🔧 Links a la conversación real -- wa.me es confiable y documentado
+    # por Meta. El de Messenger (messenger.com/t/) está pensado para IDs
+    # de perfiles personales, no necesariamente para el identificador
+    # (PSID) que usa una página de negocio con un cliente -- se ofrece
+    # como "inténtalo", no como garantía, por eso el aviso junto al botón.
+    if canal == "messenger":
+        link_externo = f"https://www.messenger.com/t/{telefono}"
+        texto_boton = "📱 Intentar abrir en Messenger"
+        aviso = "⚠️ Este link no siempre funciona para conversaciones de página de negocio -- si no abre, busca al cliente directo en el buzón de Meta Business Suite."
+    else:
+        link_externo = f"https://wa.me/{telefono}"
+        texto_boton = "💬 Abrir conversación en WhatsApp"
+        aviso = "Esto abre un chat nuevo con este número desde tu WhatsApp personal (no es el mismo hilo del bot, pero llega al mismo cliente)."
+
+    html = f"""
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Conversación con {telefono} — Recuerditos Dalia</title>
+<style>
+  body {{ font-family: -apple-system, Arial, sans-serif; background:#e9dfda; margin:0; padding:24px; }}
+  .header {{ background:white; border-radius:12px; padding:16px 20px; margin-bottom:16px; box-shadow:0 1px 4px rgba(0,0,0,0.08); }}
+  .header a {{ color:#c2185b; text-decoration:none; font-size:14px; }}
+  .chat {{ background:#e9dfda; border-radius:12px; padding:20px; max-width:700px; }}
+  .boton {{ display:inline-block; background:#c2185b; color:white; padding:10px 18px; border-radius:8px; text-decoration:none; font-weight:600; margin-top:10px; }}
+  .aviso {{ font-size:12px; color:#888; margin-top:6px; }}
+</style>
+</head>
+<body>
+  <div class="header">
+    <a href="/dashboard?clave={clave_recibida}">← Volver al dashboard</a>
+    <h2 style="margin:8px 0 4px 0;">Conversación con {telefono}</h2>
+    <p style="margin:0;color:#888;">{'📱 Messenger' if canal == 'messenger' else '💬 WhatsApp'} · {len(mensajes)} mensaje(s)</p>
+    <a class="boton" href="{link_externo}" target="_blank">{texto_boton}</a>
+    <div class="aviso">{aviso}</div>
+  </div>
+  <div class="chat">
+    {burbujas_html}
+  </div>
 </body>
 </html>
 """

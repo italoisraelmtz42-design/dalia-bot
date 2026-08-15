@@ -2451,16 +2451,16 @@ def verify_webhook():
 # WEBHOOK: MENSAJES ENTRANTES
 # ===========================
 
-def registrar_entrada_cliente(numero, texto_para_guardar, tipo="texto"):
+def registrar_entrada_cliente(numero, texto_para_guardar, tipo="texto", canal="whatsapp"):
     cliente = crm.cargar_cliente(numero)
-    crm.guardar_mensaje_cliente(cliente, texto_para_guardar, tipo=tipo)
+    crm.guardar_mensaje_cliente(cliente, texto_para_guardar, tipo=tipo, canal=canal)
     return cliente
 
 
 def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp", pagina_id=None):
-    cliente = registrar_entrada_cliente(numero, f"[mensaje no soportado: {tipo}]", tipo=tipo)
+    cliente = registrar_entrada_cliente(numero, f"[mensaje no soportado: {tipo}]", tipo=tipo, canal=canal)
     respuesta = "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?"
-    crm.guardar_respuesta(cliente, respuesta)
+    crm.guardar_respuesta(cliente, respuesta, canal=canal)
     enviar_mensaje_canal(numero, respuesta, canal, pagina_id=pagina_id)
 
 
@@ -2494,8 +2494,8 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         if not contenido_audio:
             print("❌ No se pudo descargar el audio del cliente")
             respuesta_fallo = "No pude descargar tu audio 😔 ¿me lo puedes mandar otra vez, o escribirlo?"
-            cliente = registrar_entrada_cliente(numero, "(audio no descargable)", tipo="audio")
-            crm.guardar_respuesta(cliente, respuesta_fallo)
+            cliente = registrar_entrada_cliente(numero, "(audio no descargable)", tipo="audio", canal=canal)
+            crm.guardar_respuesta(cliente, respuesta_fallo, canal=canal)
             enviar_mensaje_canal(numero, respuesta_fallo, canal, pagina_id=pagina_id)
             return
 
@@ -2504,8 +2504,8 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         if not texto_transcrito:
             print("❌ No se pudo transcribir el audio")
             respuesta_fallo = "No logré entender tu audio 😔 ¿me lo puedes escribir, por favor?"
-            cliente = registrar_entrada_cliente(numero, "(audio no se pudo transcribir)", tipo="audio")
-            crm.guardar_respuesta(cliente, respuesta_fallo)
+            cliente = registrar_entrada_cliente(numero, "(audio no se pudo transcribir)", tipo="audio", canal=canal)
+            crm.guardar_respuesta(cliente, respuesta_fallo, canal=canal)
             enviar_mensaje_canal(numero, respuesta_fallo, canal, pagina_id=pagina_id)
             return
 
@@ -2528,7 +2528,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             print("❌ No se pudo descargar la imagen del cliente, se sigue solo con el texto (si había)")
 
     texto_para_guardar = texto_cliente or ("(imagen sin texto)" if media_id_imagen else "")
-    cliente = registrar_entrada_cliente(numero, texto_para_guardar, tipo=tipo_para_crm)
+    cliente = registrar_entrada_cliente(numero, texto_para_guardar, tipo=tipo_para_crm, canal=canal)
 
     # 🔧 Código de reactivación / reset completo: si el mensaje trae la
     # secuencia 🧸☠️🧸, se borra TODO lo relacionado a este teléfono --
@@ -2667,7 +2667,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         if URL_CATALOGO_PDF:
             saludo_catalogo += f"\n{URL_CATALOGO_PDF}"
         enviar_mensaje_canal(numero, saludo_catalogo, canal, pagina_id=pagina_id)
-        crm.guardar_respuesta(cliente, saludo_catalogo)
+        crm.guardar_respuesta(cliente, saludo_catalogo, canal=canal)
         print(f"👋 {numero}: saludo + link de catálogo enviado (cliente nuevo, canal={canal})")
         # Sin return -- el flujo sigue abajo y el modelo contesta la
         # pregunta real del cliente como un mensaje aparte.
@@ -2715,11 +2715,11 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
                 # propósito los pedidos en modo DALIA (ver
                 # pedido_manager.obtener_pedido_activo) y ya acabamos de
                 # poner este pedido en modo DALIA.
-                pedido_db = crm.sincronizar_pedido(cliente, sesion["pedido"])
+                pedido_db = crm.sincronizar_pedido(cliente, sesion["pedido"], canal=canal)
                 sesion["pedido_id"] = pedido_db.id if pedido_db else None
 
-                crm.guardar_respuesta(cliente, mensaje_1)
-                crm.guardar_respuesta(cliente, mensaje_2)
+                crm.guardar_respuesta(cliente, mensaje_1, canal=canal)
+                crm.guardar_respuesta(cliente, mensaje_2, canal=canal)
             except Exception as e:
                 print("⚠️ Error guardando en CRM (el bot sigue funcionando con RAM):", repr(e))
                 pedido_db = None
@@ -2738,7 +2738,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             return
 
         try:
-            crm.guardar_respuesta(cliente, respuesta)
+            crm.guardar_respuesta(cliente, respuesta, canal=canal)
 
             # 🔧 CORREGIDO (Observación 7): antes aquí había una llamada
             # extra a guardar_borrador_pedido() (comentada como "CAMBIO
@@ -2746,7 +2746,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             # y con la que hace crm.sincronizar_pedido justo abajo — hasta
             # 3 escrituras a SQLite por un solo mensaje. Ahora solo se
             # guarda UNA vez, dentro de crm.sincronizar_pedido.
-            crm.sincronizar_pedido(cliente, sesion["pedido"])
+            crm.sincronizar_pedido(cliente, sesion["pedido"], canal=canal)
             pedido_db = crm.cargar_pedido(cliente)
             sesion["pedido_id"] = pedido_db.id if pedido_db else None
         except Exception as e:

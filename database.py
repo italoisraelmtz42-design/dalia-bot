@@ -171,6 +171,11 @@ def init_order_tables():
 
             _agregar_columna_si_falta("historial_chat", "canal", "TEXT DEFAULT 'whatsapp'")
             _agregar_columna_si_falta("pedidos", "canal", "TEXT DEFAULT 'whatsapp'")
+            _agregar_columna_si_falta("uso_openai", "modelo", "TEXT")
+            _agregar_columna_si_falta("uso_openai", "tokens_entrada", "INTEGER DEFAULT 0")
+            _agregar_columna_si_falta("uso_openai", "tokens_salida", "INTEGER DEFAULT 0")
+            _agregar_columna_si_falta("uso_openai", "tokens_cache", "INTEGER DEFAULT 0")
+            _agregar_columna_si_falta("uso_openai", "costo_estimado_usd", "REAL DEFAULT 0.0")
             conn.commit()
 
             if current_version == 0:

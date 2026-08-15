@@ -20,9 +20,9 @@ def cargar_cliente(numero):
         numero = numero.get('numero')
     return {"numero": numero, "nombre": "Cliente Registrado", "estado": "activo"}
 
-def guardar_mensaje_cliente(cliente, texto, tipo):
+def guardar_mensaje_cliente(cliente, texto, tipo, canal="whatsapp"):
     telefono = cliente['numero'] if isinstance(cliente, dict) else cliente
-    pedido_manager.chat_guardar_mensaje(telefono, texto, "usuario")
+    pedido_manager.chat_guardar_mensaje(telefono, texto, "usuario", canal=canal)
     return {"status": "ok", "mensaje_guardado": True}
 
 def cargar_memoria(cliente, limite: int = 20) -> List[Dict[str, str]]:
@@ -38,9 +38,9 @@ def registrar_uso_openai(*args, **kwargs):
     if telefono:
         pedido_manager.uso_registrar_openai(telefono)
 
-def guardar_respuesta(cliente, respuesta, tipo="texto"):
+def guardar_respuesta(cliente, respuesta, tipo="texto", canal="whatsapp"):
     telefono = cliente['numero'] if isinstance(cliente, dict) else cliente
-    pedido_manager.chat_guardar_mensaje(telefono, respuesta, "bot")
+    pedido_manager.chat_guardar_mensaje(telefono, respuesta, "bot", canal=canal)
 
 def pedido_para_ram(pedido_db):
     """Convierte un PedidoData (o None) a dict plano usable en la sesión RAM.
@@ -116,7 +116,7 @@ def cargar_pedido(cliente):
 # ==============================================================================
 # sincronizar_pedido (sin cambios mayores, ya maneja None y conversión)
 # ==============================================================================
-def sincronizar_pedido(*args, **kwargs):
+def sincronizar_pedido(*args, canal="whatsapp", **kwargs):
     cliente = args[0] if args else {}
     datos_pedido = args[1] if len(args) > 1 else {}
     if kwargs:
@@ -148,7 +148,7 @@ def sincronizar_pedido(*args, **kwargs):
         pedido_id = pedido_manager.obtener_pedido_activo(telefono)
         if not pedido_id:
             cliente_id = cliente.get('id', 0)
-            pedido_id = pedido_manager.crear_pedido_desde_borrador(telefono, cliente_id, borrador)
+            pedido_id = pedido_manager.crear_pedido_desde_borrador(telefono, cliente_id, borrador, canal=canal)
             logger_crm.info(f"🆕 Pedido oficial creado desde borrador. ID: {pedido_id}")
         else:
             # 🔧 CORREGIDO: antes, si ya existía un pedido oficial para este

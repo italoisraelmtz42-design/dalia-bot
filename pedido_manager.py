@@ -128,13 +128,13 @@ def es_cliente_nuevo(telefono: str) -> bool:
         return False
 
 
-def chat_guardar_mensaje(telefono: str, mensaje: str, emisor: str):
-    """emisor = 'usuario' | 'bot'"""
+def chat_guardar_mensaje(telefono: str, mensaje: str, emisor: str, canal: str = "whatsapp"):
+    """emisor = 'usuario' | 'bot'. canal = 'whatsapp' | 'messenger'."""
     try:
         with get_db_connection() as conn:
             conn.execute(
-                "INSERT INTO historial_chat (telefono, mensaje, emisor) VALUES (?, ?, ?)",
-                (telefono, mensaje, emisor),
+                "INSERT INTO historial_chat (telefono, mensaje, emisor, canal) VALUES (?, ?, ?, ?)",
+                (telefono, mensaje, emisor, canal),
             )
             conn.commit()
     except Exception as e:
@@ -284,7 +284,7 @@ def obtener_pedido(pedido_id: int) -> Optional[PedidoData]:
         return None
 
 
-def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: Dict) -> int:
+def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: Dict, canal: str = "whatsapp") -> int:
     """
     Crea un pedido oficial a partir del borrador.
     Soporta tanto formato legacy (campos planos) como formato multi-item
@@ -296,8 +296,8 @@ def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: Dict) 
         with get_db_connection() as conn:
             cur = conn.execute(
                 """INSERT INTO pedidos
-                   (folio, cliente_id, telefono, estado, modo_atencion, es_urgente, porcentaje_completitud)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (folio, cliente_id, telefono, estado, modo_atencion, es_urgente, porcentaje_completitud, canal)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     folio,
                     cliente_id,
@@ -306,6 +306,7 @@ def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: Dict) 
                     ModoAtencion.DALIA.value,
                     es_urgente,
                     100,
+                    canal,
                 ),
             )
             pedido_id = cur.lastrowid

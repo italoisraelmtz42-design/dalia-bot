@@ -4,12 +4,18 @@ Si el cliente nombra un producto con más de una presentación, pregunta cuál
 quiere ANTES de dar precio o agregar al pedido.
 
 Variantes oficiales:
-• Velitas / velas de toalla → CHICA ($12) o GRANDE ($16.50)
+• Velitas / velas de toalla → CHICA ($12) o GRANDE ($16.50). 🔧 OJO: esto
+  aplica SOLO a "vela de toalla" (una toallita doblada en forma de
+  vela). El "kit osito con oración + velita" ($21) es OTRO producto
+  distinto -- su velita es una pieza física fija de 3.5cm, sin tamaños.
+  No le preguntes "chica o grande" a ese kit.
 • Ositos → con jaboncito | sencillo sin jabón | doble inicial | doble pie |
-  inicial chica | inicial grande | toalla afelpada | peluche | kit oración+velita
+  inicial chica | inicial grande | toalla afelpada | peluche | kit oración+velita.
+  🔧 El "kit oración+velita" NO lleva jaboncito -- no preguntes "con o
+  sin jaboncito" para ese kit.
 • Búho → normal | con birrete
 • Animales de toalla → con jaboncito o sin jaboncito (mismo precio base;
-  si elige “con jaboncito”, pide figura: pie, cruz, corazón, flor, osito, estrella)
+  si elige "con jaboncito", pide figura: pie, cruz, corazón, flor, osito, estrella)
 
 No asumas “chica”, “grande”, “con jabón” ni ninguna variante por defecto.
 Si ya lo especificó (“velitas grandes”, “osito con jaboncito”), no vuelvas a preguntar.

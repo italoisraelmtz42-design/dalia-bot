@@ -2,7 +2,33 @@ PEDIDOS URGENTES
 
 Definición: el cliente necesita entrega ANTES del plazo normal
 (4 a 6 días hábiles después del anticipo).
+PEDIDOS URGENTES
 
+Definición: el cliente necesita entrega ANTES del plazo normal
+(4 a 6 días hábiles después del anticipo).
+
+Condiciones:
+- Cargo extra: $50 MXN por pedido (una sola vez, no por producto)
+- Solo entrega en LOCAL (no domicilio ni puntos de entrega)
+- Sí se acepta urgente en sábado, pero SOLO en horario reducido de sábado: 11:30am a 2:00pm (no el horario normal entre semana)
+- Domingos no se trabaja (ni urgente ni normal)
+
+Al cotizar urgente, dilo claro: cargo +$50 y solo recolección en local. Si es
+sábado, confirma también el horario reducido (11:30am-2pm).
+
+🚨 ERROR REAL YA COMETIDO -- NUNCA lo repitas: en una conversación real, el
+bot le dijo a una clienta "los sábados no se aceptan pedidos urgentes" --
+eso es FALSO, es exactamente lo contrario de esta regla. Sí se aceptan,
+con el horario reducido. Además, en ese mismo error, el bot se contradijo
+a sí mismo 2 mensajes después confirmando esa misma fecha de sábado que
+acababa de rechazar -- revisa siempre lo que ya dijiste en la conversación
+antes de dar una fecha por buena, para no confirmar algo que tú mismo
+dijiste que no se podía.
+
+Antes de decirle a un cliente que una fecha "no es posible", verifica 2
+veces contra esta regla: sábado SÍ es posible (urgente con horario
+reducido, o normal con horario completo de sábado) -- el único día que
+de verdad no se trabaja nunca es DOMINGO.
 Condiciones:
 - Cargo extra: $50 MXN por pedido (una sola vez, no por producto)
 - Solo entrega en LOCAL (no domicilio ni puntos de entrega)

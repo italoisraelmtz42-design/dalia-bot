@@ -172,6 +172,27 @@ if not MESSENGER_ACTIVO:
 
 GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
 
+# --- WHATSAPP vía YCloud (Coexistencia -- número de PRUEBA) ---
+# Este es un segundo "transporte" para WhatsApp, aparte del de Meta de
+# arriba: mismo producto (WhatsApp) para efectos de CRM/dashboard (sigue
+# guardándose con canal="whatsapp"), pero los mensajes salen/entran por
+# la API de YCloud (api.ycloud.com) en vez de la Graph API de Meta. Se
+# usa solo para el número de prueba (coexistencia), NO para el número de
+# producción (que sigue 100% en Meta vía WHATSAPP_TOKEN/WHATSAPP_PHONE_ID
+# de arriba, sin tocarse).
+#
+# YCLOUD_WHATSAPP_NUMBER debe llevar el "+" (formato E.164), ej:
+# "+528143046969" -- así lo pide la API de YCloud para el campo "from".
+YCLOUD_API_KEY = os.getenv("YCLOUD_API_KEY", "")
+YCLOUD_WHATSAPP_NUMBER = os.getenv("YCLOUD_WHATSAPP_NUMBER", "")
+YCLOUD_WEBHOOK_SECRET = os.getenv("YCLOUD_WEBHOOK_SECRET", "")
+YCLOUD_API_URL = "https://api.ycloud.com/v2/whatsapp/messages"
+if not (YCLOUD_API_KEY and YCLOUD_WHATSAPP_NUMBER):
+    print("⚠️ YCLOUD_API_KEY / YCLOUD_WHATSAPP_NUMBER no configurados -- el "
+          "canal de WhatsApp vía YCloud (número de prueba) no va a poder "
+          "mandar mensajes hasta que se configuren. El número de producción "
+          "(Meta) no se ve afectado por esto.")
+
 BASE = Path(__file__).resolve().parent
 CARPETA = BASE / "conocimiento"
 CARPETA_IMAGENES = BASE / "imagenes"
@@ -580,6 +601,54 @@ def verificar_firma_webhook(payload_bytes, firma_header):
 
     return hmac.compare_digest(firma_esperada, firma_recibida)
 
+
+def verificar_firma_ycloud(payload_bytes, header_value):
+    """Verifica la firma HMAC-SHA256 que manda YCloud en el header
+    'YCloud-Signature: t=<timestamp>,s=<firma>'. Mismo criterio que
+    verificar_firma_webhook (Meta) arriba: si no hay secreto configurado,
+    se deja pasar con una advertencia en vez de tumbar el webhook -- pero
+    para producción real siempre se debe configurar YCLOUD_WEBHOOK_SECRET."""
+    if not YCLOUD_WEBHOOK_SECRET:
+        print("⚠️ YCLOUD_WEBHOOK_SECRET no configurado: el webhook de YCloud NO está verificando su origen")
+        return True
+
+    if not header_value:
+        return False
+
+    try:
+        partes = dict(p.split("=", 1) for p in header_value.split(",") if "=" in p)
+        timestamp = partes.get("t")
+        firma_recibida = partes.get("s")
+        if not timestamp or not firma_recibida:
+            return False
+
+        payload_firmado = f"{timestamp}.{payload_bytes.decode('utf-8')}"
+        firma_esperada = hmac.new(
+            YCLOUD_WEBHOOK_SECRET.encode("utf-8"),
+            payload_firmado.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(firma_esperada, firma_recibida)
+    except Exception as e:
+        print("⚠️ Error verificando firma de YCloud:", repr(e))
+        return False
+
+
+# 🔧 Contexto por hilo: cada mensaje entrante se procesa en su propio
+# threading.Thread daemon (uno por request, nunca se reutilizan), así que
+# threading.local() aquí queda perfectamente aislado por conversación sin
+# riesgo de mezclar el proveedor de un mensaje con el de otro. Se usa
+# SOLO para que enviar_mensaje_canal/enviar_imagen_canal sepan si deben
+# mandar por YCloud en vez de por Meta -- enviar_whatsapp() (Meta) sigue
+# siendo la función que usa notificar_a_dalia() directamente, así que los
+# avisos al WhatsApp personal de Dalia SIEMPRE salen por el número de
+# producción, sin importar por qué canal haya entrado el mensaje del
+# cliente que originó el aviso.
+_contexto_hilo = threading.local()
+
+
+def _usar_ycloud_en_este_hilo():
+    return getattr(_contexto_hilo, "proveedor_whatsapp", "meta") == "ycloud"
 
 
 # --- Validación de dominio (anti-alucinación estructural) ---
@@ -2343,6 +2412,96 @@ def descargar_imagen_whatsapp(media_id):
 
 
 # ===========================
+# WHATSAPP vía YCLOUD (número de prueba, coexistencia)
+# ===========================
+
+def enviar_whatsapp_ycloud(numero, texto):
+    headers = {"X-API-Key": YCLOUD_API_KEY, "Content-Type": "application/json"}
+    data = {
+        "from": YCLOUD_WHATSAPP_NUMBER,
+        "to": _a_e164(numero),
+        "type": "text",
+        "text": {"body": texto},
+    }
+    try:
+        r = requests.post(YCLOUD_API_URL, headers=headers, json=data, timeout=15)
+        print("=" * 60)
+        print("YCLOUD STATUS:", r.status_code)
+        print("YCLOUD BODY:", r.text)
+        print("=" * 60)
+        return r
+    except requests.RequestException as e:
+        print("⚠️ Excepción enviando WhatsApp vía YCloud:", e)
+        return None
+
+
+def enviar_whatsapp_ycloud_imagen(numero, image_url, caption=""):
+    headers = {"X-API-Key": YCLOUD_API_KEY, "Content-Type": "application/json"}
+    data = {
+        "from": YCLOUD_WHATSAPP_NUMBER,
+        "to": _a_e164(numero),
+        "type": "image",
+        "image": {"link": image_url, "caption": caption},
+    }
+    try:
+        r = requests.post(YCLOUD_API_URL, headers=headers, json=data, timeout=15)
+        if r.status_code >= 400:
+            print("⚠️ Error enviando imagen por WhatsApp (YCloud):", r.status_code, r.text)
+        else:
+            print(f"📤 [YCloud] Imagen enviada a {numero}: {image_url}")
+        return r
+    except requests.RequestException as e:
+        print("⚠️ Excepción enviando imagen por WhatsApp (YCloud):", e)
+        return None
+
+
+def enviar_whatsapp_ycloud_documento(numero, url_documento, nombre_archivo, caption=""):
+    headers = {"X-API-Key": YCLOUD_API_KEY, "Content-Type": "application/json"}
+    data = {
+        "from": YCLOUD_WHATSAPP_NUMBER,
+        "to": _a_e164(numero),
+        "type": "document",
+        "document": {"link": url_documento, "caption": caption, "filename": nombre_archivo},
+    }
+    try:
+        r = requests.post(YCLOUD_API_URL, headers=headers, json=data, timeout=15)
+        if r.status_code >= 400:
+            print("⚠️ Error enviando documento por WhatsApp (YCloud):", r.status_code, r.text)
+        else:
+            print(f"📄 [YCloud] Documento enviado a {numero}: {nombre_archivo}")
+        return r
+    except requests.RequestException as e:
+        print("⚠️ Excepción enviando documento (YCloud):", e)
+        return None
+
+
+def descargar_media_ycloud(url_medio):
+    """Las imágenes/audios que manda un cliente por el canal de YCloud
+    llegan con una URL directa (a diferencia de Meta, que da un media_id
+    privado que hay que resolver aparte). Se manda la API key por si el
+    link la requiere para autorizar la descarga."""
+    headers = {"X-API-Key": YCLOUD_API_KEY} if YCLOUD_API_KEY else {}
+    try:
+        r = requests.get(url_medio, headers=headers, timeout=20)
+        if r.status_code >= 400:
+            print("⚠️ Error descargando medio de YCloud:", r.status_code, r.text[:200])
+            return None, None
+        mime = r.headers.get("Content-Type", "application/octet-stream")
+        return r.content, mime
+    except requests.RequestException as e:
+        print("⚠️ Excepción descargando medio de YCloud:", e)
+        return None, None
+
+
+def _a_e164(numero):
+    """YCloud pide los números con '+' (E.164) en 'to'; el resto del bot
+    guarda/compara números SIN '+' (para no romper CRM, SILENCIAR/
+    REACTIVAR, dedup, etc. -- todo eso sigue igual)."""
+    numero = (numero or "").strip()
+    return numero if numero.startswith("+") else f"+{numero}"
+
+
+# ===========================
 # ENVIAR MENSAJE POR MESSENGER (Facebook Page)
 # ===========================
 
@@ -2420,6 +2579,8 @@ def enviar_mensaje_canal(destinatario, texto, canal="whatsapp", pagina_id=None):
     hay más de una conectada."""
     if canal == "messenger":
         return enviar_messenger(destinatario, texto, pagina_id=pagina_id)
+    if _usar_ycloud_en_este_hilo():
+        return enviar_whatsapp_ycloud(destinatario, texto)
     return enviar_whatsapp(destinatario, texto)
 
 
@@ -2432,6 +2593,8 @@ def enviar_imagen_canal(destinatario, image_url, canal="whatsapp", caption="", p
         if caption:
             enviar_messenger(destinatario, caption, pagina_id=pagina_id)
         return r
+    if _usar_ycloud_en_este_hilo():
+        return enviar_whatsapp_ycloud_imagen(destinatario, image_url, caption=caption)
     return enviar_whatsapp_imagen(destinatario, image_url, caption=caption)
 
 
@@ -2860,14 +3023,19 @@ def registrar_entrada_cliente(numero, texto_para_guardar, tipo="texto", canal="w
     return cliente
 
 
-def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp", pagina_id=None):
+def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp", pagina_id=None, proveedor_whatsapp="meta"):
+    _contexto_hilo.proveedor_whatsapp = proveedor_whatsapp
     cliente = registrar_entrada_cliente(numero, f"[mensaje no soportado: {tipo}]", tipo=tipo, canal=canal)
     respuesta = "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?"
     crm.guardar_respuesta(cliente, respuesta, canal=canal)
     enviar_mensaje_canal(numero, respuesta, canal, pagina_id=pagina_id)
 
 
-def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None):
+def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None, proveedor_whatsapp="meta", media_url_imagen_ycloud=None, media_url_audio_ycloud=None):
+    # 🔧 Marca, para ESTE hilo únicamente, si los envíos de este mensaje
+    # deben salir por YCloud (número de prueba) o por Meta (producción,
+    # comportamiento de siempre). Ver _usar_ycloud_en_este_hilo() arriba.
+    _contexto_hilo.proveedor_whatsapp = proveedor_whatsapp
     print("=" * 70)
     print(f"🚀 Procesando mensaje de {numero}")
     print(f"💬 Texto recibido: {texto_cliente}")
@@ -2891,9 +3059,12 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
     imagen_mime = None
     tipo_para_crm = "texto"
 
-    if media_id_audio:
+    if media_id_audio or media_url_audio_ycloud:
         print("🎤 El cliente mandó un audio, descargándolo...")
-        contenido_audio, mime_audio = descargar_imagen_whatsapp(media_id_audio)
+        if media_url_audio_ycloud:
+            contenido_audio, mime_audio = descargar_media_ycloud(media_url_audio_ycloud)
+        else:
+            contenido_audio, mime_audio = descargar_imagen_whatsapp(media_id_audio)
         if not contenido_audio:
             print("❌ No se pudo descargar el audio del cliente")
             respuesta_fallo = "No pude descargar tu audio 😔 ¿me lo puedes mandar otra vez, o escribirlo?"
@@ -2916,10 +3087,12 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         texto_cliente = texto_transcrito
         tipo_para_crm = "audio"
 
-    elif media_id_imagen or media_url_imagen_messenger:
+    elif media_id_imagen or media_url_imagen_messenger or media_url_imagen_ycloud:
         print("🖼️ El cliente mandó una imagen (Vision), descargándola...")
         if canal == "messenger" and media_url_imagen_messenger:
             contenido, mime = descargar_imagen_messenger(media_url_imagen_messenger)
+        elif media_url_imagen_ycloud:
+            contenido, mime = descargar_media_ycloud(media_url_imagen_ycloud)
         else:
             contenido, mime = descargar_imagen_whatsapp(media_id_imagen)
         if contenido:
@@ -2930,7 +3103,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         else:
             print("❌ No se pudo descargar la imagen del cliente, se sigue solo con el texto (si había)")
 
-    texto_para_guardar = texto_cliente or ("(imagen sin texto)" if media_id_imagen else "")
+    texto_para_guardar = texto_cliente or ("(imagen sin texto)" if (media_id_imagen or media_url_imagen_ycloud) else "")
     cliente = registrar_entrada_cliente(numero, texto_para_guardar, tipo=tipo_para_crm, canal=canal)
 
     # 🔧 Código de reactivación / reset completo: si el mensaje trae la
@@ -3261,6 +3434,88 @@ def handle_message():
 
     except (KeyError, IndexError, TypeError) as e:
         print("Evento sin mensaje de texto reconocible:", e)
+
+    return jsonify({"status": "ok"}), 200
+
+
+# ===========================
+# WEBHOOK: WHATSAPP vía YCLOUD (número de prueba, coexistencia)
+# ===========================
+# No lleva ruta GET de verificación -- a diferencia de Meta (que usa el
+# reto hub.challenge), YCloud verifica el endpoint con la firma HMAC de
+# cada request (ver verificar_firma_ycloud arriba), configurada al crear
+# el webhook en el panel de YCloud (Developers → Webhook).
+
+@app.route("/webhook/ycloud", methods=["POST"])
+def handle_message_ycloud():
+    firma = request.headers.get("YCloud-Signature", "")
+    if not verificar_firma_ycloud(request.get_data(), firma):
+        print("🚫 Webhook de YCloud rechazado: la firma no coincide (el request no parece venir de YCloud)")
+        return jsonify({"status": "firma inválida"}), 403
+
+    data = request.get_json(silent=True) or {}
+
+    if data.get("type") != "whatsapp.inbound_message.received":
+        # Otros eventos (mensaje entregado/leído, actualizaciones de
+        # cuenta, etc.) -- se ignoran por ahora, igual que Meta con
+        # "statuses" arriba.
+        print(f"ℹ️ [YCloud] Evento ignorado: {data.get('type')}")
+        return jsonify({"status": "evento ignorado"}), 200
+
+    try:
+        mensaje = data["whatsappInboundMessage"]
+        # YCloud manda el número con "+" (E.164); se guarda SIN "+" para
+        # que quede igual que los números que ya vienen de Meta (mismo
+        # formato en CRM, dedup, SILENCIAR/REACTIVAR, etc.)
+        numero = (mensaje["from"] or "").lstrip("+")
+        tipo = mensaje.get("type")
+        mensaje_id = mensaje.get("id")
+
+        if ya_fue_procesado(mensaje_id):
+            print(f"🔁 [YCloud] Mensaje duplicado ignorado: {mensaje_id}")
+            return jsonify({"status": "duplicado ignorado"}), 200
+
+        if tipo == "image":
+            media_url = mensaje["image"]["link"]
+            caption = mensaje["image"].get("caption", "")
+            threading.Thread(
+                target=procesar_mensaje_en_fondo,
+                args=(numero, caption),
+                kwargs={"media_url_imagen_ycloud": media_url, "proveedor_whatsapp": "ycloud"},
+                daemon=True,
+            ).start()
+            return jsonify({"status": "ok"}), 200
+
+        if tipo == "audio":
+            media_url = mensaje["audio"]["link"]
+            threading.Thread(
+                target=procesar_mensaje_en_fondo,
+                args=(numero, ""),
+                kwargs={"media_url_audio_ycloud": media_url, "proveedor_whatsapp": "ycloud"},
+                daemon=True,
+            ).start()
+            return jsonify({"status": "ok"}), 200
+
+        if tipo != "text":
+            threading.Thread(
+                target=procesar_mensaje_no_soportado,
+                args=(numero, tipo),
+                kwargs={"proveedor_whatsapp": "ycloud"},
+                daemon=True,
+            ).start()
+            return jsonify({"status": "tipo de mensaje no soportado"}), 200
+
+        texto_cliente = mensaje["text"]["body"]
+
+        threading.Thread(
+            target=procesar_mensaje_en_fondo,
+            args=(numero, texto_cliente),
+            kwargs={"proveedor_whatsapp": "ycloud"},
+            daemon=True,
+        ).start()
+
+    except (KeyError, IndexError, TypeError) as e:
+        print("[YCloud] Evento sin mensaje de texto reconocible:", e)
 
     return jsonify({"status": "ok"}), 200
 

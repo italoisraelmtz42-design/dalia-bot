@@ -3176,6 +3176,30 @@ def handle_message():
         valor = cambio["value"]
         mensajes = valor.get("messages")
 
+        # 🔧 CORREGIDO (bug real detectado: notificación a Dalia que
+        # nunca llegó, aunque el envío inicial regresó status 200).
+        # Meta manda el resultado FINAL de la entrega (delivered/read/
+        # failed) en un webhook APARTE, bajo "statuses" -- no en
+        # "messages". Antes esto se descartaba en silencio como "sin
+        # mensajes nuevos", así que nunca nos enterábamos si un mensaje
+        # se aceptó pero luego falló en la entrega real. Ahora se
+        # registra siempre, con el motivo del error si lo hay.
+        estados = valor.get("statuses")
+        if estados:
+            for estado in estados:
+                status = estado.get("status")
+                destinatario = estado.get("recipient_id")
+                if status == "failed":
+                    errores = estado.get("errors", [])
+                    detalle = "; ".join(
+                        f"{e.get('code')}: {e.get('title')} -- {e.get('message', '')}"
+                        for e in errores
+                    ) or "sin detalle"
+                    print(f"🚨 MENSAJE DE WHATSAPP FALLÓ AL ENTREGARSE a {destinatario}: {detalle}")
+                else:
+                    print(f"📬 Estado de mensaje WhatsApp: {status} -> {destinatario}")
+            return jsonify({"status": "estado registrado"}), 200
+
         if not mensajes:
             return jsonify({"status": "sin mensajes nuevos"}), 200
 
@@ -3290,15 +3314,26 @@ def handle_message_messenger():
                 # Suite o la app de Facebook), Meta manda este mismo
                 # mensaje de vuelta al webhook marcado como "echo" --
                 # sender=la página, recipient=el cliente al que le
-                # contestó. Se usa para silenciar el bot SOLO en esa
-                # conversación, automático, sin que Dalia tenga que
-                # acordarse de ningún comando.
+                # contestó.
+                #
+                # 🔧 CAMBIO DE DECISIÓN (versión anterior: CUALQUIER
+                # respuesta manual de Dalia silenciaba la conversación --
+                # reportado como poco confiable en la práctica). Ahora
+                # solo se silencia si Dalia escribe la frase "🧸🧸🧸🧸🧸"
+                # (5 ositos) DENTRO de la conversación del cliente --
+                # acción deliberada, no cualquier respuesta casual.
+                # También se registra SIEMPRE que llegue un echo (aunque
+                # no traiga la frase), para tener evidencia real en los
+                # logs si esto vuelve a fallar.
                 mensaje = evento.get("message")
                 if mensaje and mensaje.get("is_echo"):
                     psid_cliente = (evento.get("recipient") or {}).get("id")
+                    texto_echo_original = mensaje.get("text") or ""
+                    print(f"👁️ Echo recibido de Dalia -- destinatario={psid_cliente!r}, texto={texto_echo_original!r}")
                     if not psid_cliente:
+                        print("⚠️ Echo sin 'recipient.id' -- no se puede saber a qué cliente aplica, se ignora.")
                         continue
-                    texto_echo = (mensaje.get("text") or "").strip().lower()
+                    texto_echo = texto_echo_original.strip().lower()
                     # Frase de reactivación: Dalia la escribe directo en
                     # esa misma conversación de Facebook cuando ya
                     # resolvió el problema y quiere que el bot retome esa
@@ -3307,10 +3342,12 @@ def handle_message_messenger():
                         pedido_manager.reactivar_conversacion(psid_cliente)
                         with sesiones_lock:
                             sesiones.pop(psid_cliente, None)
-                        print(f"✅ Dalia reactivó el bot para {psid_cliente} (Messenger, vía echo)")
-                    else:
+                        print(f"✅ Dalia reactivó el bot para {psid_cliente} (Messenger, vía echo, frase 'Reactivar bot')")
+                    elif "🧸" * 5 in texto_echo_original or texto_echo_original.count("🧸") >= 5:
                         pedido_manager.silenciar_conversacion(psid_cliente)
-                        print(f"🙅 Dalia contestó manual a {psid_cliente} -- bot silenciado en esa conversación (Messenger)")
+                        print(f"🙅 Dalia mandó '5 ositos' a {psid_cliente} -- bot silenciado en esa conversación (Messenger)")
+                    else:
+                        print(f"ℹ️ Echo de Dalia sin la frase '🧸🧸🧸🧸🧸' -- no se silencia nada (mensaje normal suyo).")
                     continue
 
                 if not mensaje:

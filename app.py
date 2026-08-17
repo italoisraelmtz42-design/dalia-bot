@@ -4222,43 +4222,64 @@ def handle_message_messenger():
 
 
 # ===========================
-# 🆕 SEGUIMIENTO AUTOMÁTICO ~23H (ver PENDIENTES.md sección 1)
+# 🆕 SEGUIMIENTO AUTOMÁTICO A CLIENTES SILENCIOSOS (ver PENDIENTES.md sección 1)
 # ===========================
-# Objetivo: si un cliente de WhatsApp con un pedido/borrador en progreso
-# deja de responder, mandarle un mensaje de seguimiento ANTES de que se
-# cierre la ventana de 24h de WhatsApp -- así se manda como mensaje
-# normal de la conversación, sin necesitar una plantilla aprobada por
-# Meta. Corre en un hilo en background dentro de este mismo proceso --
-# seguro porque Render garantiza una sola instancia para este servicio
-# (tiene disco adjunto y "Scaling is not supported for servers with
-# disks", confirmado en el dashboard). Solo aplica a WhatsApp (Messenger
-# tiene sus propias reglas de re-enganche fuera de ventana).
+# Objetivo: si un cliente con un pedido/borrador en progreso deja de
+# responder, mandarle un mensaje de seguimiento ANTES de que se cierre la
+# ventana de 24h de mensajería (WhatsApp Y Messenger la tienen, según
+# investigación de agosto 2026: developers.facebook.com/docs/messenger-
+# platform/reference/send-api/ -- "RESPONSE"/"UPDATE" permiten mensajes
+# promocionales y no promocionales DENTRO de esa ventana de 24h, en
+# cualquiera de los dos productos). Mandado con margen, todavía cae
+# DENTRO de la ventana: cuenta como mensaje normal de la conversación,
+# sin plantilla aprobada por Meta ni revisión previa.
+#
+# 🚨 IMPORTANTE (confirmado con investigación de agosto 2026): fuera de
+# esa ventana de 24h, NO existe ningún mecanismo -- ni en WhatsApp ni en
+# Messenger -- que permita mandar un mensaje genérico de re-enganche como
+# este. En Messenger, Meta incluso eliminó en febrero 2026 la mayoría de
+# los "message tags" que antes permitían escribir fuera de ventana
+# (CONFIRMED_EVENT_UPDATE, ACCOUNT_UPDATE, POST_PURCHASE_UPDATE ya no
+# funcionan); lo único que queda para fuera de ventana son "Utility
+# Messages" (plantillas que Meta RECHAZA si tienen contenido promocional)
+# o la nueva API de Marketing Messages (requiere opt-in explícito previo
+# del cliente). Ninguna de las dos aplica aquí. Por eso este mecanismo
+# SOLO manda DENTRO de la ventana de 24h, nunca después -- si se pasa la
+# ventana de seguridad de abajo, simplemente no se manda ese seguimiento,
+# en vez de arriesgarse a mandarlo tarde.
+#
+# Corre en un hilo en background dentro de este mismo proceso -- seguro
+# porque Render garantiza una sola instancia para este servicio (tiene
+# disco adjunto y "Scaling is not supported for servers with disks",
+# confirmado en el dashboard).
 
-MENSAJE_SEGUIMIENTO_23H = "Hola! Qué tal! gustas que continuemos con tu pedido? Cualquier duda estoy a la orden!"
+MENSAJE_SEGUIMIENTO_PEDIDO = "Hola! Qué tal! gustas que continuemos con tu pedido? Cualquier duda estoy a la orden!"
 
-# Se revisa cada 15 min y solo se manda si el silencio lleva entre 23.0 y
-# 23.5 horas -- ventana angosta a propósito: si por lo que sea el hilo
-# tarda o el servicio se reinicia (deploy, etc.) y ya se pasó de 23.5h,
-# es mejor quedarse SIN mandar ese seguimiento a mandarlo ya cerca o
-# después de las 24h, donde WhatsApp cierra la ventana gratuita y el
-# mensaje fallaría o necesitaría una plantilla aprobada (esto ya pasó de
-# verdad con notificar_a_dalia, error 131047 -- no se repite aquí).
-INTERVALO_SEGUIMIENTO_23H_SEGUNDOS = 15 * 60
-VENTANA_SEGUIMIENTO_23H_MIN_HORAS = 23.0
-VENTANA_SEGUIMIENTO_23H_MAX_HORAS = 23.5
+INTERVALO_SEGUIMIENTO_SEGUNDOS = 15 * 60
+
+# Ventana de seguridad por canal -- cada una se revisa por separado.
+# WhatsApp: 23.0-23.5h (1h de colchón antes de las 24h).
+# Messenger: 22.0-22.5h -- colchón más amplio (2h) a petición explícita
+# de Israel (17 ago 2026): "para que no haya falla y no nos penalice
+# Meta" -- ahora mismo la gran mayoría de los clientes entran por
+# Messenger, así que aquí se prioriza no arriesgarse nunca a que el hilo
+# tarde/el servicio se reinicie y el mensaje se mande ya fuera de
+# ventana. En AMBOS casos, si por lo que sea el hilo se atrasa y ya se
+# pasó del máximo, es mejor quedarse SIN mandar ese seguimiento a
+# mandarlo tarde (esto ya pasó de verdad con notificar_a_dalia, error
+# 131047 en WhatsApp -- no se repite aquí, y con Messenger el riesgo es
+# todavía mayor por los cambios de política de febrero 2026 arriba).
+CONFIG_SEGUIMIENTO_POR_CANAL = {
+    "whatsapp": {"horas_min": 23.0, "horas_max": 23.5},
+    "messenger": {"horas_min": 22.0, "horas_max": 22.5},
+}
 
 
-def _revisar_seguimientos_23h_una_vez():
-    if pedido_manager.bot_pausado_globalmente():
-        print("🙅 [Seguimiento 23h] Bot pausado globalmente, se omite esta revisión.")
-        return
-
+def _revisar_seguimientos_canal(canal, horas_min, horas_max):
     try:
-        candidatos = pedido_manager.candidatos_seguimiento_23h(
-            VENTANA_SEGUIMIENTO_23H_MIN_HORAS, VENTANA_SEGUIMIENTO_23H_MAX_HORAS
-        )
+        candidatos = pedido_manager.candidatos_seguimiento_23h(horas_min, horas_max, canal=canal)
     except Exception as e:
-        print(f"⚠️ [Seguimiento 23h] Error buscando candidatos: {repr(e)}")
+        print(f"⚠️ [Seguimiento {canal}] Error buscando candidatos: {repr(e)}")
         return
 
     for c in candidatos:
@@ -4280,47 +4301,65 @@ def _revisar_seguimientos_23h_una_vez():
             if not (borrador.get("producto") or borrador.get("items")):
                 continue
 
-            # Candado atómico en base de datos para este teléfono +
+            # Candado atómico en base de datos para este teléfono/PSID +
             # este momento de silencio exacto -- si ya se reservó antes
             # (por ejemplo en una revisión previa), se detiene aquí y NO
             # se manda de nuevo.
-            if not pedido_manager.reclamar_seguimiento_23h(telefono, marca):
+            if not pedido_manager.reclamar_seguimiento_23h(telefono, marca, canal=canal):
                 continue
 
-            r = enviar_mensaje_canal(telefono, MENSAJE_SEGUIMIENTO_23H, canal="whatsapp")
+            # 🔧 pagina_id=None a propósito: hoy solo hay UNA página de
+            # Facebook configurada (confirmado en Render, sin
+            # MESSENGER_PAGE_ID_2 ni variantes), y token_para_pagina()
+            # cae de vuelta a la página principal cuando no se pasa
+            # pagina_id -- así que esto manda correctamente por esa única
+            # página. Si en el futuro se conecta una SEGUNDA página de
+            # Facebook, este mecanismo necesitaría guardar de qué página
+            # vino cada conversación para elegir el token correcto (hoy
+            # no existe esa columna en historial_chat).
+            r = enviar_mensaje_canal(telefono, MENSAJE_SEGUIMIENTO_PEDIDO, canal=canal)
             if r is not None:
-                crm.guardar_respuesta(telefono, MENSAJE_SEGUIMIENTO_23H, canal="whatsapp")
-                print(f"📨 [Seguimiento 23h] Mensaje enviado a {telefono} (silencio desde {marca})")
+                crm.guardar_respuesta(telefono, MENSAJE_SEGUIMIENTO_PEDIDO, canal=canal)
+                print(f"📨 [Seguimiento {canal}] Mensaje enviado a {telefono} (silencio desde {marca})")
             else:
-                print(f"❌ [Seguimiento 23h] Falló el envío a {telefono} -- ya quedó reservado en "
+                print(f"❌ [Seguimiento {canal}] Falló el envío a {telefono} -- ya quedó reservado en "
                       f"seguimientos_23h, no se reintentará para este mismo silencio.")
         except Exception as e:
-            print(f"⚠️ [Seguimiento 23h] Error procesando a {telefono}: {repr(e)}")
+            print(f"⚠️ [Seguimiento {canal}] Error procesando a {telefono}: {repr(e)}")
 
 
-def _hilo_seguimientos_23h():
-    print("🕐 [Seguimiento 23h] Hilo de background iniciado "
-          f"(revisa cada {INTERVALO_SEGUIMIENTO_23H_SEGUNDOS // 60} min).")
+def _revisar_seguimientos_una_vez():
+    if pedido_manager.bot_pausado_globalmente():
+        print("🙅 [Seguimiento] Bot pausado globalmente, se omite esta revisión.")
+        return
+    for canal, cfg in CONFIG_SEGUIMIENTO_POR_CANAL.items():
+        _revisar_seguimientos_canal(canal, cfg["horas_min"], cfg["horas_max"])
+
+
+def _hilo_seguimientos():
+    canales = ", ".join(CONFIG_SEGUIMIENTO_POR_CANAL.keys())
+    print(f"🕐 [Seguimiento] Hilo de background iniciado para [{canales}] "
+          f"(revisa cada {INTERVALO_SEGUIMIENTO_SEGUNDOS // 60} min).")
     while True:
         try:
-            _revisar_seguimientos_23h_una_vez()
+            _revisar_seguimientos_una_vez()
         except Exception as e:
-            print(f"⚠️ [Seguimiento 23h] Error en la revisión periódica: {repr(e)}")
-        time.sleep(INTERVALO_SEGUIMIENTO_23H_SEGUNDOS)
+            print(f"⚠️ [Seguimiento] Error en la revisión periódica: {repr(e)}")
+        time.sleep(INTERVALO_SEGUIMIENTO_SEGUNDOS)
 
 
-_seguimientos_23h_iniciado = False
+_seguimientos_iniciado = False
 
 
-def iniciar_hilo_seguimientos_23h():
-    global _seguimientos_23h_iniciado
-    if _seguimientos_23h_iniciado:
+def iniciar_hilo_seguimientos():
+    global _seguimientos_iniciado
+    if _seguimientos_iniciado:
         return
-    _seguimientos_23h_iniciado = True
-    threading.Thread(target=_hilo_seguimientos_23h, daemon=True).start()
+    _seguimientos_iniciado = True
+    threading.Thread(target=_hilo_seguimientos, daemon=True).start()
 
 
-iniciar_hilo_seguimientos_23h()
+iniciar_hilo_seguimientos()
 
 
 if __name__ == "__main__":

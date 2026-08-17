@@ -166,13 +166,15 @@ def chat_cargar_memoria(telefono: str, limite: int = 40) -> List[Dict]:
 # Seguimiento automático de ~23h (ver PENDIENTES.md sección 1)
 # ---------------------------------------------------------------------------
 
-def candidatos_seguimiento_23h(horas_min: float, horas_max: float) -> List[Dict[str, Any]]:
-    """Teléfonos de WhatsApp cuyo ÚLTIMO mensaje fue del cliente (nadie
-    -ni cliente ni bot- ha escrito desde entonces) hace entre horas_min y
-    horas_max horas. Usa julianday() de SQLite para la resta de tiempos
-    -- evita parsear el string de timestamp en Python (frágil ante
-    formatos) y usa la misma zona horaria (UTC) con la que se guardó,
-    consistente con 'now' de SQLite."""
+def candidatos_seguimiento_23h(horas_min: float, horas_max: float, canal: str = "whatsapp") -> List[Dict[str, Any]]:
+    """Teléfonos/PSID de este canal cuyo ÚLTIMO mensaje fue del cliente
+    (nadie -ni cliente ni bot- ha escrito desde entonces) hace entre
+    horas_min y horas_max horas. Usa julianday() de SQLite para la resta
+    de tiempos -- evita parsear el string de timestamp en Python (frágil
+    ante formatos) y usa la misma zona horaria (UTC) con la que se
+    guardó, consistente con 'now' de SQLite. Sirve tanto para WhatsApp
+    como para Messenger -- cada canal se revisa por separado porque cada
+    uno tiene su propia ventana de tiempo segura (ver app.py)."""
     try:
         with get_db_connection() as conn:
             filas = conn.execute(
@@ -180,11 +182,11 @@ def candidatos_seguimiento_23h(horas_min: float, horas_max: float) -> List[Dict[
                 SELECT telefono, MAX(timestamp) AS ultimo_ts,
                        (julianday('now') - julianday(MAX(timestamp))) * 24 AS horas_desde
                 FROM historial_chat
-                WHERE canal = 'whatsapp' AND emisor = 'usuario'
+                WHERE canal = ? AND emisor = 'usuario'
                 GROUP BY telefono
                 HAVING horas_desde >= ? AND horas_desde < ?
                 """,
-                (horas_min, horas_max),
+                (canal, horas_min, horas_max),
             ).fetchall()
         return [{"telefono": f["telefono"], "ultimo_ts": f["ultimo_ts"]} for f in filas]
     except Exception as e:
@@ -192,20 +194,24 @@ def candidatos_seguimiento_23h(horas_min: float, horas_max: float) -> List[Dict[
         return []
 
 
-def reclamar_seguimiento_23h(telefono: str, marca_ultimo_mensaje_cliente: str) -> bool:
-    """Intenta 'reservar' el envío del seguimiento para este teléfono +
-    este momento de silencio exacto. Devuelve True SOLO si este proceso
-    es quien lo reservó primero (por el UNIQUE de la tabla) -- si ya
-    existía, devuelve False y por lo tanto NO se debe mandar el mensaje.
-    Esto hace el candado atómico a nivel de base de datos, no solo en
-    memoria, para que sea seguro aunque el hilo corriera dos veces."""
+def reclamar_seguimiento_23h(telefono: str, marca_ultimo_mensaje_cliente: str, canal: str = "whatsapp") -> bool:
+    """Intenta 'reservar' el envío del seguimiento para este teléfono/PSID
+    + este momento de silencio exacto (en este canal). Devuelve True SOLO
+    si este proceso es quien lo reservó primero (por el UNIQUE de la
+    tabla) -- si ya existía, devuelve False y por lo tanto NO se debe
+    mandar el mensaje. Esto hace el candado atómico a nivel de base de
+    datos, no solo en memoria, para que sea seguro aunque el hilo corriera
+    dos veces. 🔧 Nota: el UNIQUE de la tabla es (telefono, marca), sin
+    incluir canal -- no hay riesgo real porque un número de WhatsApp y un
+    PSID de Messenger nunca coinciden en formato/valor, así que no hace
+    falta una migración para agregar canal al índice."""
     try:
         with get_db_connection() as conn:
             cur = conn.execute(
                 """INSERT OR IGNORE INTO seguimientos_23h
                    (telefono, canal, marca_ultimo_mensaje_cliente)
-                   VALUES (?, 'whatsapp', ?)""",
-                (telefono, marca_ultimo_mensaje_cliente),
+                   VALUES (?, ?, ?)""",
+                (telefono, canal, marca_ultimo_mensaje_cliente),
             )
             conn.commit()
             return cur.rowcount == 1

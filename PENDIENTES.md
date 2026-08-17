@@ -4,16 +4,20 @@ Lista de mejoras identificadas pero **no autorizadas todavía** — sirve para n
 
 ---
 
-## 1. Mensaje de seguimiento automático a clientes silenciosos (~23 h) — ✅ IMPLEMENTADO (17 ago 2026)
+## 1. Mensaje de seguimiento automático a clientes silenciosos — ✅ IMPLEMENTADO (17 ago 2026, extendido a Messenger el mismo día)
 
 **Estado real de lo que quedó programado** (autorizado por Israel, mensaje exacto proporcionado por él):
-- Mensaje: *"Hola! Qué tal! gustas que continuemos con tu pedido? Cualquier duda estoy a la orden!"*
-- Hilo en background dentro de `app.py` (`iniciar_hilo_seguimientos_23h`), revisa cada 15 min.
-- Solo dispara si el silencio del cliente lleva entre 23.0 y 23.5 horas (ventana angosta a propósito, para nunca arriesgarse a mandarlo cerca o después de las 24h donde WhatsApp cierra la ventana gratuita).
-- Criterio final de "cliente silencioso" que sí aplica: WhatsApp únicamente, con un borrador de pedido en progreso (`producto` o `items` en `borradores_pedido`), sin que el bot esté en modo DALIA (cubre tanto silencios manuales como pedidos con anticipo ya confirmado), y sin bot pausado globalmente.
-- Candado atómico en SQLite (tabla nueva `seguimientos_23h`, con `UNIQUE(telefono, marca_ultimo_mensaje_cliente)`) para nunca mandarlo dos veces por el mismo silencio -- si el cliente vuelve a escribir y luego se queda callado otra vez, sí puede recibir un seguimiento nuevo para ese silencio distinto.
+- Mensaje (mismo texto para ambos canales): *"Hola! Qué tal! gustas que continuemos con tu pedido? Cualquier duda estoy a la orden!"*
+- Hilo en background dentro de `app.py` (`iniciar_hilo_seguimientos`), revisa cada 15 min, uno por uno los dos canales.
+- Ventana de seguridad POR CANAL (cada uno se revisa aparte):
+  - WhatsApp: dispara si el silencio lleva entre 23.0 y 23.5 horas.
+  - Messenger: dispara si el silencio lleva entre 22.0 y 22.5 horas -- colchón más amplio (2h) a petición explícita de Israel el 17 ago 2026 ("para que no haya falla y no nos penalice Meta"), porque ahora mismo la mayoría de los clientes entran por Messenger.
+  - Investigación previa a implementar Messenger (ago 2026, developers.facebook.com): Messenger también tiene una ventana de 24h donde se permite mandar cualquier mensaje (incluyendo promocional) sin plantilla, igual que WhatsApp -- confirmado en la documentación oficial del Send API. Fuera de esa ventana, Meta eliminó en feb 2026 la mayoría de los "message tags" que antes permitían re-enganchar (CONFIRMED_EVENT_UPDATE, ACCOUNT_UPDATE, POST_PURCHASE_UPDATE ya no sirven); lo único que queda (Utility Messages, Marketing Messages API con opt-in) NO aplica a un mensaje genérico como este. Por eso el mecanismo nunca manda fuera de la ventana de 24h, en ningún canal.
+- Criterio final de "cliente silencioso" que sí aplica (igual en ambos canales): con un borrador de pedido en progreso (`producto` o `items` en `borradores_pedido`), sin que el bot esté en modo DALIA (cubre tanto silencios manuales como pedidos con anticipo ya confirmado), y sin bot pausado globalmente.
+- Candado atómico en SQLite (tabla `seguimientos_23h`, con `UNIQUE(telefono, marca_ultimo_mensaje_cliente)`, columna `canal` incluida) para nunca mandarlo dos veces por el mismo silencio -- si el cliente vuelve a escribir y luego se queda callado otra vez, sí puede recibir un seguimiento nuevo para ese silencio distinto.
 - Solo se manda una vez por silencio (no hay reintento posterior) -- si falla el envío (ej. error de red), se deja así, no se reintenta para ese mismo silencio.
-- Probado localmente con una base de datos de prueba antes de desplegar: la ventana de tiempo filtra correctamente, el candado bloquea el doble envío, y el hilo no truena el proceso si el envío falla.
+- Messenger: se manda usando la única página de Facebook configurada hoy (confirmado en Render que no hay una segunda página). Si en el futuro se conecta una segunda página, este mecanismo necesitaría guardar de qué página vino cada conversación -- hoy esa información no se guarda en la base de datos, así que habría que agregarla antes.
+- Probado localmente con una base de datos de prueba antes de desplegar (ventana de WhatsApp): la ventana de tiempo filtra correctamente, el candado bloquea el doble envío, y el hilo no truena el proceso si el envío falla. La versión de Messenger reutiliza exactamente la misma lógica, solo cambia el canal y la ventana de horas.
 
 **Objetivo original:** si un cliente mostró interés (habló con el bot) pero dejó de responder, mandarle un mensaje amable de seguimiento antes de que se cierre la ventana de 24 h de WhatsApp, para intentar recuperar la venta.
 

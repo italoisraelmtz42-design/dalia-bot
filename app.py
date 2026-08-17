@@ -150,11 +150,12 @@ def token_para_pagina(page_id: str) -> str:
     return MESSENGER_PAGE_ACCESS_TOKEN
 
 
-# Reutiliza el mismo verify token de WhatsApp -- Meta permite usar el
-# mismo valor para varios productos dentro de la misma App, así que no
-# hace falta inventar uno nuevo. Debe coincidir con lo que pongas en el
-# panel de Meta al configurar el webhook de Messenger.
-MESSENGER_VERIFY_TOKEN = VERIFY_TOKEN
+# Token de verificación dedicado para el webhook de Messenger/Feed
+# (comentarios en la página). Si no se define MESSENGER_VERIFY_TOKEN en
+# las variables de entorno, cae de vuelta al mismo valor de WhatsApp por
+# compatibilidad con configuraciones previas. Debe coincidir con lo que
+# pongas en el panel de Meta al configurar el webhook de Messenger/Page.
+MESSENGER_VERIFY_TOKEN = os.getenv("MESSENGER_VERIFY_TOKEN", VERIFY_TOKEN)
 MESSENGER_GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/messages"
 if not MESSENGER_PAGE_ACCESS_TOKEN:
     print("⚠️ MESSENGER_PAGE_ACCESS_TOKEN no configurado -- el bot no podrá "
@@ -2554,6 +2555,98 @@ def enviar_messenger_imagen(psid, image_url, pagina_id=None):
         return None
 
 
+# ===========================
+# COMENTARIOS EN PUBLICACIONES DE LA PÁGINA (Facebook Feed)
+# ===========================
+# 🔧 Cuando alguien comenta en una publicación de la página, el bot NO
+# vende dentro del comentario público (expondría precios/datos a
+# cualquiera). En su lugar: (1) responde el comentario con un mensaje
+# corto y genérico invitando a platicar por privado, y (2) manda una
+# "respuesta privada" (private reply) -- una función especial de Meta
+# que abre un chat de Messenger con quien comentó, aunque nunca le haya
+# escrito antes a la página. Esa respuesta privada es el ÚNICO mensaje
+# que se manda por este camino especial; en cuanto la persona conteste,
+# ese mensaje ya llega como un evento normal de "messaging" (mismo
+# webhook de siempre) y de ahí en adelante lo atiende
+# procesar_mensaje_en_fondo igual que cualquier conversación de
+# Messenger.
+
+MENSAJE_RESPUESTA_PUBLICA_COMENTARIO = "¡Hola! 😊 Te escribimos por privado para ayudarte."
+
+
+def enviar_respuesta_publica_comentario(comment_id, texto, pagina_id=None):
+    """Responde PÚBLICAMENTE a un comentario (queda visible debajo del
+    comentario original, como cualquier respuesta de la página)."""
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{comment_id}/comments"
+    try:
+        r = requests.post(
+            url,
+            params={"access_token": token_para_pagina(pagina_id)},
+            json={"message": texto},
+            timeout=15,
+        )
+        if r.status_code >= 400:
+            print("⚠️ Error respondiendo comentario en público:", r.status_code, r.text)
+        else:
+            print(f"📤 Respuesta pública enviada al comentario {comment_id}")
+        return r
+    except requests.RequestException as e:
+        print("⚠️ Excepción respondiendo comentario en público:", e)
+        return None
+
+
+def enviar_respuesta_privada_comentario(comment_id, texto, pagina_id=None):
+    """Manda una 'respuesta privada' (private reply) al comentario --
+    endpoint especial de Meta que abre un chat de Messenger con quien
+    comentó, sin necesitar que esa persona le haya escrito antes a la
+    página. Solo se puede usar como PRIMER mensaje hacia esa persona a
+    partir de su comentario (Meta da una ventana de 7 días desde el
+    comentario para poder usarlo)."""
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{comment_id}/private_replies"
+    try:
+        r = requests.post(
+            url,
+            params={"access_token": token_para_pagina(pagina_id)},
+            json={"message": texto},
+            timeout=15,
+        )
+        if r.status_code >= 400:
+            print("⚠️ Error mandando respuesta privada del comentario:", r.status_code, r.text)
+        else:
+            print(f"📤 Respuesta privada enviada por el comentario {comment_id}")
+        return r
+    except requests.RequestException as e:
+        print("⚠️ Excepción mandando respuesta privada del comentario:", e)
+        return None
+
+
+def procesar_comentario_pagina(pagina_id_actual, comment_id, from_id, from_name, texto_comentario):
+    """Punto de entrada para un comentario nuevo en una publicación de
+    la página: responde en público (genérico, sin vender ahí) y manda
+    la respuesta privada que abre el chat de Messenger con esa persona."""
+    if not comment_id or not from_id:
+        return
+    if from_id == pagina_id_actual:
+        # Es la propia página comentando/respondiendo (ej. un admin
+        # respondió manual desde Meta Business Suite) -- no reaccionar
+        # a esto, o el bot terminaría respondiéndose a sí mismo.
+        return
+    if ya_fue_procesado(f"comentario:{comment_id}"):
+        print(f"🔁 Comentario duplicado ignorado: {comment_id}")
+        return
+
+    enviar_respuesta_publica_comentario(comment_id, MENSAJE_RESPUESTA_PUBLICA_COMENTARIO, pagina_id=pagina_id_actual)
+
+    nombre = (from_name or "").split(" ")[0].strip()
+    saludo = f"¡Hola {nombre}!" if nombre else "¡Hola!"
+    mensaje_privado = (
+        f"{saludo} Vi tu comentario"
+        + (f" ({texto_comentario.strip()[:80]!r})" if texto_comentario and texto_comentario.strip() else "")
+        + ". Con gusto te ayudo por aquí 😊 ¿Qué te gustaría saber?"
+    )
+    enviar_respuesta_privada_comentario(comment_id, mensaje_privado, pagina_id=pagina_id_actual)
+
+
 def descargar_imagen_messenger(url_imagen):
     """Las imágenes que manda un cliente por Messenger llegan como una URL
     pública directa (a diferencia de WhatsApp, que da un media_id privado
@@ -3680,6 +3773,25 @@ def handle_message_messenger():
                         kwargs={"canal": "messenger", "pagina_id": pagina_id_actual},
                         daemon=True,
                     ).start()
+
+            # 🔧 Comentarios públicos en publicaciones de la página
+            # (campo "feed" del webhook -- separado de "messaging").
+            # Solo reacciona a comentarios NUEVOS (verb == "add" sobre
+            # item == "comment"); ediciones, "me gusta" en comentarios,
+            # reacciones a la publicación, etc. se ignoran.
+            for cambio in entry.get("changes", []):
+                if cambio.get("field") != "feed":
+                    continue
+                valor = cambio.get("value") or {}
+                if valor.get("item") != "comment" or valor.get("verb") != "add":
+                    continue
+                comment_id = valor.get("comment_id")
+                remitente = valor.get("from") or {}
+                threading.Thread(
+                    target=procesar_comentario_pagina,
+                    args=(pagina_id_actual, comment_id, remitente.get("id"), remitente.get("name"), valor.get("message", "")),
+                    daemon=True,
+                ).start()
 
     except Exception as e:
         print("⚠️ Error procesando webhook de Messenger:", repr(e))

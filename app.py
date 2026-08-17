@@ -2713,6 +2713,113 @@ def servir_nota_pdf(nombre_archivo):
 
 
 # ===========================
+# POLÍTICA DE PRIVACIDAD (pública)
+# ===========================
+# Requerida por Meta para poder publicar la app "chatbot ositos" (WhatsApp
+# Business Messaging + Messenger from Meta). Debe ser accesible sin login,
+# por eso NO usa DASHBOARD_PASSWORD como las rutas de /dashboard.
+
+CONTACTO_PRIVACIDAD = os.getenv("CONTACTO_PRIVACIDAD_EMAIL", "italoisraelmtz42@outlook.com")
+FECHA_ACTUALIZACION_PRIVACIDAD = "17 de agosto de 2026"
+
+
+@app.route("/privacidad")
+def politica_privacidad():
+    html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Política de Privacidad — Recuerditos Dalia</title>
+<style>
+  body {{ font-family: -apple-system, Arial, sans-serif; background:#faf7f5; margin:0; padding:24px; color:#333; line-height:1.55; }}
+  .contenedor {{ max-width:720px; margin:0 auto; background:white; border-radius:12px; padding:32px 36px; box-shadow:0 1px 4px rgba(0,0,0,0.08); }}
+  h1 {{ color:#c2185b; margin-bottom:4px; }}
+  .subtitulo {{ color:#888; margin-top:0; margin-bottom:28px; font-size:14px; }}
+  h2 {{ font-size:17px; color:#c2185b; margin-top:28px; margin-bottom:8px; }}
+  p, li {{ font-size:15px; color:#444; }}
+  a {{ color:#c2185b; }}
+</style>
+</head>
+<body>
+  <div class="contenedor">
+    <h1>🧸 Recuerditos Dalia</h1>
+    <p class="subtitulo">Política de Privacidad — Última actualización: {FECHA_ACTUALIZACION_PRIVACIDAD}</p>
+
+    <p>Recuerditos Dalia es un negocio dedicado a la venta de recuerdos y regalos
+    personalizados (ositos de tela, abanicos de mano y detalles similares), que
+    atiende a sus clientes principalmente a través de WhatsApp y de Messenger
+    en nuestra página de Facebook. Esta política explica qué información
+    recopilamos cuando nos escribes y cómo la usamos.</p>
+
+    <h2>1. Qué información recopilamos</h2>
+    <p>Cuando nos escribes por WhatsApp o Messenger, podemos recopilar:</p>
+    <ul>
+      <li>Tu número de teléfono (WhatsApp) o el identificador de tu conversación de Messenger.</li>
+      <li>Tu nombre, si lo compartes con nosotros.</li>
+      <li>Los mensajes que nos envías, incluyendo texto e imágenes (por ejemplo, fotos de referencia para tu pedido o comprobantes de pago).</li>
+      <li>Los detalles de tu pedido: producto, cantidad, fecha en que lo necesitas y, si aplica, dirección de entrega.</li>
+    </ul>
+
+    <h2>2. Cómo usamos tu información</h2>
+    <p>Usamos tu información únicamente para:</p>
+    <ul>
+      <li>Responder tus preguntas y darle seguimiento a tu pedido.</li>
+      <li>Procesar y confirmar pagos o anticipos.</li>
+      <li>Contactarte sobre el estado de tu pedido.</li>
+    </ul>
+    <p>Parte de nuestras respuestas automáticas se generan con ayuda de un
+    proveedor externo de inteligencia artificial (OpenAI), al cual se le
+    envía el texto de la conversación únicamente para generar una respuesta.
+    Este proveedor no usa tu información para fines distintos a los del
+    servicio que nos presta.</p>
+
+    <h2>3. Con quién compartimos tu información</h2>
+    <p>No vendemos ni compartimos tu información personal con terceros para
+    fines de mercadotecnia. Solo la compartimos con los proveedores
+    necesarios para operar el servicio: Meta (WhatsApp y Messenger) para el
+    envío de mensajes, OpenAI para generar respuestas automáticas, y
+    nuestro proveedor de hosting para almacenar los datos de forma segura.</p>
+
+    <h2>4. Cuánto tiempo conservamos tu información</h2>
+    <p>Conservamos el historial de conversación y de pedidos mientras sea
+    necesario para darte seguimiento y por motivos administrativos del
+    negocio. Puedes solicitar la eliminación de tus datos en cualquier
+    momento (ver sección 6).</p>
+
+    <h2>5. Seguridad</h2>
+    <p>Tomamos medidas razonables para proteger tu información, aunque
+    ningún sistema de almacenamiento o transmisión de datos es 100%
+    seguro.</p>
+
+    <h2>6. Tus derechos</h2>
+    <p>Puedes solicitarnos en cualquier momento que te digamos qué
+    información tenemos sobre ti, que la corrijamos o que la eliminemos por
+    completo. Para ejercer este derecho, escríbenos directamente por
+    WhatsApp o Messenger, o al correo
+    <a href="mailto:{CONTACTO_PRIVACIDAD}">{CONTACTO_PRIVACIDAD}</a>.</p>
+
+    <h2>7. Menores de edad</h2>
+    <p>Nuestros servicios están dirigidos a personas mayores de edad que
+    realizan compras. No recopilamos intencionalmente información de
+    menores de edad.</p>
+
+    <h2>8. Cambios a esta política</h2>
+    <p>Podemos actualizar esta política ocasionalmente. La fecha de la
+    última actualización aparece al inicio de esta página.</p>
+
+    <h2>9. Contacto</h2>
+    <p>Para dudas sobre esta política de privacidad, escríbenos a
+    <a href="mailto:{CONTACTO_PRIVACIDAD}">{CONTACTO_PRIVACIDAD}</a> o por
+    WhatsApp/Messenger a través de nuestra página de Facebook
+    "Recuerditos Dalia".</p>
+  </div>
+</body>
+</html>"""
+    return html
+
+
+# ===========================
 # DASHBOARD DEL NEGOCIO
 # ===========================
 

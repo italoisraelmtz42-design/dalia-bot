@@ -2794,6 +2794,33 @@ def descargar_imagen_messenger(url_imagen):
         return None, None
 
 
+# 🆕 Bug real detectado (17 ago 2026): un cliente mandó un audio por
+# Messenger y el bot respondió "solo puedo leer texto" -- el webhook de
+# Messenger nunca reconocía attachments tipo "audio" (solo "image"), así
+# que caía directo a "adjunto no soportado" sin siquiera intentar
+# descargarlo. La transcripción en sí YA funcionaba bien para WhatsApp
+# (ver audio_handler.transcribir_audio) -- lo único que faltaba era esta
+# función para bajar el audio de Messenger, igual que ya existe para sus
+# imágenes.
+def descargar_audio_messenger(url_audio):
+    """Los audios que manda un cliente por Messenger llegan igual que las
+    imágenes: una URL pública directa en el webhook, sin necesitar
+    autenticación. Mismo patrón que descargar_imagen_messenger."""
+    try:
+        r = requests.get(url_audio, timeout=20)
+        if r.status_code >= 400:
+            print("⚠️ Error descargando audio de Messenger:", r.status_code)
+            return None, None
+        # 🔧 Default "audio/mp4" (no "audio/ogg" como en WhatsApp) porque
+        # Messenger manda sus notas de voz casi siempre en ese formato --
+        # ver audio_handler._extension_desde_mime, que ya lo reconoce.
+        mime = r.headers.get("Content-Type", "audio/mp4")
+        return r.content, mime
+    except requests.RequestException as e:
+        print("⚠️ Excepción descargando audio de Messenger:", e)
+        return None, None
+
+
 def enviar_mensaje_canal(destinatario, texto, canal="whatsapp", pagina_id=None):
     """Dispatcher: manda el mensaje por el canal correcto según de dónde
     vino la conversación. Así el resto del código (procesar_mensaje_en_
@@ -3493,7 +3520,7 @@ def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp", pagina_id=None
     enviar_mensaje_canal(numero, respuesta, canal, pagina_id=pagina_id)
 
 
-def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None, proveedor_whatsapp="meta", media_url_imagen_ycloud=None, media_url_audio_ycloud=None):
+def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None, proveedor_whatsapp="meta", media_url_imagen_ycloud=None, media_url_audio_ycloud=None, media_url_audio_messenger=None):
     # 🔧 Marca, para ESTE hilo únicamente, si los envíos de este mensaje
     # deben salir por YCloud (número de prueba) o por Meta (producción,
     # comportamiento de siempre). Ver _usar_ycloud_en_este_hilo() arriba.
@@ -3521,9 +3548,11 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
     imagen_mime = None
     tipo_para_crm = "texto"
 
-    if media_id_audio or media_url_audio_ycloud:
+    if media_id_audio or media_url_audio_ycloud or media_url_audio_messenger:
         print("🎤 El cliente mandó un audio, descargándolo...")
-        if media_url_audio_ycloud:
+        if media_url_audio_messenger:
+            contenido_audio, mime_audio = descargar_audio_messenger(media_url_audio_messenger)
+        elif media_url_audio_ycloud:
             contenido_audio, mime_audio = descargar_media_ycloud(media_url_audio_ycloud)
         else:
             contenido_audio, mime_audio = descargar_imagen_whatsapp(media_id_audio)
@@ -4139,6 +4168,7 @@ def handle_message_messenger():
                 texto_cliente = mensaje.get("text", "") or ""
                 adjuntos = mensaje.get("attachments") or []
                 imagen_url = None
+                audio_url = None
                 es_sticker = False
                 for adj in adjuntos:
                     payload = adj.get("payload") or {}
@@ -4162,6 +4192,16 @@ def handle_message_messenger():
                             break
                         imagen_url = payload.get("url")
                         break
+                    # 🆕 Bug real detectado (17 ago 2026): un cliente mandó
+                    # un audio por Messenger y el bot respondió "solo
+                    # puedo leer texto" -- este tipo nunca se reconocía
+                    # aquí, así que caía directo a "adjunto no soportado".
+                    # Ahora se detecta igual que la imagen (viene como URL
+                    # pública directa) y se manda a transcribir con el
+                    # mismo mecanismo que ya funciona en WhatsApp.
+                    if adj.get("type") == "audio":
+                        audio_url = payload.get("url")
+                        break
 
                 if es_sticker:
                     # Se trata como un mensaje normal sin imagen -- el
@@ -4179,6 +4219,13 @@ def handle_message_messenger():
                         target=procesar_mensaje_en_fondo,
                         args=(psid, texto_cliente),
                         kwargs={"media_url_imagen_messenger": imagen_url, "canal": "messenger", "pagina_id": pagina_id_actual},
+                        daemon=True,
+                    ).start()
+                elif audio_url:
+                    threading.Thread(
+                        target=procesar_mensaje_en_fondo,
+                        args=(psid, texto_cliente),
+                        kwargs={"media_url_audio_messenger": audio_url, "canal": "messenger", "pagina_id": pagina_id_actual},
                         daemon=True,
                     ).start()
                 elif texto_cliente:

@@ -143,6 +143,26 @@ def init_order_tables():
                 fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
 
+            # 🆕 Seguimiento automático de ~23h a clientes silenciosos con
+            # un pedido en progreso (ver PENDIENTES.md sección 1). Cada
+            # fila = "ya se le mandó el mensaje de seguimiento a este
+            # teléfono para ESTE momento de silencio en particular" --
+            # identificado por telefono + la marca de tiempo exacta del
+            # último mensaje del cliente que disparó el seguimiento. El
+            # UNIQUE evita mandarlo dos veces para el mismo silencio
+            # (incluso si el hilo de background corriera dos veces por
+            # error) y, si el cliente vuelve a escribir después, se genera
+            # una marca de tiempo nueva y sí puede recibir otro seguimiento
+            # más adelante si vuelve a quedarse callado.
+            cursor.execute("""CREATE TABLE IF NOT EXISTS seguimientos_23h (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telefono TEXT NOT NULL,
+                canal TEXT NOT NULL DEFAULT 'whatsapp',
+                marca_ultimo_mensaje_cliente TIMESTAMP NOT NULL,
+                fecha_enviado TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(telefono, marca_ultimo_mensaje_cliente)
+            )""")
+
             # 🔧 Conversaciones silenciadas por Dalia (por cliente
             # individual, no global). Se usa cuando Dalia contesta manual
             # a un cliente específico desde Messenger porque notó que el

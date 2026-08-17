@@ -162,6 +162,58 @@ def chat_cargar_memoria(telefono: str, limite: int = 40) -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# Seguimiento automático de ~23h (ver PENDIENTES.md sección 1)
+# ---------------------------------------------------------------------------
+
+def candidatos_seguimiento_23h(horas_min: float, horas_max: float) -> List[Dict[str, Any]]:
+    """Teléfonos de WhatsApp cuyo ÚLTIMO mensaje fue del cliente (nadie
+    -ni cliente ni bot- ha escrito desde entonces) hace entre horas_min y
+    horas_max horas. Usa julianday() de SQLite para la resta de tiempos
+    -- evita parsear el string de timestamp en Python (frágil ante
+    formatos) y usa la misma zona horaria (UTC) con la que se guardó,
+    consistente con 'now' de SQLite."""
+    try:
+        with get_db_connection() as conn:
+            filas = conn.execute(
+                """
+                SELECT telefono, MAX(timestamp) AS ultimo_ts,
+                       (julianday('now') - julianday(MAX(timestamp))) * 24 AS horas_desde
+                FROM historial_chat
+                WHERE canal = 'whatsapp' AND emisor = 'usuario'
+                GROUP BY telefono
+                HAVING horas_desde >= ? AND horas_desde < ?
+                """,
+                (horas_min, horas_max),
+            ).fetchall()
+        return [{"telefono": f["telefono"], "ultimo_ts": f["ultimo_ts"]} for f in filas]
+    except Exception as e:
+        logger.error(f"candidatos_seguimiento_23h: {e}")
+        return []
+
+
+def reclamar_seguimiento_23h(telefono: str, marca_ultimo_mensaje_cliente: str) -> bool:
+    """Intenta 'reservar' el envío del seguimiento para este teléfono +
+    este momento de silencio exacto. Devuelve True SOLO si este proceso
+    es quien lo reservó primero (por el UNIQUE de la tabla) -- si ya
+    existía, devuelve False y por lo tanto NO se debe mandar el mensaje.
+    Esto hace el candado atómico a nivel de base de datos, no solo en
+    memoria, para que sea seguro aunque el hilo corriera dos veces."""
+    try:
+        with get_db_connection() as conn:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO seguimientos_23h
+                   (telefono, canal, marca_ultimo_mensaje_cliente)
+                   VALUES (?, 'whatsapp', ?)""",
+                (telefono, marca_ultimo_mensaje_cliente),
+            )
+            conn.commit()
+            return cur.rowcount == 1
+    except Exception as e:
+        logger.error(f"reclamar_seguimiento_23h: {e}")
+        return False
+
+
 def uso_registrar_openai(telefono: str, modelo: str = None, tokens_entrada: int = 0,
                           tokens_salida: int = 0, tokens_cache: int = 0):
     # 🔧 Precios de gpt-4.1-mini (verificados agosto 2026): $0.40 por

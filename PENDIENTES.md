@@ -4,9 +4,18 @@ Lista de mejoras identificadas pero **no autorizadas todavía** — sirve para n
 
 ---
 
-## 1. Mensaje de seguimiento automático a clientes silenciosos (~23 h)
+## 1. Mensaje de seguimiento automático a clientes silenciosos (~23 h) — ✅ IMPLEMENTADO (17 ago 2026)
 
-**Objetivo:** si un cliente mostró interés (habló con el bot) pero dejó de responder, mandarle un mensaje amable de seguimiento antes de que se cierre la ventana de 24 h de WhatsApp, para intentar recuperar la venta.
+**Estado real de lo que quedó programado** (autorizado por Israel, mensaje exacto proporcionado por él):
+- Mensaje: *"Hola! Qué tal! gustas que continuemos con tu pedido? Cualquier duda estoy a la orden!"*
+- Hilo en background dentro de `app.py` (`iniciar_hilo_seguimientos_23h`), revisa cada 15 min.
+- Solo dispara si el silencio del cliente lleva entre 23.0 y 23.5 horas (ventana angosta a propósito, para nunca arriesgarse a mandarlo cerca o después de las 24h donde WhatsApp cierra la ventana gratuita).
+- Criterio final de "cliente silencioso" que sí aplica: WhatsApp únicamente, con un borrador de pedido en progreso (`producto` o `items` en `borradores_pedido`), sin que el bot esté en modo DALIA (cubre tanto silencios manuales como pedidos con anticipo ya confirmado), y sin bot pausado globalmente.
+- Candado atómico en SQLite (tabla nueva `seguimientos_23h`, con `UNIQUE(telefono, marca_ultimo_mensaje_cliente)`) para nunca mandarlo dos veces por el mismo silencio -- si el cliente vuelve a escribir y luego se queda callado otra vez, sí puede recibir un seguimiento nuevo para ese silencio distinto.
+- Solo se manda una vez por silencio (no hay reintento posterior) -- si falla el envío (ej. error de red), se deja así, no se reintenta para ese mismo silencio.
+- Probado localmente con una base de datos de prueba antes de desplegar: la ventana de tiempo filtra correctamente, el candado bloquea el doble envío, y el hilo no truena el proceso si el envío falla.
+
+**Objetivo original:** si un cliente mostró interés (habló con el bot) pero dejó de responder, mandarle un mensaje amable de seguimiento antes de que se cierre la ventana de 24 h de WhatsApp, para intentar recuperar la venta.
 
 **Restricción de Meta (clave para el diseño):** WhatsApp solo deja mandar texto libre dentro de las 24 h desde el último mensaje del cliente. Pasada esa ventana, solo se puede mandar una plantilla ("message template") pre-aprobada por Meta — con revisión previa y normalmente clasificada como plantilla de "Marketing" (tiene costo por conversación).
 

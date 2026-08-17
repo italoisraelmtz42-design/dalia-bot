@@ -4221,6 +4221,108 @@ def handle_message_messenger():
     return jsonify({"status": "ok"}), 200
 
 
+# ===========================
+# 🆕 SEGUIMIENTO AUTOMÁTICO ~23H (ver PENDIENTES.md sección 1)
+# ===========================
+# Objetivo: si un cliente de WhatsApp con un pedido/borrador en progreso
+# deja de responder, mandarle un mensaje de seguimiento ANTES de que se
+# cierre la ventana de 24h de WhatsApp -- así se manda como mensaje
+# normal de la conversación, sin necesitar una plantilla aprobada por
+# Meta. Corre en un hilo en background dentro de este mismo proceso --
+# seguro porque Render garantiza una sola instancia para este servicio
+# (tiene disco adjunto y "Scaling is not supported for servers with
+# disks", confirmado en el dashboard). Solo aplica a WhatsApp (Messenger
+# tiene sus propias reglas de re-enganche fuera de ventana).
+
+MENSAJE_SEGUIMIENTO_23H = "Hola! Qué tal! gustas que continuemos con tu pedido? Cualquier duda estoy a la orden!"
+
+# Se revisa cada 15 min y solo se manda si el silencio lleva entre 23.0 y
+# 23.5 horas -- ventana angosta a propósito: si por lo que sea el hilo
+# tarda o el servicio se reinicia (deploy, etc.) y ya se pasó de 23.5h,
+# es mejor quedarse SIN mandar ese seguimiento a mandarlo ya cerca o
+# después de las 24h, donde WhatsApp cierra la ventana gratuita y el
+# mensaje fallaría o necesitaría una plantilla aprobada (esto ya pasó de
+# verdad con notificar_a_dalia, error 131047 -- no se repite aquí).
+INTERVALO_SEGUIMIENTO_23H_SEGUNDOS = 15 * 60
+VENTANA_SEGUIMIENTO_23H_MIN_HORAS = 23.0
+VENTANA_SEGUIMIENTO_23H_MAX_HORAS = 23.5
+
+
+def _revisar_seguimientos_23h_una_vez():
+    if pedido_manager.bot_pausado_globalmente():
+        print("🙅 [Seguimiento 23h] Bot pausado globalmente, se omite esta revisión.")
+        return
+
+    try:
+        candidatos = pedido_manager.candidatos_seguimiento_23h(
+            VENTANA_SEGUIMIENTO_23H_MIN_HORAS, VENTANA_SEGUIMIENTO_23H_MAX_HORAS
+        )
+    except Exception as e:
+        print(f"⚠️ [Seguimiento 23h] Error buscando candidatos: {repr(e)}")
+        return
+
+    for c in candidatos:
+        telefono = c["telefono"]
+        marca = c["ultimo_ts"]
+        try:
+            # Solo clientes que el bot sigue atendiendo -- esto ya cubre
+            # tanto conversaciones silenciadas a mano como pedidos que ya
+            # llegaron a anticipo confirmado (ahí modo_atencion pasa a
+            # DALIA automáticamente, así que no hace falta revisar esa
+            # tabla aparte).
+            if pedido_manager.obtener_modo_atencion(telefono) != ModoAtencion.BOT.value:
+                continue
+
+            # Solo si de verdad hay un pedido/borrador en progreso -- no
+            # mandar "¿continuamos con tu pedido?" a quien nunca llegó a
+            # mencionar un producto en concreto.
+            borrador = pedido_manager.cargar_borrador_pedido(telefono) or {}
+            if not (borrador.get("producto") or borrador.get("items")):
+                continue
+
+            # Candado atómico en base de datos para este teléfono +
+            # este momento de silencio exacto -- si ya se reservó antes
+            # (por ejemplo en una revisión previa), se detiene aquí y NO
+            # se manda de nuevo.
+            if not pedido_manager.reclamar_seguimiento_23h(telefono, marca):
+                continue
+
+            r = enviar_mensaje_canal(telefono, MENSAJE_SEGUIMIENTO_23H, canal="whatsapp")
+            if r is not None:
+                crm.guardar_respuesta(telefono, MENSAJE_SEGUIMIENTO_23H, canal="whatsapp")
+                print(f"📨 [Seguimiento 23h] Mensaje enviado a {telefono} (silencio desde {marca})")
+            else:
+                print(f"❌ [Seguimiento 23h] Falló el envío a {telefono} -- ya quedó reservado en "
+                      f"seguimientos_23h, no se reintentará para este mismo silencio.")
+        except Exception as e:
+            print(f"⚠️ [Seguimiento 23h] Error procesando a {telefono}: {repr(e)}")
+
+
+def _hilo_seguimientos_23h():
+    print("🕐 [Seguimiento 23h] Hilo de background iniciado "
+          f"(revisa cada {INTERVALO_SEGUIMIENTO_23H_SEGUNDOS // 60} min).")
+    while True:
+        try:
+            _revisar_seguimientos_23h_una_vez()
+        except Exception as e:
+            print(f"⚠️ [Seguimiento 23h] Error en la revisión periódica: {repr(e)}")
+        time.sleep(INTERVALO_SEGUIMIENTO_23H_SEGUNDOS)
+
+
+_seguimientos_23h_iniciado = False
+
+
+def iniciar_hilo_seguimientos_23h():
+    global _seguimientos_23h_iniciado
+    if _seguimientos_23h_iniciado:
+        return
+    _seguimientos_23h_iniciado = True
+    threading.Thread(target=_hilo_seguimientos_23h, daemon=True).start()
+
+
+iniciar_hilo_seguimientos_23h()
+
+
 if __name__ == "__main__":
     debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     puerto = int(os.getenv("PORT", 5000))

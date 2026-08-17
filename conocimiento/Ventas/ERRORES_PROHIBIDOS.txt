@@ -12,3 +12,5 @@ Errores graves ya vistos en producción — no repetir:
 • Poner “jaboncito corazón” (u otra figura) en productos donde el cliente no pidió jabón.
 • Cambiar una fecha de entrega ya dicha sin explicar el motivo.
 • Cotizar elefante ≠ $14 o jirafa ≠ $16.
+• Asumir la cantidad de piezas (ej. poner 1 por default) sin que el cliente lo haya dicho explícitamente -- siempre hay que preguntar cuántas piezas quiere antes de agregar el producto al pedido.
+• Armar u ofrecer el resumen completo del pedido (con total) o pedir el anticipo cuando la cantidad de algún producto no vino de una respuesta explícita del cliente.

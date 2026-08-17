@@ -1520,6 +1520,22 @@ REGLA PARA PREGUNTAS VAGAS SOBRE "LOS OSITOS":
 No vuelvas a preguntar datos ya confirmados.
 Pregunta únicamente los datos faltantes.
 
+🔧 REGLA -- NUNCA ASUMAS LA CANTIDAD DE PIEZAS (bug real detectado: un
+cliente pidió información de "el osito con jaboncito" sin decir nunca
+cuántas piezas quería, y el bot asumió 1 pieza por su cuenta, armó el
+resumen completo y llegó hasta pedir el anticipo -- el cliente tuvo que
+preguntar él mismo para que el bot se diera cuenta del error):
+- La cantidad de piezas SIEMPRE tiene que salir de un número explícito que
+  el cliente haya escrito (ej. "quiero 3", "nomás uno", "10 piezas"). Nunca
+  la asumas, nunca pongas 1 por default, nunca la infieras del contexto.
+- En cuanto sepas qué producto quiere el cliente, si todavía no te ha dicho
+  cuántas piezas, pregúntaselo directo ("¿cuántas piezas te gustaría?")
+  ANTES de llamar a agregar_item -- no llames la función con una cantidad
+  inventada solo para no dejar el campo vacío.
+- Nunca armes ni ofrezcas el resumen completo del pedido (con total) ni
+  pidas el anticipo si la cantidad de algún producto no vino de una
+  respuesta explícita del cliente.
+
 Cada vez que el cliente confirme o mencione un dato nuevo del pedido
 (producto, cantidad, evento, fecha, colores, tipo de entrega o dirección),
 llama a la función actualizar_pedido con los campos correspondientes para
@@ -1693,13 +1709,26 @@ TOOLS = [
             "description": (
                 "Agrega un producto al pedido o suma cantidad si ya existe el mismo producto. "
                 "NO envíes precio_unitario: el sistema lo asigna solo. "
-                "No borra otros productos del pedido."
+                "No borra otros productos del pedido. "
+                "⚠️ NO llames esta función hasta que el cliente te haya dicho un número "
+                "EXPLÍCITO de piezas -- pregúntale primero '¿cuántas piezas te gustaría?' "
+                "(o similar) en un mensaje normal y espera su respuesta. Nunca adivines "
+                "ni pongas 1 (ni ningún otro número) por default solo porque no dijo la "
+                "cantidad."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "producto": {"type": "string", "description": "Nombre del producto, ej. 'elefante de toalla'"},
-                    "cantidad": {"type": "integer"},
+                    "cantidad": {
+                        "type": "integer",
+                        "description": (
+                            "Número de piezas que el cliente dijo EXPLÍCITAMENTE. "
+                            "Nunca asumas 1 ni ningún otro valor -- si el cliente no ha "
+                            "dicho un número, pregúntaselo primero y espera la respuesta "
+                            "antes de llamar a esta función."
+                        ),
+                    },
                     "color_toalla": {"type": "string"},
                     "color_mono": {"type": "string"},
                     "color_velita": {"type": "string"},
@@ -1744,7 +1773,14 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "producto": {"type": "string", "description": "Producto a modificar"},
-                    "cantidad": {"type": "integer"},
+                    "cantidad": {
+                        "type": "integer",
+                        "description": (
+                            "Solo envía este campo si el cliente dio un número EXPLÍCITO "
+                            "de piezas nuevo. No la incluyas si no la mencionó -- no "
+                            "asumas ni repitas un número que no confirmó en este mensaje."
+                        ),
+                    },
                     "color_toalla": {"type": "string"},
                     "color_mono": {"type": "string"},
                     "color_velita": {"type": "string"},
@@ -1844,6 +1880,42 @@ def _buscar_item(pedido, nombre_producto):
         if clave and (clave in n or n in clave):
             return it
     return None
+
+
+# 🆕 Bug real detectado (17 ago 2026, prueba real de Israel): un pedido
+# de 1 SOLO osito terminó con tipo_entrega="punto_de_entrega" (que según
+# la política del negocio requiere mínimo 25 piezas -- ver
+# "Entregas y envíos.txt") -- el modelo lo confirmó, armó fecha, punto y
+# hasta el total, y nadie lo cachó hasta que el cliente preguntó
+# directamente "¿aunque sea 1 osito me lo llevan a ese punto de
+# entrega?". La regla ya estaba en la Base de Conocimiento, pero nada en
+# el código la hacía cumplir -- quedaba 100% a que el modelo se acordara.
+# Estas dos funciones son el mismo patrón que ya se usa para
+# es_pedido_urgente/resolver_costo_envio: Python decide la regla
+# verificable, no el modelo.
+def _cantidad_total_pedido(pedido):
+    """Suma total de piezas del pedido -- usa 'items' si existe (varios
+    productos), si no cae al campo plano 'cantidad' del esquema de un
+    solo producto."""
+    items = pedido.get("items")
+    if items and isinstance(items, list):
+        return sum(float(it.get("cantidad") or 0) for it in items)
+    return float(pedido.get("cantidad") or 0)
+
+
+MINIMO_PIEZAS_PUNTO_DE_ENTREGA = 25
+
+
+def _es_tipo_entrega_punto_de_entrega(valor):
+    """Compara de forma tolerante -- el modelo no tiene un enum fijo para
+    tipo_entrega (a diferencia de mostrar_foto_producto), así que puede
+    mandar 'punto_de_entrega', 'punto de entrega', 'Punto De Entrega',
+    etc. Se normaliza quitando espacios/guiones/acentos antes de
+    comparar."""
+    if not valor:
+        return False
+    norm = re.sub(r"[^a-z0-9]", "", normalizar_producto_clave(str(valor)))
+    return "puntodeentrega" in norm or norm == "punto"
 
 
 def aplicar_actualizacion_pedido(pedido, argumentos_json):
@@ -2045,7 +2117,31 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
 
     if name == "actualizar_pedido":
         ya_estaba_confirmado = pedido.get("anticipo_confirmado") is True
+        tipo_entrega_previo = pedido.get("tipo_entrega")
         campos_modificados = aplicar_actualizacion_pedido(pedido, args)
+
+        # 🔧 Mínimo de 25 piezas para punto de entrega (bug real, ver nota
+        # junto a _es_tipo_entrega_punto_de_entrega arriba). Se revisa
+        # justo aquí, apenas se intenta poner/cambiar tipo_entrega, para
+        # que nunca avance ni un turno más con una entrega que no aplica.
+        if "tipo_entrega" in campos_modificados and _es_tipo_entrega_punto_de_entrega(pedido.get("tipo_entrega")):
+            cantidad_total = _cantidad_total_pedido(pedido)
+            if cantidad_total < MINIMO_PIEZAS_PUNTO_DE_ENTREGA:
+                pedido["tipo_entrega"] = tipo_entrega_previo
+                campos_modificados = [c for c in campos_modificados if c != "tipo_entrega"]
+                print(f"🚨 Se bloqueó tipo_entrega=punto_de_entrega: el pedido tiene "
+                      f"{cantidad_total:.0f} piezas, se requieren {MINIMO_PIEZAS_PUNTO_DE_ENTREGA}+")
+                return (
+                    f"BLOQUEADO: no se puede entregar en punto de entrega -- el pedido "
+                    f"tiene {cantidad_total:.0f} pieza(s) y se requieren mínimo "
+                    f"{MINIMO_PIEZAS_PUNTO_DE_ENTREGA} para esa opción. Explícale esto al "
+                    f"cliente con amabilidad y ofrécele entrega en local o a domicilio en su lugar "
+                    f"-- NO confirmes ni menciones el punto de entrega como si ya "
+                    f"quedara así.",
+                    campos_modificados,
+                    False,
+                )
+
         anticipo_recien_confirmado = (
             "anticipo_confirmado" in campos_modificados
             and pedido.get("anticipo_confirmado") is True
@@ -2059,6 +2155,29 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         # 2) fallaran por cualquier motivo, esto es lo que evita que un
         # pedido con un producto gratis por error llegue a confirmarse.
         if anticipo_recien_confirmado:
+            # 🔧 CAPA EXTRA -- red de seguridad de respaldo para el mínimo de
+            # 25 piezas en punto de entrega (ver bloqueo arriba, apenas se
+            # intenta poner tipo_entrega). Esto cubre el caso de que
+            # tipo_entrega ya haya quedado guardado como "punto de entrega"
+            # de un turno anterior (ej. antes de que existiera este
+            # bloqueo, o por cualquier otra vía) y el modelo intente
+            # confirmar el anticipo sin volver a tocar tipo_entrega en este
+            # mismo turno -- nunca debe dejarse pasar un anticipo confirmado
+            # sobre una entrega que no aplica.
+            if _es_tipo_entrega_punto_de_entrega(pedido.get("tipo_entrega")):
+                cantidad_total_anticipo = _cantidad_total_pedido(pedido)
+                if cantidad_total_anticipo < MINIMO_PIEZAS_PUNTO_DE_ENTREGA:
+                    pedido["anticipo_confirmado"] = False
+                    print(f"🚨 Se bloqueó confirmación de anticipo: tipo_entrega=punto_de_entrega con "
+                          f"{cantidad_total_anticipo:.0f} piezas, se requieren {MINIMO_PIEZAS_PUNTO_DE_ENTREGA}+")
+                    return (
+                        f"BLOQUEADO: no se puede confirmar el anticipo -- el pedido tiene "
+                        f"{cantidad_total_anticipo:.0f} pieza(s) y la entrega en punto de entrega "
+                        f"requiere mínimo {MINIMO_PIEZAS_PUNTO_DE_ENTREGA}. Explícale esto al cliente "
+                        f"y ofrécele entrega en local o a domicilio antes de continuar con el anticipo.",
+                        campos_modificados,
+                        False,
+                    )
             _tot_check = pedido_manager.calcular_total(borrador=pedido)
             items_actuales = pedido.get("items") if isinstance(pedido.get("items"), list) else []
             # 🔧 CORREGIDO (bug real detectado en pruebas): el bloqueo de

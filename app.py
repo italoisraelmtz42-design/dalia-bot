@@ -2982,8 +2982,110 @@ def dashboard():
                 (fecha_inicio,),
             ).fetchall()
 
+            # 🆕 Venta total del período (valor de TODOS los pedidos creados,
+            # ya sea que el anticipo/pago esté confirmado o no) -- separado
+            # a propósito de "Ingresos confirmados" (que es solo el dinero
+            # que ya se confirmó recibido). Antes el dashboard solo mostraba
+            # "Ingresos confirmados" arriba y el valor total quedaba
+            # escondido nada más como la suma de la tabla de productos, lo
+            # cual generaba confusión (parecía que no cuadraban los
+            # números, cuando en realidad son dos cosas distintas).
+            fila = conn.execute(
+                "SELECT COALESCE(SUM(pi.subtotal), 0) as total FROM pedido_items pi "
+                "JOIN pedidos p ON pi.pedido_id = p.id WHERE p.fecha_creacion >= ?",
+                (fecha_inicio,),
+            ).fetchone()
+            venta_total_periodo = fila["total"]
+
+            # 🆕 Histórico diario/semanal -- para poder ver "¿cuánto se
+            # vendió ayer?" o "¿cómo nos fue la semana pasada?" sin tener
+            # que ir cambiando de período uno por uno. Se trae una ventana
+            # amplia (60 días) y se agrupa en Python porque las fechas se
+            # guardan en UTC y hay que convertirlas a hora de Monterrey
+            # ANTES de agrupar por día (agrupar directo en SQL con la
+            # fecha en UTC corta los días mal, mismo bug que ya se había
+            # corregido para "Hoy" más arriba).
+            inicio_historico = (datetime.now(ZONA_HORARIA_NEGOCIO) - timedelta(days=60)) \
+                .astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M:%S")
+
+            filas_pagos_hist = conn.execute(
+                "SELECT monto, fecha FROM pagos WHERE confirmado = 1 AND fecha >= ?",
+                (inicio_historico,),
+            ).fetchall()
+
+            filas_ventas_hist = conn.execute(
+                "SELECT pi.subtotal, p.fecha_creacion, p.id as pedido_id FROM pedido_items pi "
+                "JOIN pedidos p ON pi.pedido_id = p.id WHERE p.fecha_creacion >= ?",
+                (inicio_historico,),
+            ).fetchall()
+
     except Exception as e:
         return f"Error consultando la base de datos: {e}", 500
+
+    def _fecha_local(timestamp_str):
+        """Igual que _utc_a_hora_local pero solo devuelve la fecha
+        (YYYY-MM-DD) en hora de Monterrey, para poder agrupar por día."""
+        convertido = _utc_a_hora_local(timestamp_str)
+        return convertido[:10] if convertido else None
+
+    def _inicio_semana_de(fecha_str):
+        d = datetime.strptime(fecha_str, "%Y-%m-%d").date()
+        return (d - timedelta(days=d.weekday())).strftime("%Y-%m-%d")
+
+    # --- Agrupar ingresos confirmados y venta total por día ---
+    ingresos_por_dia, venta_por_dia, pedidos_por_dia = {}, {}, {}
+    for f in filas_pagos_hist:
+        d = _fecha_local(f["fecha"])
+        if d:
+            ingresos_por_dia[d] = ingresos_por_dia.get(d, 0) + f["monto"]
+    for f in filas_ventas_hist:
+        d = _fecha_local(f["fecha_creacion"])
+        if d:
+            venta_por_dia[d] = venta_por_dia.get(d, 0) + f["subtotal"]
+            pedidos_por_dia.setdefault(d, set()).add(f["pedido_id"])
+
+    # --- Agrupar lo mismo, pero por semana (lunes a domingo) ---
+    ingresos_por_semana, venta_por_semana, pedidos_por_semana = {}, {}, {}
+    for f in filas_pagos_hist:
+        d = _fecha_local(f["fecha"])
+        if d:
+            s = _inicio_semana_de(d)
+            ingresos_por_semana[s] = ingresos_por_semana.get(s, 0) + f["monto"]
+    for f in filas_ventas_hist:
+        d = _fecha_local(f["fecha_creacion"])
+        if d:
+            s = _inicio_semana_de(d)
+            venta_por_semana[s] = venta_por_semana.get(s, 0) + f["subtotal"]
+            pedidos_por_semana.setdefault(s, set()).add(f["pedido_id"])
+
+    # --- Armar las filas de la tabla diaria (últimos 14 días, hoy primero) ---
+    hoy_local = datetime.now(ZONA_HORARIA_NEGOCIO).date()
+    dias_semana_es = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+    filas_dias_tabla = []
+    for i in range(14):
+        d = hoy_local - timedelta(days=i)
+        d_str = d.strftime("%Y-%m-%d")
+        etiqueta = f"{dias_semana_es[d.weekday()]} {d.strftime('%d/%m')}" + (" (hoy)" if i == 0 else " (ayer)" if i == 1 else "")
+        filas_dias_tabla.append({
+            "etiqueta": etiqueta,
+            "ingresos": ingresos_por_dia.get(d_str, 0),
+            "venta_total": venta_por_dia.get(d_str, 0),
+            "pedidos": len(pedidos_por_dia.get(d_str, set())),
+        })
+
+    # --- Armar las filas de la tabla semanal (últimas 8 semanas) ---
+    inicio_semana_actual = hoy_local - timedelta(days=hoy_local.weekday())
+    filas_semanas_tabla = []
+    for i in range(8):
+        inicio = inicio_semana_actual - timedelta(weeks=i)
+        inicio_str = inicio.strftime("%Y-%m-%d")
+        fin = inicio + timedelta(days=6)
+        filas_semanas_tabla.append({
+            "etiqueta": f"{inicio.strftime('%d/%m')} – {fin.strftime('%d/%m')}" + (" (esta semana)" if i == 0 else " (semana pasada)" if i == 1 else ""),
+            "ingresos": ingresos_por_semana.get(inicio_str, 0),
+            "venta_total": venta_por_semana.get(inicio_str, 0),
+            "pedidos": len(pedidos_por_semana.get(inicio_str, set())),
+        })
 
     def _fila_canal_pedidos(canal_nombre):
         for f in filas_canal_pedidos:
@@ -3027,6 +3129,18 @@ def dashboard():
         for r in filas_recientes
     ) or "<tr><td colspan='7'>Sin pedidos en este período</td></tr>"
 
+    filas_dias_html = "".join(
+        f"<tr><td>{d['etiqueta']}</td><td>${d['ingresos']:,.2f}</td>"
+        f"<td>${d['venta_total']:,.2f}</td><td>{d['pedidos']}</td></tr>"
+        for d in filas_dias_tabla
+    )
+
+    filas_semanas_html = "".join(
+        f"<tr><td>{s['etiqueta']}</td><td>${s['ingresos']:,.2f}</td>"
+        f"<td>${s['venta_total']:,.2f}</td><td>{s['pedidos']}</td></tr>"
+        for s in filas_semanas_tabla
+    )
+
     def _link_periodo(p, texto):
         activo = "background:#f2385a;color:white;" if p == periodo else "background:#eee;color:#333;"
         return f'<a href="/dashboard?clave={clave_recibida}&periodo={p}" style="padding:8px 16px;border-radius:20px;text-decoration:none;margin-right:8px;{activo}">{texto}</a>'
@@ -3066,7 +3180,12 @@ def dashboard():
     <div class="card">
       <div class="etiqueta">Ingresos confirmados</div>
       <div class="valor">${ingresos_total:,.2f}</div>
-      <div class="detalle">{ingresos_n} pago(s)/anticipo(s)</div>
+      <div class="detalle">{ingresos_n} pago(s)/anticipo(s) ya confirmados</div>
+    </div>
+    <div class="card">
+      <div class="etiqueta">Venta total del período</div>
+      <div class="valor">${venta_total_periodo:,.2f}</div>
+      <div class="detalle">valor de todos los pedidos, se haya confirmado el pago o no</div>
     </div>
     <div class="card">
       <div class="etiqueta">Pedidos</div>
@@ -3095,7 +3214,19 @@ def dashboard():
     </div>
   </div>
 
-  <h2>📦 Productos vendidos</h2>
+  <h2>📅 Ventas por día (últimos 14 días)</h2>
+  <table>
+    <tr><th>Día</th><th>Ingresos confirmados</th><th>Venta total</th><th>Pedidos</th></tr>
+    {filas_dias_html}
+  </table>
+
+  <h2>🗓️ Ventas por semana (últimas 8 semanas)</h2>
+  <table>
+    <tr><th>Semana</th><th>Ingresos confirmados</th><th>Venta total</th><th>Pedidos</th></tr>
+    {filas_semanas_html}
+  </table>
+
+  <h2>📦 Productos vendidos <span style="font-size:13px;color:#888;font-weight:normal;">({etiqueta_periodo})</span></h2>
   <table>
     <tr><th>Producto</th><th>Cantidad</th><th>Ingresos</th></tr>
     {filas_productos_html}

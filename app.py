@@ -254,6 +254,20 @@ def cargar_catalogo_imagenes():
 
 CATALOGO_IMAGENES = cargar_catalogo_imagenes()
 
+# 🔧 Claves de la carpeta /imagenes que NO son fotos de producto (ej. la
+# tarjeta con los datos bancarios para el anticipo) y por lo tanto nunca
+# deben ofrecerse como "foto de producto disponible" ni mandarse por
+# mostrar_foto_producto -- bug real detectado: el bot mandaba esta imagen
+# de forma proactiva (ej. cuando el cliente solo preguntaba la ubicación),
+# revelando datos bancarios sin que el cliente los pidiera ni estuviera
+# listo para pagar. Los datos bancarios en texto siguen mandándose por su
+# propio mecanismo (con su propio candado, ver filtrar_datos_bancarios_si_no_hay_total).
+CLAVES_IMAGEN_NO_OFRECER = {"pagos_y_anticipos"}
+CATALOGO_IMAGENES_PRODUCTO = {
+    clave: info for clave, info in CATALOGO_IMAGENES.items()
+    if clave not in CLAVES_IMAGEN_NO_OFRECER
+}
+
 # ===========================
 # CATÁLOGO GENERAL EN PDF
 # ===========================
@@ -301,7 +315,13 @@ def url_imagen_producto(clave_producto):
 # dispara con frases que ya identifican el modelo exacto).
 PALABRAS_CLAVE_IMAGEN_AUTOMATICA = {
     "colores_disponibles": ("color", "colores"),
-    "velas_de_toalla_cyg": ("velita", "velitas", "vela de toalla", "velas de toalla", "vela grande", "vela chica"),
+    # 🔧 Se quitaron "velita"/"velitas" sueltas de aquí: esas palabras
+    # también aparecen dentro de "kit osito + oración + velita" (un osito,
+    # no una vela de toalla), y disparaban por error la foto de este
+    # producto equivocado cuando el bot mandaba la lista de precios de
+    # ositos. Ahora solo dispara con frases que sí identifican una vela de
+    # toalla sin ambigüedad.
+    "velas_de_toalla_cyg": ("vela de toalla", "velas de toalla", "vela grande", "vela chica"),
     "elefante_de_toalla": ("elefante", "elefantito", "elefantes"),
     "jirafa_de_toalla": ("jirafa", "jirafas"),
     "buho_con_virrete_de_toalla": ("birrete", "virrete"),
@@ -1454,6 +1474,30 @@ nunca calcules fechas por tu cuenta):
 - Nunca confirmes una fecha de entrega sin haber verificado si es un pedido
   normal o urgente según las reglas de arriba.
 
+REGLA GENERAL -- NO PIDAS PERMISO PARA COSAS OBVIAS, HAZLO DIRECTO:
+🚫 Nunca termines un mensaje preguntando si quiere que le des algo que
+CLARAMENTE ya quiere -- dáselo directo, en el mismo mensaje. Ejemplos
+reales de esto pasando mal (no los repitas):
+- "¿quieres que te mande la foto de los colores?" -> mándala/descríbela
+  directo (esto además ya lo hace el sistema solo con la foto, tú solo
+  sigue la conversación como si ya la hubiera visto).
+- "¿quieres que te pase la ubicación?" -> si preguntó dónde están
+  ubicados, dale la dirección completa, el horario y el link de Maps en
+  ese mismo mensaje -- no preguntes si la quiere.
+- "¿quieres que te recomiende un color?" -> si ya está eligiendo el
+  producto y no ha dicho color, recomiéndale uno tú misma con una razón
+  breve, no le preguntes si quiere que le recomiendes.
+- "¿quieres que te diga los puntos de entrega/zonas de envío?" -> si
+  preguntó por entrega o envío, dale directo las opciones (domicilio con
+  costo, puntos de entrega si aplican, o recolectar en el local).
+- Cualquier "¿quieres que te muestre/diga/explique ___?" donde la
+  respuesta obvia sería "sí" -- no preguntes, dalo por hecho y respóndelo.
+Sigue preguntando SOLO cuando de verdad dependa de una decisión o dato que
+nada más el cliente puede dar (qué modelo de osito quiere, para cuándo lo
+necesita, su dirección exacta, cuántas piezas, etc.) -- la diferencia es:
+si tú ya sabes la respuesta o es obvio que la quiere, no preguntes, dásela
+directo; si depende de él, ahí sí pregunta.
+
 REGLA PARA PREGUNTAS VAGAS SOBRE "LOS OSITOS":
 - 🔧 Si el cliente pregunta de forma genérica por "los ositos" (ej. "me
   interesan los ositos", "cuánto cuestan los ositos", "tienen ositos?"),
@@ -1513,7 +1557,7 @@ el sistema asigna el precio solo; tú llama agregar_item o actualizar_item sin p
 Si no guardas el precio aquí, el pedido oficial queda registrado con precio
 $0, aunque se lo hayas dicho al cliente.
 
-{seccion_fotos_producto(catalogo_imagenes=CATALOGO_IMAGENES)}
+{seccion_fotos_producto(catalogo_imagenes=CATALOGO_IMAGENES_PRODUCTO)}
 
 {seccion_catalogo_pdf()}
 
@@ -1752,7 +1796,7 @@ TOOLS = [
 ]
 
 
-if CATALOGO_IMAGENES:
+if CATALOGO_IMAGENES_PRODUCTO:
     TOOLS.append({
         "type": "function",
         "function": {
@@ -1768,7 +1812,7 @@ if CATALOGO_IMAGENES:
                 "properties": {
                     "producto": {
                         "type": "string",
-                        "enum": list(CATALOGO_IMAGENES.keys()),
+                        "enum": list(CATALOGO_IMAGENES_PRODUCTO.keys()),
                         "description": "Clave del producto del que se debe mandar la foto",
                     },
                 },
@@ -2086,6 +2130,8 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         clave = args_obj.get("producto")
         imagenes_enviadas = sesion["imagenes_enviadas"]
 
+        if clave in CLAVES_IMAGEN_NO_OFRECER:
+            return f"'{clave}' no es una foto de producto, no la mandes por aquí", [], False
 
         if clave in imagenes_enviadas:
             return "ya se le mandó esta foto antes en la conversación, no la repitas", [], False
@@ -3677,14 +3723,23 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         detectar_imagenes_automaticas(texto_cliente)
         + detectar_imagen_osito_especifico(texto_cliente)
     ))
-    for clave_img in claves_imagen_cliente:
-        if clave_img in imagenes_enviadas:
-            continue
-        url_img = url_imagen_producto(clave_img)
-        if url_img:
-            enviar_imagen_canal(numero, url_img, canal, pagina_id=pagina_id)
-            imagenes_enviadas.add(clave_img)
-            print(f"🖼️ Imagen automática (mensaje del cliente) enviada a {numero}: {clave_img}")
+    # 🔧 Bug real detectado: si el cliente vuelve a preguntar explícitamente
+    # por algo que ya se le mandó antes en la misma conversación (ej. "qué
+    # colores tienes?" una segunda vez), el candado de "no repetir foto"
+    # bloqueaba el reenvío en silencio y el cliente se quedaba sin
+    # respuesta a su pregunta. Aquí SÍ se manda aunque ya esté en
+    # imagenes_enviadas -- si el cliente lo pide de nuevo, es porque de
+    # verdad lo quiere ver de nuevo.
+    if len(claves_imagen_cliente) >= 3:
+        print(f"🖼️ Se omitió el envío automático de {len(claves_imagen_cliente)} imágenes "
+              f"pedidas de golpe por el cliente ({', '.join(claves_imagen_cliente)}) -- revisar manualmente.")
+    else:
+        for clave_img in claves_imagen_cliente:
+            url_img = url_imagen_producto(clave_img)
+            if url_img:
+                enviar_imagen_canal(numero, url_img, canal, pagina_id=pagina_id)
+                imagenes_enviadas.add(clave_img)
+                print(f"🖼️ Imagen automática (mensaje del cliente) enviada a {numero}: {clave_img}")
 
     with sesion["lock"]:
         try:
@@ -3773,14 +3828,30 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         ))
         if detectar_info_enviada(respuesta).get("colores_disponibles"):
             claves_imagen_respuesta.append("colores_disponibles")
-        for clave_img in dict.fromkeys(claves_imagen_respuesta):
-            if clave_img in imagenes_enviadas:
-                continue
-            url_img = url_imagen_producto(clave_img)
-            if url_img:
-                enviar_imagen_canal(numero, url_img, canal, pagina_id=pagina_id)
-                imagenes_enviadas.add(clave_img)
-                print(f"🖼️ Imagen automática (respuesta del bot) enviada a {numero}: {clave_img}")
+        claves_imagen_respuesta = list(dict.fromkeys(claves_imagen_respuesta))
+        # 🔧 Bug real detectado: cuando la respuesta del bot es la lista
+        # completa de precios de ositos (varias variantes mencionadas a la
+        # vez, no una recomendación puntual), el texto contiene las frases
+        # de casi todas las variantes y esto disparaba una CASCADA de 8-9
+        # fotos seguidas -- entre ellas, alguna que ni siquiera aplicaba
+        # (ej. "velas de toalla" por la palabra "velita" del kit). Si el
+        # mensaje del bot menciona 3 o más productos distintos a la vez, es
+        # una lista/resumen, no una recomendación puntual -- no se manda
+        # ninguna foto automática; el cliente puede pedir la del modelo
+        # específico que le interese en cuanto elija.
+        if len(claves_imagen_respuesta) >= 3:
+            print(f"🖼️ Se omitió el envío automático de {len(claves_imagen_respuesta)} imágenes "
+                  f"({', '.join(claves_imagen_respuesta)}) -- la respuesta parece una lista completa, "
+                  f"no una recomendación puntual.")
+        else:
+            for clave_img in claves_imagen_respuesta:
+                if clave_img in imagenes_enviadas:
+                    continue
+                url_img = url_imagen_producto(clave_img)
+                if url_img:
+                    enviar_imagen_canal(numero, url_img, canal, pagina_id=pagina_id)
+                    imagenes_enviadas.add(clave_img)
+                    print(f"🖼️ Imagen automática (respuesta del bot) enviada a {numero}: {clave_img}")
 
     print("🏁 Fin procesamiento")
     print("=" * 70)

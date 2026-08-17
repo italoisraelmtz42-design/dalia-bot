@@ -296,9 +296,9 @@ def url_imagen_producto(clave_producto):
 # aunque el cliente preguntara por colores). "colores_disponibles" es la
 # más importante -- evita dudas sobre qué colores existen. El resto son
 # productos de UNA sola variante (no necesitan preguntar nada antes, a
-# diferencia de los ositos, que sí tienen varias presentaciones y se
-# quedan con el flujo normal de mostrar_foto_producto para no adelantar
-# la foto equivocada).
+# diferencia de los ositos genéricos, que sí tienen varias presentaciones;
+# para esos ver PALABRAS_CLAVE_OSITO_ESPECIFICO más abajo, que solo
+# dispara con frases que ya identifican el modelo exacto).
 PALABRAS_CLAVE_IMAGEN_AUTOMATICA = {
     "colores_disponibles": ("color", "colores"),
     "velas_de_toalla_cyg": ("velita", "velitas", "vela de toalla", "velas de toalla", "vela grande", "vela chica"),
@@ -335,6 +335,56 @@ def detectar_imagenes_automaticas(texto_cliente: str) -> list:
     # quita la genérica de la lista.
     if "buho_con_virrete_de_toalla" in claves and "buho_de_toalla" in claves:
         claves.remove("buho_de_toalla")
+    return claves
+
+
+# 🆕 Frases que SÍ identifican una variante ESPECÍFICA de osito (a
+# diferencia de "osito" o "ositos" sueltos, que son ambiguos entre 9
+# modelos distintos). Cada archivo de producto en /conocimiento ya dice
+# "mandar siempre la imagen... cuando se le recomiende el producto", pero
+# en la práctica el modelo no lo hacía solo -- en vez de mandar la foto,
+# terminaba preguntando "¿quieres que te muestre la foto?". Ahora se manda
+# sola, determinísticamente, en cuanto el CLIENTE o el propio BOT nombran
+# el modelo exacto (ver uso más abajo, tanto en el mensaje del cliente
+# como en la respuesta que arma el bot).
+PALABRAS_CLAVE_OSITO_ESPECIFICO = {
+    "osito_con_jaboncito": ("con jaboncito", "con jabon"),
+    "osito_sencillo_sin_jabon": ("sencillo sin jabon", "sin jaboncito", "sin jabon"),
+    "osito_doble_piecito": ("doble pie", "doble piecito"),
+    "osito_con_doble_inicial_chica": ("doble inicial",),
+    "osito_con_inicial_chica": ("inicial chica",),
+    "osito_con_inicial_grande": ("inicial grande",),
+    "osito_de_peluche_llavero": ("peluche llavero", "osito de peluche", "osito peluche"),
+    "osito_toalla_afelpada": ("toalla afelpada", "osito afelpada", "osito afelpado"),
+    "kit_osito_oracion_velita": ("kit osito oracion", "kit de osito con oracion"),
+}
+
+
+def detectar_imagen_osito_especifico(texto: str) -> list:
+    """Detecta cuando un texto (mensaje del cliente O respuesta del bot)
+    nombra una variante ESPECÍFICA de osito, para mandar la foto exacta de
+    ese modelo sin preguntar. A diferencia de detectar_imagenes_automaticas,
+    exige frases de 2+ palabras que ya identifican el modelo -- nunca
+    dispara con "osito"/"ositos" sueltos, para no adelantar la foto
+    equivocada cuando la pregunta todavía es genérica."""
+    if not texto:
+        return []
+    # 🔧 Se quita puntuación (ej. "kit osito + oración + velita", tal cual
+    # aparece en el índice de precios) para que las frases de 2+ palabras
+    # sigan siendo substring contiguo aunque haya símbolos entre medio.
+    texto_norm = normalizar_producto_clave(texto)
+    texto_norm = re.sub(r"[^a-z0-9 ]", " ", texto_norm)
+    texto_norm = " ".join(texto_norm.split())
+    claves = []
+    for clave_imagen, frases in PALABRAS_CLAVE_OSITO_ESPECIFICO.items():
+        if clave_imagen not in CATALOGO_IMAGENES:
+            continue
+        if any(normalizar_producto_clave(f) in texto_norm for f in frases):
+            claves.append(clave_imagen)
+    # "doble inicial chica" contiene la subcadena "inicial chica" -- si ya
+    # se detectó la variante doble, no mandar también la genérica.
+    if "osito_con_doble_inicial_chica" in claves and "osito_con_inicial_chica" in claves:
+        claves.remove("osito_con_inicial_chica")
     return claves
 
 
@@ -1112,14 +1162,25 @@ def seccion_fotos_producto(catalogo_imagenes):
         for clave, info in catalogo_imagenes.items()
     )
     return f"""
-Cuando el cliente muestre interés claro en ver cómo se ve un producto
-específico (pregunta "cómo se ve", "tienes foto", muestra intención de
-comprar ese producto, o es la primera vez que pregunta por ese producto en
-la conversación), llama a la función mostrar_foto_producto con la clave del
-producto correspondiente. No la llames en cada mensaje ni para productos que
-el cliente no mencionó. Si ya le mandaste la foto de ese producto antes en
-esta conversación, no la vuelvas a mandar salvo que el cliente la pida de
-nuevo explícitamente.
+🔧 IMPORTANTE SOBRE FOTOS -- LÉELO ANTES DE RESPONDER: el sistema (no tú)
+manda AUTOMÁTICAMENTE la foto de los colores disponibles y la foto de la
+variante exacta de osito en cuanto tú o el cliente la mencionan por su
+nombre (ej. "osito con jaboncito", "osito doble inicial", "osito toalla
+afelpada"), y también la foto de productos de una sola presentación
+(elefante, jirafa, búho, etc.) en cuanto se mencionan. Esto pasa solo,
+sin que tengas que llamar ninguna función tú para esos casos.
+- 🚫 NUNCA le preguntes al cliente "¿quieres que te muestre la foto?",
+  "¿te gustaría ver una imagen?" ni nada parecido -- la foto ya se manda
+  sola. Simplemente sigue respondiendo la conversación con normalidad,
+  como si el cliente ya la hubiera visto (porque la va a ver).
+- Si estás recomendando o cotizando un osito, sé específico con el nombre
+  del modelo (ej. "el osito con jaboncito" en vez de solo "el osito") para
+  que el sistema pueda identificar cuál foto mandar.
+- Todavía puedes llamar a mostrar_foto_producto tú mismo como respaldo,
+  SOLO para productos que no tengan una variante clara todavía, o si el
+  cliente pide ver la foto de nuevo explícitamente aunque ya se le haya
+  mandado antes. No la llames en cada mensaje ni para productos que el
+  cliente no mencionó.
 
 FOTOS DE PRODUCTO DISPONIBLES (clave -> producto):
 {lista}
@@ -3606,18 +3667,24 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
     sesion = obtener_sesion(numero)
 
     # 🔧 Envío determinístico de imágenes clave (colores + productos de
-    # una sola variante) -- ver detectar_imagenes_automaticas arriba.
-    # Se manda ANTES de consultar al modelo para que llegue de inmediato,
-    # no como una foto más entre varias respuestas de texto.
+    # una sola variante + variante específica de osito si el CLIENTE ya la
+    # nombró) -- ver detectar_imagenes_automaticas / detectar_imagen_osito_
+    # especifico arriba. Se manda ANTES de consultar al modelo para que
+    # llegue de inmediato, no como una foto más entre varias respuestas de
+    # texto.
     imagenes_enviadas = sesion["imagenes_enviadas"]
-    for clave_img in detectar_imagenes_automaticas(texto_cliente):
+    claves_imagen_cliente = list(dict.fromkeys(
+        detectar_imagenes_automaticas(texto_cliente)
+        + detectar_imagen_osito_especifico(texto_cliente)
+    ))
+    for clave_img in claves_imagen_cliente:
         if clave_img in imagenes_enviadas:
             continue
         url_img = url_imagen_producto(clave_img)
         if url_img:
             enviar_imagen_canal(numero, url_img, canal, pagina_id=pagina_id)
             imagenes_enviadas.add(clave_img)
-            print(f"🖼️ Imagen automática enviada a {numero}: {clave_img}")
+            print(f"🖼️ Imagen automática (mensaje del cliente) enviada a {numero}: {clave_img}")
 
     with sesion["lock"]:
         try:
@@ -3692,6 +3759,28 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             print(f"📨 {canal} respondió: {r.status_code}")
         else:
             print(f"❌ enviar_mensaje_canal ({canal}) devolvió None")
+
+        # 🔧 Envío determinístico de imágenes cuando es el BOT quien
+        # recomienda colores o menciona/cotiza una variante específica de
+        # osito en su propia respuesta (antes esto dependía 100% de que el
+        # modelo se acordara de llamar mostrar_foto_producto, y en la
+        # práctica terminaba preguntando "¿quieres que te muestre la
+        # foto?" en vez de mandarla -- ahora se manda sola, después del
+        # mensaje de texto, sin preguntar).
+        claves_imagen_respuesta = list(dict.fromkeys(
+            detectar_imagenes_automaticas(respuesta)
+            + detectar_imagen_osito_especifico(respuesta)
+        ))
+        if detectar_info_enviada(respuesta).get("colores_disponibles"):
+            claves_imagen_respuesta.append("colores_disponibles")
+        for clave_img in dict.fromkeys(claves_imagen_respuesta):
+            if clave_img in imagenes_enviadas:
+                continue
+            url_img = url_imagen_producto(clave_img)
+            if url_img:
+                enviar_imagen_canal(numero, url_img, canal, pagina_id=pagina_id)
+                imagenes_enviadas.add(clave_img)
+                print(f"🖼️ Imagen automática (respuesta del bot) enviada a {numero}: {clave_img}")
 
     print("🏁 Fin procesamiento")
     print("=" * 70)

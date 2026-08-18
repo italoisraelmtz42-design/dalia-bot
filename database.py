@@ -146,14 +146,19 @@ def init_order_tables():
             # 🆕 Seguimiento automático de ~23h a clientes silenciosos con
             # un pedido en progreso (ver PENDIENTES.md sección 1). Cada
             # fila = "ya se le mandó el mensaje de seguimiento a este
-            # teléfono para ESTE momento de silencio en particular" --
-            # identificado por telefono + la marca de tiempo exacta del
-            # último mensaje del cliente que disparó el seguimiento. El
-            # UNIQUE evita mandarlo dos veces para el mismo silencio
-            # (incluso si el hilo de background corriera dos veces por
-            # error) y, si el cliente vuelve a escribir después, se genera
-            # una marca de tiempo nueva y sí puede recibir otro seguimiento
-            # más adelante si vuelve a quedarse callado.
+            # teléfono en este canal". marca_ultimo_mensaje_cliente queda
+            # guardada solo como referencia/diagnóstico (desde cuándo
+            # estaba callado cuando se le mandó).
+            # 🔧 (18 ago 2026, decisión explícita de Israel) Máximo UN
+            # seguimiento por telefono+canal EN TOTAL, para siempre -- ya
+            # NO se manda otro aunque el cliente responda y se quede
+            # callado de nuevo más adelante. El filtro real que aplica
+            # esto vive en candidatos_seguimiento_23h() (pedido_manager.py),
+            # que excluye a cualquier telefono con una fila aquí antes de
+            # considerarlo candidato. El UNIQUE(telefono, marca) de abajo
+            # sigue existiendo solo como candado extra a nivel de base de
+            # datos (por si el hilo corriera dos veces), no como la regla
+            # de negocio.
             cursor.execute("""CREATE TABLE IF NOT EXISTS seguimientos_23h (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telefono TEXT NOT NULL,

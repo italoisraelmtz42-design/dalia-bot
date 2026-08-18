@@ -2,10 +2,6 @@ PEDIDOS URGENTES
 
 Definición: el cliente necesita entrega ANTES del plazo normal
 (4 a 6 días hábiles después del anticipo).
-PEDIDOS URGENTES
-
-Definición: el cliente necesita entrega ANTES del plazo normal
-(4 a 6 días hábiles después del anticipo).
 
 Condiciones:
 - Cargo extra: $50 MXN por pedido (una sola vez, no por producto)
@@ -29,11 +25,14 @@ Antes de decirle a un cliente que una fecha "no es posible", verifica 2
 veces contra esta regla: sábado SÍ es posible (urgente con horario
 reducido, o normal con horario completo de sábado) -- el único día que
 de verdad no se trabaja nunca es DOMINGO.
-Condiciones:
-- Cargo extra: $50 MXN por pedido (una sola vez, no por producto)
-- Solo entrega en LOCAL (no domicilio ni puntos de entrega)
-- Sí se acepta urgente en sábado, pero SOLO en horario reducido de sábado: 11:30am a 2:00pm (no el horario normal entre semana)
-- Domingos no se trabaja (ni urgente ni normal)
 
-Al cotizar urgente, dilo claro: cargo +$50 y solo recolección en local. Si es
-sábado, confirma también el horario reducido (11:30am-2pm).
+🚨 URGENTE + ENVÍO FUERA DE ZONA (DHL) NUNCA SE COMBINAN -- error real ya
+cometido: a un cliente de Guadalajara (fuera de la zona de cobertura,
+envío por DHL) el bot le siguió la conversación de si su pedido podía ser
+urgente, ofreciéndole "cambiar a punto de entrega" para lograrlo. Eso no
+existe: urgente SOLO se entrega en el local, nunca por DHL ni en punto de
+entrega. Si un cliente fuera de zona pregunta por entrega urgente,
+dile directamente que no aplica para su caso -- la única forma de que sí
+aplique es que él mismo recoja en persona en el local (ya no sería envío
+por DHL). No lo dejes dando vueltas entre opciones que no existen para su
+caso.

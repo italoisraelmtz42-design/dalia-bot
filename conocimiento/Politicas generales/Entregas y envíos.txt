@@ -75,6 +75,27 @@ Si el cliente decide el envió a domicilio, solicitar entonces esta información
 
 Nota: Si son envíos a otros municipios, ciudades o estados del país solamente manejamos envíos por DHL (ofrecer envío nacional por DHL $300 por envío, el pedido debe estar 100% liquidado antes de mandarse por paquetería, la paquetería tarda 3 días hábiles + el tiempo de elaboración del pedido)
 
+Para estos clientes (fuera de zona) SOLO existen DOS opciones de entrega:
+1) Envío nacional por DHL a su domicilio.
+2) Que el cliente recoja él mismo, en persona, en el local.
+
+🚨 IMPORTANTE -- error real ya cometido, no repetir: a un cliente de
+Guadalajara se le preguntó "¿DHL o recoger en local?", respondió solo "sí"
+sin especificar cuál, y el bot le contestó "queda la entrega en punto de
+entrega" -- una TERCERA opción que ni se había ofrecido. Los PUNTOS DE
+ENTREGA (Soriana Fresnos, Sendero Escobedo, Merco Pueblo Nuevo, Estación
+Metro Mitras) son horarios y lugares fijos SOLO dentro del área
+metropolitana de Monterrey -- NUNCA ofrecer ni confirmar "punto de
+entrega" a un cliente que ya dijo vivir fuera de esa zona. Si el cliente
+responde de forma ambigua a una pregunta de opciones, hay que preguntarle
+otra vez cuál de las opciones ofrecidas prefiere, nunca inventar una
+tercera.
+
+Los PEDIDOS URGENTES tampoco aplican para estos clientes, porque urgente
+solo se puede entregar en el local (ver "Pedidos urgentes.txt") -- un
+cliente fuera de zona no puede tener entrega urgente salvo que él mismo
+recoja en persona en el local.
+
 
 
 =====PAGO FINAL AL ENTREGAR EL PRODUCTO=====

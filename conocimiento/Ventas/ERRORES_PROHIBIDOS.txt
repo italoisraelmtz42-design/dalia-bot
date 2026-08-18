@@ -14,3 +14,4 @@ Errores graves ya vistos en producción — no repetir:
 • Cotizar elefante ≠ $14 o jirafa ≠ $16.
 • Asumir la cantidad de piezas (ej. poner 1 por default) sin que el cliente lo haya dicho explícitamente -- siempre hay que preguntar cuántas piezas quiere antes de agregar el producto al pedido.
 • Armar u ofrecer el resumen completo del pedido (con total) o pedir el anticipo cuando la cantidad de algún producto no vino de una respuesta explícita del cliente.
+• Inventar/asumir una opción de tipo_entrega que el cliente no eligió explícitamente (ej. responder "punto de entrega" cuando el cliente solo dijo "si" a una pregunta de "DHL o local"). Nunca ofrecer "punto de entrega" a un cliente fuera de la zona de Monterrey, ni pedido urgente a un cliente con envío por DHL.

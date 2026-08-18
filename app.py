@@ -1350,6 +1350,27 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None):
             f"inútiles para un cliente foráneo. Tampoco le ofrezcas pedido "
             f"urgente (ese cargo solo aplica con entrega en local, nunca con DHL)."
         )
+
+    # 🔧 Bug real detectado (18 ago 2026): un cliente dijo "necesito 40
+    # ositos en color rosa" desde su primer mensaje, pero el bot tardó
+    # varios turnos en aclarar qué modelo de osito quería. Como solo se le
+    # manda al modelo un resumen de los últimos 5 turnos, para cuando por
+    # fin se aclaró el modelo, el mensaje original con "40" ya se había
+    # salido de esa ventana -- y como la cantidad tampoco se había
+    # guardado todavía (agregar_item necesita producto Y cantidad juntos),
+    # el bot terminó preguntando la cantidad otra vez como si nunca se la
+    # hubieran dicho. Este recordatorio hace que el número sobreviva entre
+    # turnos aunque ya no aparezca en el historial reciente.
+    if isinstance(pedido, dict) and pedido.get("cantidad_pendiente"):
+        resumen += (
+            f"\n\n[📌 CANTIDAD YA CONFIRMADA POR EL CLIENTE]\n"
+            f"El cliente ya dijo explícitamente que quiere "
+            f"{pedido.get('cantidad_pendiente')} piezas, aunque todavía no se "
+            f"haya agregado el producto al pedido. NO le vuelvas a preguntar "
+            f"cuántas piezas quiere -- en cuanto confirmes qué producto/modelo "
+            f"es, llama a agregar_item usando cantidad={pedido.get('cantidad_pendiente')}."
+        )
+
     try:
         _tot = pedido_manager.calcular_total(pedido_id=pedido_id, borrador=pedido)
         if _tot.get("incompleto"):
@@ -1565,6 +1586,26 @@ preguntar él mismo para que el bot se diera cuenta del error):
   pidas el anticipo si la cantidad de algún producto no vino de una
   respuesta explícita del cliente.
 
+🔧 REGLA -- NO SE TE OLVIDE UNA CANTIDAD YA DICHA MIENTRAS ACLARAS EL
+MODELO (bug real detectado: un cliente escribió desde su primer mensaje
+"necesito 40 ositos en color rosa", pero el bot tardó varios turnos en
+aclarar qué modelo de osito quería exactamente -- con jaboncito, sencillo,
+etc. Como agregar_item necesita producto y cantidad juntos, la cantidad
+nunca se guardó mientras tanto, y como solo se te manda un resumen de los
+últimos turnos de la conversación (no toda), para cuando por fin se aclaró
+el modelo, el "40" original ya no aparecía ahí -- el bot terminó
+preguntando la cantidad otra vez, como si el cliente nunca la hubiera
+dicho, lo cual es muy notorio y molesto para el cliente):
+- Si el cliente ya te dio un número EXPLÍCITO de piezas pero todavía no
+  sabes el producto/modelo exacto (por eso no puedes llamar agregar_item
+  todavía), llama de inmediato a actualizar_pedido con
+  cantidad_pendiente=ese número, en ese mismo turno -- no esperes a
+  aclarar el modelo para guardarlo.
+- Revisa el bloque "[📌 CANTIDAD YA CONFIRMADA POR EL CLIENTE]" si aparece
+  en tu contexto: significa que ya tienes ese número guardado -- NUNCA
+  vuelvas a preguntar cuántas piezas quiere, usa ese mismo número en
+  cuanto llames a agregar_item con el producto ya confirmado.
+
 🔧 REGLA -- NUNCA INVENTES UNA OPCIÓN QUE NO OFRECISTE, SOBRE TODO CON
 TIPO_ENTREGA (bug real detectado: a un cliente de Guadalajara -- fuera de
 la zona de cobertura, solo puede recibir por DHL -- se le preguntó "¿quieres
@@ -1761,6 +1802,19 @@ TOOLS = [
                     "comprobante": {"type": "string"},
                     "notas": {"type": "string"},
                     "datos_tarjeta": {"type": "string"},
+                    "cantidad_pendiente": {
+                        "type": "integer",
+                        "description": (
+                            "Úsala en cuanto el cliente te diga un número EXPLÍCITO "
+                            "de piezas pero TODAVÍA no sepas el producto/modelo exacto "
+                            "(por eso no puedes llamar agregar_item todavía, que "
+                            "necesita producto y cantidad juntos). Guarda aquí ese "
+                            "número de inmediato para no olvidarlo mientras aclaras "
+                            "el modelo/colores -- después, cuando llames a "
+                            "agregar_item con el producto ya confirmado, usa este "
+                            "mismo número como cantidad, sin volver a preguntarlo."
+                        ),
+                    },
                 },
             },
         },
@@ -1996,6 +2050,7 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
         "evento", "fecha_evento", "tipo_entrega", "direccion", "municipio",
         "anticipo_confirmado", "monto_anticipo", "metodo_pago", "comprobante",
         "costo_envio", "es_urgente", "urgente", "notas", "datos_tarjeta",
+        "cantidad_pendiente",
     }
     campos_modificados = []
     for campo in campos_pedido:
@@ -2079,11 +2134,17 @@ def agregar_item_pedido(pedido, argumentos_json):
     if "items" not in pedido or not isinstance(pedido.get("items"), list):
         pedido["items"] = []
 
+    # 🔧 Respaldo del bug de "cantidad olvidada" (ver cantidad_pendiente
+    # en actualizar_pedido / construir_system_prompt): si el modelo no
+    # manda cantidad aquí pero ya había una cantidad pendiente guardada de
+    # un turno anterior, se usa esa en vez de caer directo al default de 1.
+    cantidad_solicitada = datos.get("cantidad") or pedido.get("cantidad_pendiente")
+
     existing = _buscar_item(pedido, producto)
     if existing:
         # sumar cantidad si viene, actualizar colores
-        if datos.get("cantidad"):
-            existing["cantidad"] = int(datos["cantidad"])
+        if cantidad_solicitada:
+            existing["cantidad"] = int(cantidad_solicitada)
         for k in ("color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
                   "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado", "con_bolsa"):
             if datos.get(k) not in (None, ""):
@@ -2093,12 +2154,13 @@ def agregar_item_pedido(pedido, argumentos_json):
         pedido["producto"] = existing.get("producto")
         pedido["cantidad"] = existing.get("cantidad")
         pedido["precio_unitario"] = existing.get("precio_unitario")
+        pedido["cantidad_pendiente"] = None
         print("📝 Item actualizado (vía agregar):", existing)
         return ["items"]
 
     item = {
         "producto": producto,
-        "cantidad": int(datos.get("cantidad") or 1),
+        "cantidad": int(cantidad_solicitada or 1),
     }
     for k in ("color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
               "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado", "con_bolsa"):
@@ -2111,6 +2173,7 @@ def agregar_item_pedido(pedido, argumentos_json):
     pedido["producto"] = item["producto"]
     pedido["cantidad"] = item["cantidad"]
     pedido["precio_unitario"] = item.get("precio_unitario")
+    pedido["cantidad_pendiente"] = None
     print("📝 Item agregado:", item)
     return ["items"]
 
@@ -2131,6 +2194,7 @@ def actualizar_item_pedido(pedido, argumentos_json):
         return agregar_item_pedido(pedido, argumentos_json)
     if datos.get("cantidad") not in (None, ""):
         existing["cantidad"] = int(datos["cantidad"])
+        pedido["cantidad_pendiente"] = None
     for k in ("color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
               "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado", "con_bolsa", "producto"):
         if k == "producto":

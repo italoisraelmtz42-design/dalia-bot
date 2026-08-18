@@ -1342,7 +1342,13 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None):
             f"es por paquetería y que el pedido debe estar 100% liquidado "
             f"(no solo anticipo) antes de enviarse, y consulta el costo real "
             f"de DHL con Dalia en vez de inventar un monto. NO llames "
-            f"actualizar_pedido con un costo_envio inventado para este caso."
+            f"actualizar_pedido con un costo_envio inventado para este caso.\n"
+            f"🚫 Para este cliente, tipo_entrega SOLO puede ser 'domicilio' (vía "
+            f"DHL) o 'local' (si él mismo puede recoger en persona). NUNCA le "
+            f"ofrezcas ni le confirmes 'punto de entrega' -- esos son lugares y "
+            f"horarios fijos solo dentro del área metropolitana de Monterrey, "
+            f"inútiles para un cliente foráneo. Tampoco le ofrezcas pedido "
+            f"urgente (ese cargo solo aplica con entrega en local, nunca con DHL)."
         )
     try:
         _tot = pedido_manager.calcular_total(pedido_id=pedido_id, borrador=pedido)
@@ -1558,6 +1564,40 @@ preguntar él mismo para que el bot se diera cuenta del error):
 - Nunca armes ni ofrezcas el resumen completo del pedido (con total) ni
   pidas el anticipo si la cantidad de algún producto no vino de una
   respuesta explícita del cliente.
+
+🔧 REGLA -- NUNCA INVENTES UNA OPCIÓN QUE NO OFRECISTE, SOBRE TODO CON
+TIPO_ENTREGA (bug real detectado: a un cliente de Guadalajara -- fuera de
+la zona de cobertura, solo puede recibir por DHL -- se le preguntó "¿quieres
+que te arme el resumen con entrega por DHL o prefieres recoger en local?".
+El cliente respondió solo "si", sin decir cuál de las dos. El bot respondió
+"perfecto, entonces queda la entrega en punto de entrega" -- una TERCERA
+opción que ni siquiera se había ofrecido, y que además es imposible para un
+cliente foráneo, porque los puntos de entrega son lugares y horarios fijos
+dentro del área metropolitana de Monterrey):
+- Cuando le des a elegir al cliente entre 2 o más opciones (tipo de
+  entrega, colores, variantes, fechas, lo que sea) y su respuesta es
+  ambigua ("si", "ok", "está bien", "como sea") sin decir cuál de ellas,
+  NUNCA asumas ni inventes cuál eligió -- pregúntale explícitamente cuál de
+  las opciones que le diste prefiere.
+- Nunca respondas con una opción que no esté entre las que tú mismo
+  ofreciste en el mensaje anterior.
+- Los PUNTOS DE ENTREGA (Soriana Fresnos, Sendero Escobedo, Merco Pueblo
+  Nuevo, Estación Metro Mitras) son EXCLUSIVOS para clientes dentro del
+  área metropolitana de Monterrey. Si el cliente ya dijo que vive fuera de
+  esa zona (otra ciudad o estado, envío por DHL), NUNCA le ofrezcas ni le
+  confirmes "punto de entrega" como su tipo_entrega -- para esos clientes
+  solo hay dos opciones válidas: envío nacional por DHL, o que el cliente
+  recoja él mismo en el local.
+- Los PEDIDOS URGENTES tampoco aplican para envío fuera de zona (DHL),
+  porque urgente solo se puede entregar en el local. Si un cliente foráneo
+  pregunta por entrega urgente, dile claramente que no aplica para su caso
+  a menos que él pueda recoger en persona en el local -- no le ofrezcas
+  "cambiar a punto de entrega" como forma de hacerlo urgente, esa
+  combinación no existe.
+- Recuerda también la regla de arriba: en cuanto le digas algo concreto al
+  cliente (incluyendo a qué tipo de entrega quedó su pedido), llama a
+  actualizar_pedido en ese mismo turno -- nunca digas en el chat que "ya
+  quedó" algo sin de verdad haberlo guardado.
 
 Cada vez que el cliente confirme o mencione un dato nuevo del pedido
 (producto, cantidad, evento, fecha, colores, tipo de entrega o dirección),
@@ -2165,6 +2205,28 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                     False,
                 )
 
+        # 🔧 Bug real detectado (18 ago 2026, cliente de Guadalajara): con
+        # el municipio confirmado fuera de zona (_envio_fuera_de_zona,
+        # requiere DHL), "punto de entrega" nunca es una opción válida --
+        # son lugares y horarios fijos solo dentro del área metropolitana
+        # de Monterrey. Mismo patrón que el bloqueo de arriba, esta vez
+        # por zona en lugar de por cantidad de piezas.
+        if "tipo_entrega" in campos_modificados and _es_tipo_entrega_punto_de_entrega(pedido.get("tipo_entrega")) and pedido.get("_envio_fuera_de_zona"):
+            pedido["tipo_entrega"] = tipo_entrega_previo
+            campos_modificados = [c for c in campos_modificados if c != "tipo_entrega"]
+            print(f"🚨 Se bloqueó tipo_entrega=punto_de_entrega: municipio "
+                  f"'{pedido.get('municipio')}' está fuera de zona (requiere DHL).")
+            return (
+                f"BLOQUEADO: no se puede entregar en punto de entrega -- el municipio "
+                f"'{pedido.get('municipio')}' está fuera de la zona de cobertura (requiere "
+                f"envío por DHL). Los puntos de entrega son solo para el área metropolitana "
+                f"de Monterrey. Para este cliente solo hay dos opciones válidas: envío "
+                f"nacional por DHL a domicilio, o que él mismo recoja en persona en el local "
+                f"-- pregúntale cuál prefiere, no asumas ninguna.",
+                campos_modificados,
+                False,
+            )
+
         anticipo_recien_confirmado = (
             "anticipo_confirmado" in campos_modificados
             and pedido.get("anticipo_confirmado") is True
@@ -2198,6 +2260,23 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                         f"{cantidad_total_anticipo:.0f} pieza(s) y la entrega en punto de entrega "
                         f"requiere mínimo {MINIMO_PIEZAS_PUNTO_DE_ENTREGA}. Explícale esto al cliente "
                         f"y ofrécele entrega en local o a domicilio antes de continuar con el anticipo.",
+                        campos_modificados,
+                        False,
+                    )
+                # 🔧 Mismo respaldo que arriba, ahora por zona (ver bloqueo
+                # de tipo_entrega=punto_de_entrega + _envio_fuera_de_zona):
+                # cubre el caso de que "punto de entrega" haya quedado
+                # guardado de un turno anterior para un cliente fuera de zona.
+                if pedido.get("_envio_fuera_de_zona"):
+                    pedido["anticipo_confirmado"] = False
+                    print(f"🚨 Se bloqueó confirmación de anticipo: tipo_entrega=punto_de_entrega con "
+                          f"municipio '{pedido.get('municipio')}' fuera de zona.")
+                    return (
+                        f"BLOQUEADO: no se puede confirmar el anticipo -- el municipio "
+                        f"'{pedido.get('municipio')}' está fuera de la zona de cobertura y un "
+                        f"punto de entrega no aplica para ese caso. Pregúntale al cliente si "
+                        f"prefiere envío por DHL a domicilio o recoger él mismo en el local "
+                        f"antes de continuar con el anticipo.",
                         campos_modificados,
                         False,
                     )

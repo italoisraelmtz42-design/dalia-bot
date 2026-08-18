@@ -358,6 +358,29 @@ def detectar_imagenes_automaticas(texto_cliente: str) -> list:
     return claves
 
 
+# 🔧 Palabras que indican que el texto SÍ está hablando de un producto de
+# toalla (los que de verdad usan la paleta de colores de toallita/moño/
+# jaboncito que muestra la foto "colores_disponibles"). Se usan para
+# filtrar esa foto cuando se detecta en la RESPUESTA del bot -- bug real
+# detectado: un cliente preguntó por abanicos, el bot cotizó el abanico
+# mencionando "...moño a elegir color, blonda..." y la sola palabra
+# "color" disparó, por error, la foto de colores de toallita/jaboncito
+# (un producto que ni siquiera aplica al abanico, que no lleva jaboncito).
+# No se usa para filtrar lo que pregunta el CLIENTE (si el cliente pregunta
+# "qué colores tienen" a secas, sí queremos mandarla).
+PALABRAS_CONTEXTO_PRODUCTO_DE_TOALLA = (
+    "toallita", "toalla", "toallas", "jaboncito", "jabon", "osito", "ositos",
+    "animalito", "animalitos", "oracion", "decenario", "velita",
+)
+
+
+def _respuesta_menciona_producto_de_toalla(texto: str) -> bool:
+    if not texto:
+        return False
+    texto_norm = normalizar_producto_clave(texto)
+    return any(normalizar_producto_clave(p) in texto_norm for p in PALABRAS_CONTEXTO_PRODUCTO_DE_TOALLA)
+
+
 # 🆕 Frases que SÍ identifican una variante ESPECÍFICA de osito (a
 # diferencia de "osito" o "ositos" sueltos, que son ambiguos entre 9
 # modelos distintos). Cada archivo de producto en /conocimiento ya dice
@@ -3974,6 +3997,14 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             detectar_imagenes_automaticas(respuesta)
             + detectar_imagen_osito_especifico(respuesta)
         ))
+        # 🔧 Ver PALABRAS_CONTEXTO_PRODUCTO_DE_TOALLA arriba: si "colores_
+        # disponibles" se detectó solo por la palabra suelta "color"/
+        # "colores" en la respuesta, pero la respuesta no habla de ningún
+        # producto de toalla/jaboncito, es un falso positivo (ej. "moño a
+        # elegir color" al cotizar un abanico) -- no se manda la foto.
+        if "colores_disponibles" in claves_imagen_respuesta and not _respuesta_menciona_producto_de_toalla(respuesta):
+            claves_imagen_respuesta.remove("colores_disponibles")
+            print("🖼️ Se omitió foto de colores (respuesta del bot) -- la respuesta no habla de un producto de toalla/jaboncito, probablemente coincidencia con otra palabra.")
         if detectar_info_enviada(respuesta).get("colores_disponibles"):
             claves_imagen_respuesta.append("colores_disponibles")
         claves_imagen_respuesta = list(dict.fromkeys(claves_imagen_respuesta))

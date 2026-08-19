@@ -8,6 +8,7 @@ import hashlib
 import base64
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -49,7 +50,46 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# 🔧 CORREGIDO (fuga de memoria real detectada 19 ago 2026): el SDK de
+# OpenAI, si no se le da un timeout explícito, usa 10 minutos (600s) por
+# default -- una sola llamada lenta/colgada podía dejar un hilo de fondo
+# vivo (y toda la memoria que tenía referenciada: historial, sesión,
+# imágenes, etc.) hasta 10 minutos. Con muchos mensajes al día, algunos
+# de esos hilos colgados se iban acumulando durante horas sin nunca
+# soltarse, hasta llenar la memoria del servidor y tumbar el bot. 60s es
+# más que suficiente para una respuesta normal del modelo.
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=60.0, max_retries=2)
+
+# 🔧 CORREGIDO (mismo bug de fuga de memoria, causa raíz): antes, CADA
+# mensaje entrante creaba un threading.Thread nuevo de sistema operativo
+# (sin límite alguno) para procesarlo en segundo plano. Si llegaban
+# muchos mensajes seguidos, o si algunas llamadas se colgaban (ver fix
+# de timeout arriba), esos hilos se podían ir acumulando sin control --
+# cada uno reservando su propia pila de memoria y manteniendo viva toda
+# la sesión/historial que estaba usando, durante horas. Ahora todo el
+# procesamiento en segundo plano pasa por un pool ACOTADO de hilos
+# (máximo 20 a la vez): si llegan más mensajes de los que se pueden
+# procesar en paralelo, simplemente se hacen fila en vez de crear más
+# hilos nuevos -- así la memoria usada por hilos de fondo tiene un techo
+# fijo, sin importar cuántos mensajes lleguen.
+EJECUTOR_MENSAJES = ThreadPoolExecutor(max_workers=20, thread_name_prefix="msg-bg")
+
+
+def _lanzar_en_fondo(target, *args, **kwargs):
+    """Encola una tarea de procesamiento (mensaje, comentario, etc.) en el
+    pool acotado de hilos de background, en vez de crear un hilo de SO
+    nuevo cada vez (ver comentario de EJECUTOR_MENSAJES arriba). También
+    atrapa cualquier excepción no manejada para que quede en los logs en
+    vez de perderse en silencio (los threading.Thread daemon de antes
+    tampoco la mostraban de forma consistente en producción)."""
+    def _envoltura():
+        try:
+            target(*args, **kwargs)
+        except Exception as e:
+            nombre = getattr(target, "__name__", repr(target))
+            print(f"⚠️ Excepción no capturada en tarea de fondo ({nombre}): {repr(e)}")
+
+    EJECUTOR_MENSAJES.submit(_envoltura)
 
 # Crea las tablas de SQLite si no existen
 try:
@@ -4233,41 +4273,31 @@ def handle_message():
         if tipo == "image":
             media_id = mensaje["image"]["id"]
             caption = mensaje["image"].get("caption", "")
-            threading.Thread(
-                target=procesar_mensaje_en_fondo,
-                args=(numero, caption),
-                kwargs={"media_id_imagen": media_id},
-                daemon=True,
-            ).start()
+            _lanzar_en_fondo(
+                procesar_mensaje_en_fondo,
+                numero, caption,
+                media_id_imagen=media_id,
+            )
             return jsonify({"status": "ok"}), 200
 
         if tipo == "audio":
             # Meta manda "audio" tanto para notas de voz como para audios
             # adjuntos normales; ambos llegan igual, con un media_id.
             media_id = mensaje["audio"]["id"]
-            threading.Thread(
-                target=procesar_mensaje_en_fondo,
-                args=(numero, ""),
-                kwargs={"media_id_audio": media_id},
-                daemon=True,
-            ).start()
+            _lanzar_en_fondo(
+                procesar_mensaje_en_fondo,
+                numero, "",
+                media_id_audio=media_id,
+            )
             return jsonify({"status": "ok"}), 200
 
         if tipo != "text":
-            threading.Thread(
-                target=procesar_mensaje_no_soportado,
-                args=(numero, tipo),
-                daemon=True,
-            ).start()
+            _lanzar_en_fondo(procesar_mensaje_no_soportado, numero, tipo)
             return jsonify({"status": "tipo de mensaje no soportado"}), 200
 
         texto_cliente = mensaje["text"]["body"]
 
-        threading.Thread(
-            target=procesar_mensaje_en_fondo,
-            args=(numero, texto_cliente),
-            daemon=True,
-        ).start()
+        _lanzar_en_fondo(procesar_mensaje_en_fondo, numero, texto_cliente)
 
     except (KeyError, IndexError, TypeError) as e:
         print("Evento sin mensaje de texto reconocible:", e)
@@ -4315,41 +4345,37 @@ def handle_message_ycloud():
         if tipo == "image":
             media_url = mensaje["image"]["link"]
             caption = mensaje["image"].get("caption", "")
-            threading.Thread(
-                target=procesar_mensaje_en_fondo,
-                args=(numero, caption),
-                kwargs={"media_url_imagen_ycloud": media_url, "proveedor_whatsapp": "ycloud"},
-                daemon=True,
-            ).start()
+            _lanzar_en_fondo(
+                procesar_mensaje_en_fondo,
+                numero, caption,
+                media_url_imagen_ycloud=media_url, proveedor_whatsapp="ycloud",
+            )
             return jsonify({"status": "ok"}), 200
 
         if tipo == "audio":
             media_url = mensaje["audio"]["link"]
-            threading.Thread(
-                target=procesar_mensaje_en_fondo,
-                args=(numero, ""),
-                kwargs={"media_url_audio_ycloud": media_url, "proveedor_whatsapp": "ycloud"},
-                daemon=True,
-            ).start()
+            _lanzar_en_fondo(
+                procesar_mensaje_en_fondo,
+                numero, "",
+                media_url_audio_ycloud=media_url, proveedor_whatsapp="ycloud",
+            )
             return jsonify({"status": "ok"}), 200
 
         if tipo != "text":
-            threading.Thread(
-                target=procesar_mensaje_no_soportado,
-                args=(numero, tipo),
-                kwargs={"proveedor_whatsapp": "ycloud"},
-                daemon=True,
-            ).start()
+            _lanzar_en_fondo(
+                procesar_mensaje_no_soportado,
+                numero, tipo,
+                proveedor_whatsapp="ycloud",
+            )
             return jsonify({"status": "tipo de mensaje no soportado"}), 200
 
         texto_cliente = mensaje["text"]["body"]
 
-        threading.Thread(
-            target=procesar_mensaje_en_fondo,
-            args=(numero, texto_cliente),
-            kwargs={"proveedor_whatsapp": "ycloud"},
-            daemon=True,
-        ).start()
+        _lanzar_en_fondo(
+            procesar_mensaje_en_fondo,
+            numero, texto_cliente,
+            proveedor_whatsapp="ycloud",
+        )
 
     except (KeyError, IndexError, TypeError) as e:
         print("[YCloud] Evento sin mensaje de texto reconocible:", e)
@@ -4501,40 +4527,35 @@ def handle_message_messenger():
                     # bot puede seguir la conversación con naturalidad
                     # (ej. "👍" como confirmación de que leyó algo), pero
                     # SIN forzar ninguna decisión de pedido/anticipo.
-                    threading.Thread(
-                        target=procesar_mensaje_en_fondo,
-                        args=(psid, texto_cliente or "(el cliente reaccionó con un sticker/👍)"),
-                        kwargs={"canal": "messenger", "pagina_id": pagina_id_actual},
-                        daemon=True,
-                    ).start()
+                    _lanzar_en_fondo(
+                        procesar_mensaje_en_fondo,
+                        psid, texto_cliente or "(el cliente reaccionó con un sticker/👍)",
+                        canal="messenger", pagina_id=pagina_id_actual,
+                    )
                 elif imagen_url:
-                    threading.Thread(
-                        target=procesar_mensaje_en_fondo,
-                        args=(psid, texto_cliente),
-                        kwargs={"media_url_imagen_messenger": imagen_url, "canal": "messenger", "pagina_id": pagina_id_actual},
-                        daemon=True,
-                    ).start()
+                    _lanzar_en_fondo(
+                        procesar_mensaje_en_fondo,
+                        psid, texto_cliente,
+                        media_url_imagen_messenger=imagen_url, canal="messenger", pagina_id=pagina_id_actual,
+                    )
                 elif audio_url:
-                    threading.Thread(
-                        target=procesar_mensaje_en_fondo,
-                        args=(psid, texto_cliente),
-                        kwargs={"media_url_audio_messenger": audio_url, "canal": "messenger", "pagina_id": pagina_id_actual},
-                        daemon=True,
-                    ).start()
+                    _lanzar_en_fondo(
+                        procesar_mensaje_en_fondo,
+                        psid, texto_cliente,
+                        media_url_audio_messenger=audio_url, canal="messenger", pagina_id=pagina_id_actual,
+                    )
                 elif texto_cliente:
-                    threading.Thread(
-                        target=procesar_mensaje_en_fondo,
-                        args=(psid, texto_cliente),
-                        kwargs={"canal": "messenger", "pagina_id": pagina_id_actual},
-                        daemon=True,
-                    ).start()
+                    _lanzar_en_fondo(
+                        procesar_mensaje_en_fondo,
+                        psid, texto_cliente,
+                        canal="messenger", pagina_id=pagina_id_actual,
+                    )
                 else:
-                    threading.Thread(
-                        target=procesar_mensaje_no_soportado,
-                        args=(psid, "adjunto no soportado"),
-                        kwargs={"canal": "messenger", "pagina_id": pagina_id_actual},
-                        daemon=True,
-                    ).start()
+                    _lanzar_en_fondo(
+                        procesar_mensaje_no_soportado,
+                        psid, "adjunto no soportado",
+                        canal="messenger", pagina_id=pagina_id_actual,
+                    )
 
             # 🔧 Comentarios públicos en publicaciones de la página
             # (campo "feed" del webhook -- separado de "messaging").
@@ -4549,11 +4570,10 @@ def handle_message_messenger():
                     continue
                 comment_id = valor.get("comment_id")
                 remitente = valor.get("from") or {}
-                threading.Thread(
-                    target=procesar_comentario_pagina,
-                    args=(pagina_id_actual, comment_id, remitente.get("id"), remitente.get("name"), valor.get("message", "")),
-                    daemon=True,
-                ).start()
+                _lanzar_en_fondo(
+                    procesar_comentario_pagina,
+                    pagina_id_actual, comment_id, remitente.get("id"), remitente.get("name"), valor.get("message", ""),
+                )
 
     except Exception as e:
         print("⚠️ Error procesando webhook de Messenger:", repr(e))

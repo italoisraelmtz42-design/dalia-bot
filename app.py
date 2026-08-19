@@ -2433,7 +2433,45 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                     campos_modificados,
                     False,
                 )
-        return "ok", campos_modificados, anticipo_recien_confirmado
+        # 🔧 CORREGIDO (bug real detectado 19 ago 2026): Python ya
+        # recalculaba es_urgente de forma determinística en cuanto se
+        # sabía fecha_evento (ver bloque arriba, "Urgencia determinística"),
+        # pero el resultado de esta tool call SIEMPRE regresaba solo "ok" --
+        # el modelo nunca se enteraba de ese cálculo. Caso real: una
+        # clienta pidió fecha para el 2 de septiembre (con hoy siendo 19
+        # de agosto, muy lejos del límite real de urgencia), Python
+        # guardó correctamente es_urgente=False, pero el modelo de todos
+        # modos le dijo a la clienta "es un pedido urgente" con cargo
+        # extra de $50 -- porque nunca vio la corrección, solo su propia
+        # cuenta (equivocada) de fechas. Ahora, cuando fecha_evento se
+        # tocó en este turno, el resultado de la tool call SIEMPRE
+        # incluye el estado real de es_urgente calculado por Python, para
+        # que el modelo no tenga que (ni deba) hacer esa cuenta por su
+        # cuenta.
+        mensaje_resultado = "ok"
+        if "fecha_evento" in campos_modificados:
+            fecha_minima_real = sumar_dias_habiles(
+                datetime.now(ZONA_HORARIA_NEGOCIO).date(), 4
+            )
+            if pedido.get("es_urgente"):
+                mensaje_resultado = (
+                    "ok. 📅 CÁLCULO REAL DE URGENCIA (hecho por el sistema, no lo "
+                    "recalcules tú): esta fecha de entrega SÍ es un PEDIDO URGENTE "
+                    f"(antes del {fecha_minima_real.strftime('%d/%m/%Y')}, que es el "
+                    "límite mínimo para un pedido normal). Aplica cargo extra de $50 "
+                    "MXN y SOLO se puede entregar en el local -- avísale esto al "
+                    "cliente."
+                )
+            else:
+                mensaje_resultado = (
+                    "ok. 📅 CÁLCULO REAL DE URGENCIA (hecho por el sistema, no lo "
+                    "recalcules tú): esta fecha de entrega es un PEDIDO NORMAL, NO "
+                    f"es urgente (el límite mínimo para ser urgente es antes del "
+                    f"{fecha_minima_real.strftime('%d/%m/%Y')}, y hay tiempo de sobra). "
+                    "NO le digas al cliente que es urgente ni le cobres el cargo extra "
+                    "de $50, aunque tú hayas pensado lo contrario."
+                )
+        return mensaje_resultado, campos_modificados, anticipo_recien_confirmado
 
     if name == "agregar_item":
         campos = agregar_item_pedido(pedido, args)

@@ -368,7 +368,15 @@ PALABRAS_CLAVE_IMAGEN_AUTOMATICA = {
     "buho_de_toalla": ("buho", "buhos"),
     "caballito_de_toalla": ("caballo", "caballito", "caballos"),
     "conejito_de_toalla": ("conejo", "conejito", "conejos"),
-    "leoncito_de_toalla": ("leon", "leoncito", "leones"),
+    # 🔧 (19 ago 2026, bug real detectado por Israel) Se quitó "leon"
+    # suelta de aquí: "leon" (sin acento, ya normalizado) es substring de
+    # "Nuevo León" -- el nombre del estado, que aparece muy seguido
+    # cuando el bot manda su propia dirección ("...Apodaca, Nuevo León,
+    # ..."). Eso disparaba por error la foto del leoncito de toalla en
+    # medio de una respuesta sobre la ubicación del local, sin que nadie
+    # hubiera mencionado el producto. "leoncito" y "leones" no tienen ese
+    # problema (nadie escribe "Nuevo Leoncito" ni "Nuevo Leones").
+    "leoncito_de_toalla": ("leoncito", "leones"),
     "mariposa_de_toalla": ("mariposa", "mariposas"),
     "perrito_de_toalla": ("perro", "perrito", "perros"),
     "unicornio_de_toalla": ("unicornio", "unicornios"),
@@ -2300,6 +2308,67 @@ _PATRON_PAGO_YA_REALIZADO = re.compile(
 )
 
 
+# 🔧 (19 ago 2026) Ver uso en preguntar_ia -- detecta un número EXPLÍCITO
+# de piezas en el mensaje del cliente (ej. "50 piezas", "40 ositos",
+# "50 pzs") para no perderlo aunque el modelo tarde varios turnos en
+# aclarar el producto exacto. A propósito NO matchea un número suelto
+# sin palabra de cantidad/producto al lado (para no confundirlo con un
+# precio, un teléfono, una fecha, etc.).
+_PATRON_CANTIDAD_EXPLICITA = re.compile(
+    r"\b(\d{1,4})\s*(?:x\s*)?(piezas?|pzs?\.?|unidades?|ositos?|ositas?|osos?)\b",
+    re.IGNORECASE,
+)
+
+
+# 🔧 (19 ago 2026, bug real reportado por Israel) Caso real: la clienta
+# dijo "Oso color celeste" (sin mencionar jaboncito para nada) y el
+# modelo agregó al pedido "osito CON jaboncito" por su cuenta -- en
+# contra de la regla ya escrita en la Base de Conocimiento
+# ("Trato al cliente/035_Variantes_De_Producto.txt": "No asumas... 'con
+# jabón' ni ninguna variante por defecto"). Igual que con el anticipo,
+# la regla ya existía en el prompt pero el modelo no la siguió esa vez
+# -- este candado la hace cumplir también por código.
+_PRODUCTOS_OSITO_CON_VARIANTE_JABONCITO = (
+    "osito con jaboncito", "osito sencillo sin jabon", "osito sencillo sin jaboncito",
+)
+_PALABRAS_JABONCITO = ("jaboncito", "jabon", "sencillo")
+
+
+def _requiere_confirmar_variante_jaboncito(producto):
+    """True si 'producto' es una de las variantes de osito que dependen
+    de que el cliente haya elegido con/sin jaboncito (no aplica a otros
+    productos como el kit oración+velita, que no lleva jaboncito)."""
+    clave = normalizar_producto_clave(producto or "")
+    if not clave:
+        return False
+    return any(normalizar_producto_clave(p) in clave for p in _PRODUCTOS_OSITO_CON_VARIANTE_JABONCITO)
+
+
+def _variante_jaboncito_fue_mencionada(texto_cliente, sesion):
+    """True si en el mensaje de este turno o en los últimos turnos de la
+    conversación (los del CLIENTE, no los del bot) se mencionó alguna
+    palabra relacionada a la variante con/sin jaboncito. Se revisa
+    también la conversación reciente (no solo el mensaje de este turno)
+    para no bloquear el caso legítimo de "el cliente ya dijo 'con
+    jaboncito' hace 1-2 turnos y ahora solo está dando el color/cantidad"."""
+    textos = []
+    if texto_cliente:
+        textos.append(texto_cliente)
+    mensajes = (sesion or {}).get("messages") or []
+    for m in mensajes[-8:]:
+        if m.get("role") != "user":
+            continue
+        contenido = m.get("content")
+        if isinstance(contenido, str):
+            textos.append(contenido)
+        elif isinstance(contenido, list):
+            for parte in contenido:
+                if isinstance(parte, dict) and parte.get("type") == "text":
+                    textos.append(parte.get("text") or "")
+    texto_junto = normalizar_producto_clave(" ".join(t for t in textos if t))
+    return any(p in texto_junto for p in _PALABRAS_JABONCITO)
+
+
 def _cliente_confirmo_pago_ya_realizado_por_texto(texto_cliente):
     """True si el texto del cliente (este turno) dice explícitamente que
     YA pagó/transfirió, no solo que va a pagar o cuánto piensa pagar."""
@@ -2533,6 +2602,26 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         return mensaje_resultado, campos_modificados, anticipo_recien_confirmado
 
     if name == "agregar_item":
+        try:
+            _args_agregar = json.loads(args) if args else {}
+        except (json.JSONDecodeError, TypeError):
+            _args_agregar = {}
+        _producto_nuevo = (_args_agregar.get("producto") or "").strip()
+        if (
+            _requiere_confirmar_variante_jaboncito(_producto_nuevo)
+            and not _buscar_item(pedido, _producto_nuevo)
+            and not _variante_jaboncito_fue_mencionada(texto_cliente, sesion)
+        ):
+            print(f"🚨 Se bloqueó agregar_item: variante con/sin jaboncito no confirmada "
+                  f"explícitamente por el cliente para '{_producto_nuevo}'")
+            return (
+                "BLOQUEADO: no se puede agregar este producto todavía -- el cliente no ha "
+                "confirmado explícitamente si lo quiere CON jaboncito o SIN jaboncito "
+                "(sencillo). No asumas ninguna de las dos opciones por default. Pregúntaselo "
+                "directo antes de agregar el producto al pedido.",
+                [],
+                False,
+            )
         campos = agregar_item_pedido(pedido, args)
         return "ok", campos, False
 
@@ -2576,6 +2665,27 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
     pedido = sesion["pedido"]
     info_enviada = sesion["info_enviada"]
     pedido_id = sesion.get("pedido_id")
+
+    # 🔧 (19 ago 2026, bug real reportado por Israel) Respaldo
+    # determinístico para "cantidad ya dicha mientras se aclara el
+    # modelo" (ver REGLA en construir_system_prompt / cantidad_pendiente).
+    # Caso real: la clienta escribió "necesito 50 piezas" ANTES de decir
+    # qué producto quería; el modelo debía guardar cantidad_pendiente=50
+    # de inmediato (así lo pide el prompt), pero no lo hizo -- resultado:
+    # unos turnos después, ya con el producto aclarado, el bot le volvió
+    # a preguntar cuántas piezas quería, como si nunca lo hubiera dicho.
+    # Este candado no depende de que el modelo se acuerde: si el mensaje
+    # del cliente trae un número explícito seguido de una palabra de
+    # cantidad/producto ("50 piezas", "40 ositos", "50 pzs") y todavía no
+    # hay ninguna cantidad_pendiente guardada, se guarda aquí mismo,
+    # ANTES de construir el prompt -- así el recordatorio "[📌 CANTIDAD
+    # YA CONFIRMADA...]" ya aparece desde este mismo turno.
+    if texto_cliente and not pedido.get("cantidad_pendiente"):
+        _match_cantidad = _PATRON_CANTIDAD_EXPLICITA.search(texto_cliente)
+        if _match_cantidad:
+            pedido["cantidad_pendiente"] = int(_match_cantidad.group(1))
+            print(f"📌 Cantidad detectada de forma determinística en el mensaje del cliente: "
+                  f"{pedido['cantidad_pendiente']} (texto: {texto_cliente!r})")
 
     # ================================================================
     # 🔥 CAMBIO CLAVE: LOGS DE CONTEXTO ANTES DE OPENAI

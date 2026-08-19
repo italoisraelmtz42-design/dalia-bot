@@ -2271,7 +2271,44 @@ def eliminar_item_pedido(pedido, argumentos_json):
     return ["items"] if len(nuevos) != antes else []
 
 
-def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagina_id=None):
+# 🔧 (19 ago 2026, candado nuevo a pedido explícito de Israel) Caso real
+# detectado: el bot preguntó "¿cuál es el monto que VAS A PAGAR de
+# anticipo?" (a futuro), la clienta contestó solo "$50 MXN" (la cantidad
+# que pensaba pagar, no que ya hubiera pagado), y el modelo de todos
+# modos llamó a actualizar_pedido con anticipo_confirmado=true, dándole
+# las gracias por un anticipo que nunca llegó a pagar (nunca se le
+# mandaron ni los datos bancarios). La regla en el prompt (sección
+# "REGLA DE SEGURIDAD Y CIERRE AUTOMÁTICO") ya decía que el texto debe
+# confirmar explícitamente que YA pagó/transfirió -- pero esa regla vive
+# solo en el prompt, y el modelo puede (y en este caso lo hizo) no
+# seguirla. Este candado la hace cumplir también por código: para una
+# confirmación por TEXTO (no imagen), el mensaje del cliente en este
+# mismo turno debe contener una palabra de pago YA REALIZADO ("ya
+# pagué", "ya transferí", "ya deposité", "ya mandé el comprobante",
+# etc.) -- una cifra sola ("$50 MXN") ya no es suficiente.
+_PATRON_PAGO_YA_REALIZADO = re.compile(
+    r"\bya\b[^.\n]{0,25}\b("
+    r"transfer[íi]|transferido|transferencia\s+hecha|"
+    r"deposit[ée]|depositado|dep[óo]sito\s+hecho|"
+    r"pagu[ée]|pagado|"
+    r"mand[ée]|enviado|envi[ée]|"
+    r"hecho\s+el\s+pago|hice\s+el\s+pago|hice\s+la\s+transferencia|"
+    r"hice\s+el\s+dep[óo]sito|qued[óo]\s+(hecho|pagado)|"
+    r"est[áa]\s+(hecho|pagado)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _cliente_confirmo_pago_ya_realizado_por_texto(texto_cliente):
+    """True si el texto del cliente (este turno) dice explícitamente que
+    YA pagó/transfirió, no solo que va a pagar o cuánto piensa pagar."""
+    if not texto_cliente:
+        return False
+    return bool(_PATRON_PAGO_YA_REALIZADO.search(texto_cliente))
+
+
+def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagina_id=None, texto_cliente=None):
     name = tool_call.function.name
     args = tool_call.function.arguments
 
@@ -2426,6 +2463,35 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                     campos_modificados,
                     False,
                 )
+            # 🔧 CAPA EXTRA (bug real detectado 19 ago 2026, clienta real):
+            # el bot preguntó "¿cuál es el monto que VAS A PAGAR?" (a
+            # futuro) y la clienta solo contestó "$50 MXN" -- diciendo
+            # cuánto pensaba pagar, no que ya hubiera pagado. El modelo
+            # confirmó el anticipo de todos modos, sin haberle mandado
+            # nunca los datos bancarios. La regla del prompt ya pide un
+            # texto explícito de pago YA hecho para el camino de "texto"
+            # (metodo_pago="confirmado por texto") -- este candado la
+            # hace cumplir también por código, sin depender de que el
+            # modelo se acuerde. Solo aplica al camino de texto: si vino
+            # de una imagen (comprobante leído por Vision), ese camino ya
+            # tiene su propia verificación arriba y no se toca aquí.
+            if (pedido.get("metodo_pago") or "").strip().lower() == "confirmado por texto":
+                if not _cliente_confirmo_pago_ya_realizado_por_texto(texto_cliente):
+                    pedido["anticipo_confirmado"] = False
+                    print(f"🚨 Se bloqueó confirmación de anticipo: el cliente no confirmó explícitamente "
+                          f"un pago YA realizado por texto (mensaje: {texto_cliente!r})")
+                    return (
+                        "BLOQUEADO: no se puede confirmar el anticipo -- el cliente mencionó "
+                        "un monto pero no dijo explícitamente que YA pagó o transfirió (ej. "
+                        "'ya te transferí $50', 'ya deposité 50 pesos'). Si el cliente solo "
+                        "dijo cuánto va a pagar o confirmó el resumen del pedido, eso NO "
+                        "es lo mismo que confirmar el pago -- si no le has mandado los datos "
+                        "bancarios todavía, mándaselos ahora; si ya se los mandaste, pídele "
+                        "que te confirme cuando YA haya hecho la transferencia/depósito, o "
+                        "que te mande la captura del comprobante.",
+                        campos_modificados,
+                        False,
+                    )
         # 🔧 CORREGIDO (bug real detectado 19 ago 2026): Python ya
         # recalculaba es_urgente de forma determinística en cuanto se
         # sabía fecha_evento (ver bloque arriba, "Urgencia determinística"),
@@ -2586,7 +2652,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
             anticipo_recien_confirmado_este_turno = False
             for tool_call in mensaje.tool_calls:
                 resultado, campos_modificados, anticipo_recien_confirmado = ejecutar_tool_call(
-                    tool_call, sesion, numero, pedido, canal, pagina_id
+                    tool_call, sesion, numero, pedido, canal, pagina_id, texto_cliente=texto_cliente
                 )
                 campos_modificados_total.extend(campos_modificados)
                 if anticipo_recien_confirmado:
@@ -4144,7 +4210,11 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         if respuesta is None and sesion.get("_anticipo_recien_confirmado"):
             sesion["_anticipo_recien_confirmado"] = False
             mensaje_1 = "¡Gracias por tu anticipo! En breve te contactaremos para enviarte la nota de tu pedido."
-            mensaje_2 = "⌛"
+            # 🔧 (19 ago 2026, a pedido explícito de Israel) Antes este
+            # segundo mensaje era solo el emoji de reloj de arena suelto.
+            # Ahora también se le pide al cliente un número de WhatsApp
+            # para poder darle seguimiento a su pedido.
+            mensaje_2 = "¿Puedes compartirnos por favor un número de WhatsApp para darle seguimiento a tu pedido? ¡Gracias! ⌛"
 
             try:
                 # sincronizar_pedido ya regresa el pedido oficial (recién

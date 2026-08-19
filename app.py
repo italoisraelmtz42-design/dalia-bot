@@ -3771,61 +3771,6 @@ def dashboard():
     return html
 
 
-@app.route("/admin/limpiar-pedidos-prueba-19ago")
-def limpiar_pedidos_prueba_19ago():
-    """🧹 Limpieza puntual, autorizada explícitamente por Israel el 19 ago
-    2026 ("los de whatsaap son falsos, todos. los reales son los de
-    messenger de face."): borra 4 pedidos del canal WhatsApp que resultaron
-    ser pruebas internas (no clientes reales) -- estaban inflando
-    "Pedidos", "Ingresos confirmados", "Venta total" y "Productos
-    vendidos" en el dashboard. Se confirmó cada uno revisando su
-    conversación completa antes de esta limpieza (uno incluso empieza
-    con el texto literal "Mensaje prueba."). Los pedidos de Messenger NO
-    se tocan -- esos sí son clientes reales, confirmado también a mano.
-
-    Protegida con la misma contraseña del dashboard. Pensada para
-    ejecutarse UNA sola vez y luego quitarse del código (no es una
-    función de administración permanente).
-    """
-    clave_recibida = request.args.get("clave", "")
-    if not DASHBOARD_PASSWORD or clave_recibida != DASHBOARD_PASSWORD:
-        return "🔒 Acceso no autorizado. Agrega ?clave=TU_CLAVE a la URL.", 401
-
-    NUMEROS_PRUEBA_WHATSAPP = [
-        "37639664919011259",  # PD-20260815-11A7E8
-        "27815079558172900",  # PD-20260813-2018F5
-        "9423651774367457",   # PD-20260813-541283 ("Mensaje prueba.")
-        "5218137383943",      # DAL-2026-000002 (BORRADOR, 116 msjs de pruebas)
-    ]
-
-    resultado = []
-    with database.get_db_connection() as conn:
-        for numero in NUMEROS_PRUEBA_WHATSAPP:
-            filas_pedidos = conn.execute(
-                "SELECT id, folio FROM pedidos WHERE telefono = ? AND COALESCE(canal, 'whatsapp') = 'whatsapp'",
-                (numero,),
-            ).fetchall()
-            folios_borrados = [f["folio"] for f in filas_pedidos]
-            for fila in filas_pedidos:
-                # FK con ON DELETE CASCADE (foreign_keys=ON en la conexión)
-                # se lleva pedido_items, pagos, entregas, pedido_historial
-                # y pedido_eventos de este pedido automáticamente.
-                conn.execute("DELETE FROM pedidos WHERE id = ?", (fila["id"],))
-
-            cur = conn.execute(
-                "DELETE FROM historial_chat WHERE telefono = ? AND COALESCE(canal, 'whatsapp') = 'whatsapp'",
-                (numero,),
-            )
-            resultado.append({
-                "telefono": numero,
-                "pedidos_borrados": folios_borrados,
-                "mensajes_chat_borrados": cur.rowcount,
-            })
-        conn.commit()
-
-    return jsonify({"status": "ok", "detalle": resultado})
-
-
 @app.route("/dashboard/conversacion")
 def dashboard_conversacion():
     """Visor de la conversación real de un cliente específico -- usa

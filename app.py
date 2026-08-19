@@ -119,6 +119,13 @@ BOT_PAUSADO_GLOBAL = os.getenv("BOT_PAUSADO", "false").strip().lower() == "true"
 # notificación (no rompe nada del resto del bot).
 DALIA_WHATSAPP_NUMERO = os.getenv("DALIA_WHATSAPP_NUMERO", "")
 
+# 🔧 (19 ago 2026) Número personal de una vendedora, a quien también se
+# le manda EXACTAMENTE el mismo aviso de anticipo confirmado que a Dalia
+# (mismo mensaje, mismo mecanismo -- ver notificar_a_dalia). Si no está
+# configurado, simplemente no se le manda nada a ella (no rompe nada del
+# resto del bot).
+VENDEDORA_WHATSAPP_NUMERO = os.getenv("VENDEDORA_WHATSAPP_NUMERO", "")
+
 # Números autorizados para usar el código de reactivación/reset (🧸☠️🧸).
 # Lista separada por comas en .env, ej: "5218112345678,5218187654321".
 # Por seguridad, Dalia (DALIA_WHATSAPP_NUMERO) siempre queda autorizada
@@ -2914,14 +2921,20 @@ def notificar_a_dalia(pedido_db, pedido_ram):
     pueda contactar al cliente con seguridad, sin tener que preguntarle
     "oye, ¿qué habíamos quedado?".
 
+    🔧 (19 ago 2026) Si VENDEDORA_WHATSAPP_NUMERO está configurado,
+    también se le manda a ella este mismo mensaje (idéntico, mismo
+    momento). Cada número se evalúa por separado: si falta uno de los
+    dos, el otro igual recibe su aviso con normalidad.
+
     Usa como fuente principal el pedido YA GUARDADO en la base de datos
     (pedido_db, con sus items/entrega/pagos) porque es el registro más
     confiable -- pedido_ram (el borrador en RAM) se usa solo como
-    respaldo si algo faltó en la BD. Si DALIA_WHATSAPP_NUMERO no está
-    configurado, no hace nada (no rompe el resto del flujo).
+    respaldo si algo faltó en la BD. Si ni DALIA_WHATSAPP_NUMERO ni
+    VENDEDORA_WHATSAPP_NUMERO están configurados, no hace nada (no rompe
+    el resto del flujo).
     """
-    if not DALIA_WHATSAPP_NUMERO:
-        print("⚠️ DALIA_WHATSAPP_NUMERO no configurado, no se pudo notificar a Dalia")
+    if not DALIA_WHATSAPP_NUMERO and not VENDEDORA_WHATSAPP_NUMERO:
+        print("⚠️ Ni DALIA_WHATSAPP_NUMERO ni VENDEDORA_WHATSAPP_NUMERO están configurados, no se pudo notificar a nadie")
         return
 
     folio = pedido_db.folio if pedido_db else "SIN FOLIO"
@@ -2992,7 +3005,10 @@ def notificar_a_dalia(pedido_db, pedido_ram):
             lineas.append(f"Comprobante: {pago.comprobante}")
 
     mensaje = "\n".join(lineas)
-    enviar_whatsapp(DALIA_WHATSAPP_NUMERO, mensaje)
+    if DALIA_WHATSAPP_NUMERO:
+        enviar_whatsapp(DALIA_WHATSAPP_NUMERO, mensaje)
+    if VENDEDORA_WHATSAPP_NUMERO:
+        enviar_whatsapp(VENDEDORA_WHATSAPP_NUMERO, mensaje)
 
 
 def enviar_whatsapp_imagen(numero, image_url, caption=""):

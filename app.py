@@ -700,24 +700,17 @@ def seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=None, t
 sesiones = {}
 sesiones_lock = threading.Lock()
 
-mensajes_procesados = set()
-orden_mensajes_procesados = []
-mensajes_procesados_lock = threading.Lock()
-MAX_MENSAJES_PROCESADOS = 2000
-
 
 def ya_fue_procesado(mensaje_id):
-    if not mensaje_id:
-        return False
-    with mensajes_procesados_lock:
-        if mensaje_id in mensajes_procesados:
-            return True
-        mensajes_procesados.add(mensaje_id)
-        orden_mensajes_procesados.append(mensaje_id)
-        if len(orden_mensajes_procesados) > MAX_MENSAJES_PROCESADOS:
-            mas_viejo = orden_mensajes_procesados.pop(0)
-            mensajes_procesados.discard(mas_viejo)
-        return False
+    # 🔧 (19 ago 2026) Antes esto era un set() en memoria -- funcionaba
+    # bien con un solo proceso de gunicorn, pero deja de ser confiable
+    # con 2+ procesos (Procfile), porque cada proceso tendría su propio
+    # set() separado y un mismo mensaje reintentado por Meta/YCloud
+    # podría caer en otro proceso y procesarse (y contestarse) dos
+    # veces. Ahora el dedupe vive en la base de datos (tabla
+    # mensajes_webhook_procesados en database.py), compartida entre
+    # todos los procesos.
+    return database.reclamar_mensaje_procesado(mensaje_id)
 
 
 def verificar_firma_webhook(payload_bytes, firma_header):

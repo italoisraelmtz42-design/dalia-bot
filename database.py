@@ -30,6 +30,30 @@ def get_db_connection():
 # Alias usado por clientes.py, historial.py y pedido_manager
 get_connection = get_db_connection
 
+
+def reclamar_mensaje_procesado(mensaje_id):
+    """Dedupe de mensajes entrantes a nivel de base de datos (ver tabla
+    mensajes_webhook_procesados). Devuelve True SOLO si este mensaje_id
+    YA se había procesado antes (por cualquier proceso de gunicorn) --
+    en ese caso el que llama debe ignorarlo. Devuelve False la primera
+    vez, y ese mismo INSERT ya lo deja marcado como procesado para la
+    próxima vez. Mismo patrón atómico que reclamar_seguimiento_23h en
+    pedido_manager.py."""
+    if not mensaje_id:
+        return False
+    try:
+        with get_db_connection() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO mensajes_webhook_procesados (mensaje_id) VALUES (?)",
+                (mensaje_id,),
+            )
+            conn.commit()
+            return cur.rowcount == 0  # 0 filas insertadas = ya existía = duplicado
+    except Exception as e:
+        logger_db.error(f"reclamar_mensaje_procesado: {e}")
+        return False
+
+
 def init_order_tables():
     try:
         with get_db_connection() as conn:
@@ -179,6 +203,23 @@ def init_order_tables():
             cursor.execute("""CREATE TABLE IF NOT EXISTS conversaciones_silenciadas (
                 telefono TEXT PRIMARY KEY,
                 fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+
+            # 🔧 (19 ago 2026) Dedupe de mensajes entrantes (webhook) a
+            # nivel de base de datos, no solo en memoria. Antes esto vivía
+            # en un set() de Python dentro de app.py -- funcionaba bien
+            # con UN solo proceso de gunicorn, pero al pasar a 2+ procesos
+            # (ver Procfile, cambio para que el servicio no se quede
+            # colgado por completo si un proceso se traba) cada proceso
+            # tendría su propio set() separado, y un mismo mensaje
+            # reintentado por Meta/YCloud podría caer en otro proceso y
+            # procesarse dos veces (respuesta duplicada al cliente). Usa
+            # el mismo patrón atómico ya probado en seguimientos_23h:
+            # INSERT OR IGNORE + revisar rowcount, que SQLite garantiza
+            # correcto aunque dos procesos lo intenten al mismo tiempo.
+            cursor.execute("""CREATE TABLE IF NOT EXISTS mensajes_webhook_procesados (
+                mensaje_id TEXT PRIMARY KEY,
+                fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
 
             # 🔧 Migración segura: agrega la columna "canal" (whatsapp /

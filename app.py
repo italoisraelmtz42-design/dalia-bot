@@ -4320,11 +4320,14 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         if respuesta is None and sesion.get("_anticipo_recien_confirmado"):
             sesion["_anticipo_recien_confirmado"] = False
             mensaje_1 = "¡Gracias por tu anticipo! En breve te contactaremos para enviarte la nota de tu pedido."
-            # 🔧 (19 ago 2026, a pedido explícito de Israel) Antes este
-            # segundo mensaje era solo el emoji de reloj de arena suelto.
-            # Ahora también se le pide al cliente un número de WhatsApp
-            # para poder darle seguimiento a su pedido.
-            mensaje_2 = "¿Puedes compartirnos por favor un número de WhatsApp para darle seguimiento a tu pedido? ¡Gracias! ⌛"
+            # 🔧 (19 ago 2026, a pedido explícito de Israel) Ahora se piden
+            # 3 mensajes separados en vez de 2: el de gracias, la petición
+            # del número de WhatsApp de seguimiento, y al final el reloj
+            # de arena SOLO -- Israel pidió explícitamente que el reloj de
+            # arena sea siempre el último mensaje que se vea, no pegado al
+            # texto anterior.
+            mensaje_2 = "¿Puedes compartirnos por favor un número de WhatsApp para darle seguimiento a tu pedido? ¡Gracias!"
+            mensaje_3 = "⌛"
 
             try:
                 # sincronizar_pedido ya regresa el pedido oficial (recién
@@ -4338,6 +4341,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
 
                 crm.guardar_respuesta(cliente, mensaje_1, canal=canal)
                 crm.guardar_respuesta(cliente, mensaje_2, canal=canal)
+                crm.guardar_respuesta(cliente, mensaje_3, canal=canal)
             except Exception as e:
                 print("⚠️ Error guardando en CRM (el bot sigue funcionando con RAM):", repr(e))
                 pedido_db = None
@@ -4347,6 +4351,8 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             enviar_mensaje_canal(numero, mensaje_1, canal, pagina_id=pagina_id)
             time.sleep(1.5)
             enviar_mensaje_canal(numero, mensaje_2, canal, pagina_id=pagina_id)
+            time.sleep(1.5)
+            enviar_mensaje_canal(numero, mensaje_3, canal, pagina_id=pagina_id)
 
             print("📣 Notificando a Dalia...")
             notificar_a_dalia(pedido_db, sesion["pedido"])

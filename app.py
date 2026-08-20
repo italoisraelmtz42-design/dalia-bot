@@ -1503,8 +1503,15 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None):
     dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     dia_semana = dias[ahora.weekday()]
 
+    # 🔧 (20 ago 2026, a pedido explícito de Israel) Antes el tiempo de
+    # elaboración normal era un RANGO "4 a 6 días hábiles" (con fecha_maxima
+    # como colchón extra de hasta 2 días). Israel pidió que ahora sea fijo:
+    # 4 días hábiles y ya, sin margen. El "4" es el mismo número que SIEMPRE
+    # se usó para decidir si un pedido es urgente o no (ver es_pedido_urgente
+    # y el bloque de "Urgencia determinística" más abajo) -- eso no cambia,
+    # solo se quita la fecha_maxima/"6" que únicamente se usaba como texto
+    # informativo para el cliente.
     fecha_minima = sumar_dias_habiles(ahora.date(), 4)
-    fecha_maxima = sumar_dias_habiles(ahora.date(), 6)
     dia_semana_minima = dias[fecha_minima.weekday()]
 
     return f"""
@@ -1585,10 +1592,9 @@ REGLAS DE FECHAS Y PEDIDOS URGENTES (usa SIEMPRE la fecha de hoy que se te
 da más abajo, en la sección de estado del pedido, para todo cálculo;
 nunca calcules fechas por tu cuenta):
 
-- El tiempo normal de elaboración de un pedido es de 4 a 6 días hábiles.
-- La fecha de entrega MÁS PRÓXIMA posible para un pedido NORMAL (no urgente)
-  es el {dia_semana_minima} {fecha_minima.strftime('%d/%m/%Y')}. Un pedido
-  normal podría tardar hasta el {fecha_maxima.strftime('%d/%m/%Y')}.
+- El tiempo normal de elaboración de un pedido es de 4 días hábiles.
+- La fecha de entrega para un pedido NORMAL (no urgente) hecho hoy es el
+  {dia_semana_minima} {fecha_minima.strftime('%d/%m/%Y')}.
 - 🚨 {fecha_minima.strftime('%d/%m/%Y')} es SOLO el límite mínimo para
   validar si un pedido es urgente o no -- NUNCA la uses como la fecha de
   entrega del pedido a menos que el cliente la haya pedido explícitamente.

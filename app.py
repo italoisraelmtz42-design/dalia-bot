@@ -159,6 +159,21 @@ if not (DATOS_BANCARIOS_TARJETA and DATOS_BANCARIOS_CLABE):
           "— la detección de 'ya se enviaron los datos de pago' y el filtro de "
           "envío prematuro no van a funcionar correctamente hasta llenarlos.")
 
+# 🔧 (20 ago 2026, a pedido explícito de Israel) Antes la dirección del
+# local solo vivía en el prompt (conocimiento/Entregas y envíos.txt) y
+# dependía de que el modelo decidiera mandarla -- en una conversación real
+# ("Tacos Luis") el cliente hizo su pedido urgente (solo recolección en
+# local) y pagó el anticipo, pero el bot NUNCA le dijo dónde está el
+# local. Como TODO pedido urgente y todo pedido con tipo_entrega=local
+# necesita esta información sí o sí, ahora se manda de forma determinística
+# (ver mensaje_ubicacion en procesar_mensaje_en_fondo), igual que ya se
+# hacen los 3 mensajes fijos tras el anticipo -- no se deja a criterio del
+# modelo.
+DIRECCION_LOCAL = "Cedro #200B, Col. Los Encinos, Apodaca (el local está dentro de la papelería ISA)"
+LINK_MAPS_LOCAL = "https://maps.app.goo.gl/WtPRbPHhnpgaWmVT8"
+HORARIO_LOCAL_ENTRE_SEMANA = "Lunes a Viernes: 3:30pm - 6:30pm"
+HORARIO_LOCAL_SABADO = "Sábado: 11:30am - 2:00pm"
+
 GRAPH_API_VERSION = "v20.0"
 
 # --- MESSENGER (Facebook Page) ---
@@ -1150,6 +1165,15 @@ def info_enviada_vacia():
         "colores_disponibles": False,
         "ubicacion_local": False,
         "catalogo_pdf": False,
+        # 🔧 (20 ago 2026, a pedido explícito de Israel) En una conversación
+        # real el bot mencionó el cargo urgente de +$50 unas 7-8 veces en
+        # toda la plática -- Israel dice que así se puede molestar al
+        # cliente. Reusa el mismo mecanismo de "ya se lo dije, no lo
+        # repitas" que ya existe para datos_pago/colores/etc., pero con una
+        # excepción: SÍ debe seguir apareciendo como línea del resumen
+        # final del pedido (justo antes de pedir el anticipo) aunque ya se
+        # haya mencionado antes -- ver resumen_info_enviada().
+        "cargo_urgente_mencionado": False,
     }
 
 
@@ -1230,7 +1254,24 @@ def resumen_info_enviada(info_enviada):
         "ubicacion_local": "Ubicación del local (link de Maps)",
         "catalogo_pdf": "Link del catálogo completo en PDF",
     }
-    return "\n".join(f"- {etiquetas[k]}: YA SE ENVIÓ, no lo repitas" for k in ya_enviados)
+    lineas = [f"- {etiquetas[k]}: YA SE ENVIÓ, no lo repitas" for k in ya_enviados if k in etiquetas]
+
+    # 🔧 (20 ago 2026, a pedido explícito de Israel) Este caso es distinto
+    # a los de arriba: el cargo urgente NO se calla para siempre, solo se
+    # calla en mensajes normales -- tiene una excepción explícita para el
+    # resumen final del pedido, así que necesita su propio texto en vez
+    # del genérico "no lo repitas".
+    if info_enviada.get("cargo_urgente_mencionado"):
+        lineas.append(
+            "- Cargo urgente (+$50): YA SE MENCIONÓ antes en esta conversación. "
+            "NO lo vuelvas a mencionar en mensajes normales (ni para recordárselo "
+            "ni para reconfirmarlo). ÚNICA excepción: si en este mensaje vas a "
+            "mostrar el RESUMEN FINAL del pedido (antes de pedir el anticipo), ahí "
+            "SÍ debe aparecer la línea 'Cargo urgente: $50' como dice la plantilla "
+            "-- pero solo esa vez, dentro del resumen, no antes ni después."
+        )
+
+    return "\n".join(lineas) if lineas else "Nada de esto se ha enviado todavía."
 
 
 def detectar_info_enviada(texto_respuesta):
@@ -1240,6 +1281,10 @@ def detectar_info_enviada(texto_respuesta):
         "colores_disponibles": ("turquesa" in texto and "rosa palo" in texto),
         "ubicacion_local": "maps.app.goo.gl" in texto,
         "catalogo_pdf": bool(URL_CATALOGO_PDF) and (URL_CATALOGO_PDF.lower() in texto),
+        # 🔧 (20 ago 2026) Detecta cualquier mención del cargo urgente de
+        # $50 (ya sea al cotizar, al recordarlo, o en el resumen) para
+        # poder avisarle al modelo en el siguiente turno que ya lo dijo.
+        "cargo_urgente_mencionado": "urgen" in texto and "$50" in texto_respuesta,
     }
     return detectado
 
@@ -3699,6 +3744,23 @@ def dashboard():
                 (fecha_inicio,),
             ).fetchall()
 
+            # 🆕 (20 ago 2026, pedido explícito de Israel) Nombres de
+            # Facebook de los clientes de Messenger de esta lista, para
+            # mostrar "Juan Pérez" en vez del PSID -- un solo query para
+            # los PSIDs de esta página, no uno por fila.
+            psids_messenger = [
+                r["telefono"] for r in filas_recientes
+                if (r["canal"] or "whatsapp") == "messenger"
+            ]
+            nombres_messenger_cache = {}
+            if psids_messenger:
+                marcadores = ",".join("?" for _ in psids_messenger)
+                filas_nombres = conn.execute(
+                    f"SELECT psid, nombre FROM nombres_messenger WHERE psid IN ({marcadores})",
+                    psids_messenger,
+                ).fetchall()
+                nombres_messenger_cache = {f["psid"]: f["nombre"] for f in filas_nombres}
+
             # 🆕 Venta total del período (valor de TODOS los pedidos creados,
             # ya sea que el anticipo/pago esté confirmado o no) -- separado
             # a propósito de "Ingresos confirmados" (que es solo el dinero
@@ -3895,8 +3957,17 @@ def dashboard():
         f"<tr><td>{m['lugar']}</td><td>{m['n']}</td></tr>" for m in filas_municipios
     ) or "<tr><td colspan='2'>Sin entregas a domicilio en este período</td></tr>"
 
+    def _nombre_o_telefono(r):
+        # 🆕 Para Messenger mostramos el nombre real de Facebook si ya se
+        # resolvió (ver resolver_nombre_messenger); si no, mostramos el
+        # PSID tal cual mientras se resuelve. WhatsApp no cambia -- ahí
+        # el "teléfono" ya es un número real y útil de por sí.
+        if r["canal"] == "messenger":
+            return nombres_messenger_cache.get(r["telefono"], r["telefono"])
+        return r["telefono"]
+
     filas_recientes_html = "".join(
-        f"<tr><td>{r['folio']}</td><td>{r['telefono']}</td><td>{r['estado']}</td>"
+        f"<tr><td>{r['folio']}</td><td>{_nombre_o_telefono(r)}</td><td>{r['estado']}</td>"
         f"<td>{'🚨 Urgente' if r['es_urgente'] else 'Normal'}</td>"
         f"<td>{'📱 Messenger' if r['canal']=='messenger' else '💬 WhatsApp'}</td>"
         f"<td>{_utc_a_hora_local(r['fecha_creacion'])}</td>"
@@ -4024,7 +4095,7 @@ def dashboard():
 
   <h2>🧾 Pedidos recientes</h2>
   <table>
-    <tr><th>Folio</th><th>Teléfono</th><th>Estado</th><th>Tipo</th><th>Canal</th><th>Fecha</th><th>Total</th><th></th></tr>
+    <tr><th>Folio</th><th>Cliente</th><th>Estado</th><th>Tipo</th><th>Canal</th><th>Fecha</th><th>Total</th><th></th></tr>
     {filas_recientes_html}
   </table>
 
@@ -4059,6 +4130,14 @@ def dashboard_conversacion():
     except Exception as e:
         return f"Error consultando la base de datos: {e}", 500
 
+    # 🆕 (20 ago 2026, pedido explícito de Israel) Mostrar el nombre real
+    # de Facebook en vez del PSID, si ya se resolvió.
+    nombre_mostrar = telefono
+    if canal == "messenger":
+        nombre_cacheado = database.obtener_nombre_messenger_cache(telefono)
+        if nombre_cacheado:
+            nombre_mostrar = nombre_cacheado
+
     burbujas_html = "".join(
         f"""<div style="display:flex;justify-content:{'flex-end' if m['emisor']=='bot' else 'flex-start'};margin-bottom:10px;">
               <div style="max-width:70%;background:{'#c2185b' if m['emisor']=='bot' else 'white'};
@@ -4090,7 +4169,7 @@ def dashboard_conversacion():
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>Conversación con {telefono} — Recuerditos Dalia</title>
+<title>Conversación con {nombre_mostrar} — Recuerditos Dalia</title>
 <style>
   body {{ font-family: -apple-system, Arial, sans-serif; background:#e9dfda; margin:0; padding:24px; }}
   .header {{ background:white; border-radius:12px; padding:16px 20px; margin-bottom:16px; box-shadow:0 1px 4px rgba(0,0,0,0.08); }}
@@ -4103,7 +4182,7 @@ def dashboard_conversacion():
 <body>
   <div class="header">
     <a href="/dashboard?clave={clave_recibida}">← Volver al dashboard</a>
-    <h2 style="margin:8px 0 4px 0;">Conversación con {telefono}</h2>
+    <h2 style="margin:8px 0 4px 0;">Conversación con {nombre_mostrar}</h2>
     <p style="margin:0;color:#888;">{'📱 Messenger' if canal == 'messenger' else '💬 WhatsApp'} · {len(mensajes)} mensaje(s)</p>
     <a class="boton" href="{link_externo}" target="_blank">{texto_boton}</a>
     <div class="aviso">{aviso}</div>
@@ -4132,15 +4211,60 @@ def verify_webhook():
 # WEBHOOK: MENSAJES ENTRANTES
 # ===========================
 
-def registrar_entrada_cliente(numero, texto_para_guardar, tipo="texto", canal="whatsapp"):
+def resolver_nombre_messenger(psid, pagina_id=None):
+    """(20 ago 2026, pedido explícito de Israel) Para que el dashboard
+    muestre el nombre real de Facebook del cliente en vez del PSID (un
+    número que no le dice nada a nadie). Primero revisa la caché en
+    SQLite (lectura local, rapidísima); si no está, dispara un hilo de
+    background para pedírselo al Graph API de Meta y guardarlo -- así el
+    mensaje del cliente se sigue procesando y respondiendo de inmediato,
+    sin esperar a esta llamada de red. La primera vez que se vea a ese
+    PSID el dashboard puede seguir mostrando el PSID por unos segundos,
+    hasta que el hilo de background termine de guardar el nombre."""
+    if not psid:
+        return None
+    nombre_cacheado = database.obtener_nombre_messenger_cache(psid)
+    if nombre_cacheado:
+        return nombre_cacheado
+
+    # 🔧 Usa el mismo pool acotado (EJECUTOR_MENSAJES / _lanzar_en_fondo)
+    # que ya se usa para todo lo demás en background, en vez de crear un
+    # hilo suelto sin límite -- esto es justo lo que se corrigió antes en
+    # todo el resto del código (ver test_executor_fix.py) para evitar
+    # crear hilos sin límite bajo carga.
+    def _pedir_nombre_en_segundo_plano():
+        try:
+            r = requests.get(
+                f"https://graph.facebook.com/{GRAPH_API_VERSION}/{psid}",
+                params={"fields": "first_name,last_name", "access_token": token_para_pagina(pagina_id)},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                datos = r.json()
+                nombre = " ".join(p for p in [datos.get("first_name"), datos.get("last_name")] if p).strip()
+                if nombre:
+                    database.guardar_nombre_messenger_cache(psid, nombre)
+                    print(f"👤 Nombre de Messenger resuelto para {psid}: {nombre}")
+            else:
+                print(f"⚠️ No se pudo obtener el nombre de Messenger para {psid}: {r.status_code} {r.text}")
+        except requests.RequestException as e:
+            print(f"⚠️ Excepción obteniendo nombre de Messenger para {psid}: {e}")
+
+    _lanzar_en_fondo(_pedir_nombre_en_segundo_plano)
+    return None
+
+
+def registrar_entrada_cliente(numero, texto_para_guardar, tipo="texto", canal="whatsapp", pagina_id=None):
     cliente = crm.cargar_cliente(numero)
     crm.guardar_mensaje_cliente(cliente, texto_para_guardar, tipo=tipo, canal=canal)
+    if canal == "messenger":
+        resolver_nombre_messenger(numero, pagina_id=pagina_id)
     return cliente
 
 
 def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp", pagina_id=None, proveedor_whatsapp="meta"):
     _contexto_hilo.proveedor_whatsapp = proveedor_whatsapp
-    cliente = registrar_entrada_cliente(numero, f"[mensaje no soportado: {tipo}]", tipo=tipo, canal=canal)
+    cliente = registrar_entrada_cliente(numero, f"[mensaje no soportado: {tipo}]", tipo=tipo, canal=canal, pagina_id=pagina_id)
     respuesta = "Por ahora solo puedo leer mensajes de texto 🙂 ¿me lo escribes con palabras?"
     crm.guardar_respuesta(cliente, respuesta, canal=canal)
     enviar_mensaje_canal(numero, respuesta, canal, pagina_id=pagina_id)
@@ -4221,7 +4345,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             print("❌ No se pudo descargar la imagen del cliente, se sigue solo con el texto (si había)")
 
     texto_para_guardar = texto_cliente or ("(imagen sin texto)" if (media_id_imagen or media_url_imagen_ycloud) else "")
-    cliente = registrar_entrada_cliente(numero, texto_para_guardar, tipo=tipo_para_crm, canal=canal)
+    cliente = registrar_entrada_cliente(numero, texto_para_guardar, tipo=tipo_para_crm, canal=canal, pagina_id=pagina_id)
 
     # 🔧 Código de reactivación / reset completo: si el mensaje trae la
     # secuencia 🧸☠️🧸, se borra TODO lo relacionado a este teléfono --
@@ -4448,6 +4572,25 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             mensaje_2 = "¿Puedes compartirnos por favor un número de WhatsApp para darle seguimiento a tu pedido? ¡Gracias!"
             mensaje_3 = "⌛"
 
+            # 🔧 (20 ago 2026, a pedido explícito de Israel -- ver
+            # DIRECCION_LOCAL arriba) Si el pedido es de recolección en
+            # local (todo pedido urgente SIEMPRE lo es), se manda un
+            # mensaje fijo extra con la dirección y el link de Maps, para
+            # no depender de que el modelo se acuerde de mandarla. Se
+            # manda justo después del "gracias por tu anticipo" y antes de
+            # pedir el WhatsApp de seguimiento.
+            pedido_confirmado = sesion["pedido"]
+            es_recoleccion_local = bool(pedido_confirmado.get("es_urgente")) or (
+                pedido_confirmado.get("tipo_entrega") == "local"
+            )
+            mensaje_ubicacion = None
+            if es_recoleccion_local:
+                mensaje_ubicacion = (
+                    f"📍 Tu pedido se recoge en nuestro local: {DIRECCION_LOCAL}.\n"
+                    f"Ubicación en Maps: {LINK_MAPS_LOCAL}\n\n"
+                    f"Horario de entrega en local:\n{HORARIO_LOCAL_ENTRE_SEMANA}\n{HORARIO_LOCAL_SABADO}"
+                )
+
             try:
                 # sincronizar_pedido ya regresa el pedido oficial (recién
                 # creado o actualizado) con su folio — no usar
@@ -4459,6 +4602,8 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
                 sesion["pedido_id"] = pedido_db.id if pedido_db else None
 
                 crm.guardar_respuesta(cliente, mensaje_1, canal=canal)
+                if mensaje_ubicacion:
+                    crm.guardar_respuesta(cliente, mensaje_ubicacion, canal=canal)
                 crm.guardar_respuesta(cliente, mensaje_2, canal=canal)
                 crm.guardar_respuesta(cliente, mensaje_3, canal=canal)
             except Exception as e:
@@ -4469,6 +4614,10 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             print("📤 Enviando mensajes fijos de confirmación de anticipo...")
             enviar_mensaje_canal(numero, mensaje_1, canal, pagina_id=pagina_id)
             time.sleep(1.5)
+            if mensaje_ubicacion:
+                enviar_mensaje_canal(numero, mensaje_ubicacion, canal, pagina_id=pagina_id)
+                sesion["info_enviada"]["ubicacion_local"] = True
+                time.sleep(1.5)
             enviar_mensaje_canal(numero, mensaje_2, canal, pagina_id=pagina_id)
             time.sleep(1.5)
             enviar_mensaje_canal(numero, mensaje_3, canal, pagina_id=pagina_id)

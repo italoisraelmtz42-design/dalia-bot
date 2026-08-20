@@ -3681,10 +3681,21 @@ def dashboard():
             pct_cache = round(100 * fila["tok_cache"] / fila["tok_in"], 1) if fila["tok_in"] else 0
 
             # --- Pedidos recientes (lista) ---
+            # 🆕 (20 ago 2026, pedido explícito de Israel) Se agrega el
+            # total de cada pedido -- misma cuenta que ya usa
+            # calcular_total() y la tabla de "Desglose de pedidos" de
+            # arriba: subtotal de items + $50 si es urgente + costo de
+            # envío. Aplica igual sea que estés viendo Hoy, Esta semana o
+            # Este mes, porque esta lista ya respeta ese mismo filtro de
+            # período.
             filas_recientes = conn.execute(
-                "SELECT folio, telefono, estado, es_urgente, COALESCE(canal, 'whatsapp') as canal, fecha_creacion "
-                "FROM pedidos WHERE fecha_creacion >= ? "
-                "ORDER BY fecha_creacion DESC LIMIT 15",
+                "SELECT p.folio, p.telefono, p.estado, p.es_urgente, COALESCE(p.canal, 'whatsapp') as canal, "
+                "p.fecha_creacion, "
+                "COALESCE((SELECT SUM(pi.subtotal) FROM pedido_items pi WHERE pi.pedido_id = p.id), 0) "
+                "+ (CASE WHEN p.es_urgente THEN 50.0 ELSE 0.0 END) "
+                "+ COALESCE((SELECT e.costo_envio FROM entregas e WHERE e.pedido_id = p.id), 0) as total "
+                "FROM pedidos p WHERE p.fecha_creacion >= ? "
+                "ORDER BY p.fecha_creacion DESC LIMIT 15",
                 (fecha_inicio,),
             ).fetchall()
 
@@ -3889,10 +3900,11 @@ def dashboard():
         f"<td>{'🚨 Urgente' if r['es_urgente'] else 'Normal'}</td>"
         f"<td>{'📱 Messenger' if r['canal']=='messenger' else '💬 WhatsApp'}</td>"
         f"<td>{_utc_a_hora_local(r['fecha_creacion'])}</td>"
+        f"<td>${r['total']:,.2f}</td>"
         f"<td><a href='/dashboard/conversacion?clave={clave_recibida}&telefono={r['telefono']}&canal={r['canal']}' "
         f"style='color:#c2185b;font-weight:600;'>Ver conversación →</a></td></tr>"
         for r in filas_recientes
-    ) or "<tr><td colspan='7'>Sin pedidos en este período</td></tr>"
+    ) or "<tr><td colspan='8'>Sin pedidos en este período</td></tr>"
 
     filas_dias_html = "".join(
         f"<tr><td>{d['etiqueta']}</td><td>${d['ingresos']:,.2f}</td>"
@@ -4012,7 +4024,7 @@ def dashboard():
 
   <h2>🧾 Pedidos recientes</h2>
   <table>
-    <tr><th>Folio</th><th>Teléfono</th><th>Estado</th><th>Tipo</th><th>Canal</th><th>Fecha</th><th></th></tr>
+    <tr><th>Folio</th><th>Teléfono</th><th>Estado</th><th>Tipo</th><th>Canal</th><th>Fecha</th><th>Total</th><th></th></tr>
     {filas_recientes_html}
   </table>
 

@@ -24,7 +24,7 @@ Excepción de colores solo en productos que lo declaran (osito afelpada y osito 
 usar ÚNICAMENTE los colores listados en el archivo de ese producto.
 
 4) PLAZOS (ÚNICA VERSIÓN OFICIAL)
-- Elaboración normal: 4 a 6 días hábiles DESPUÉS del anticipo.
+- Elaboración normal: 4 días hábiles DESPUÉS del anticipo.
 - Entrega normal: a partir del día hábil que resulte de ese cálculo.
 - Pedido URGENTE: si piden antes de ese plazo → +$50 MXN, solo entrega en LOCAL. Sí se acepta urgente en sábado, pero solo en horario reducido (11:30am-2pm).
 - No trabajamos domingos.

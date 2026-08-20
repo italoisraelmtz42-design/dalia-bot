@@ -4094,11 +4094,108 @@ def dashboard():
   </table>
 
   <h2>🧾 Pedidos recientes</h2>
+  <p style="margin-top:-8px;"><a href="/dashboard/resolver_nombres_messenger?clave={clave_recibida}" style="color:#c2185b;font-size:13px;">👤 Resolver nombres de Facebook para pedidos antiguos de Messenger →</a></p>
   <table>
     <tr><th>Folio</th><th>Cliente</th><th>Estado</th><th>Tipo</th><th>Canal</th><th>Fecha</th><th>Total</th><th></th></tr>
     {filas_recientes_html}
   </table>
 
+</body>
+</html>
+"""
+    return html
+
+
+@app.route("/dashboard/resolver_nombres_messenger")
+def dashboard_resolver_nombres_messenger():
+    """🆕 (20 ago 2026, a pedido explícito de Israel) El nombre de
+    Facebook de un cliente de Messenger solo se resuelve cuando ESE
+    cliente manda un mensaje nuevo (ver resolver_nombre_messenger) -- así
+    que los pedidos que ya existían ANTES de este cambio se quedan
+    mostrando el PSID hasta que ese cliente vuelva a escribir. Esta
+    página, protegida con la misma clave del dashboard, resuelve de
+    una sola vez los nombres de todos los pedidos de Messenger que ya
+    están guardados, sin tener que esperar a que cada cliente escriba de
+    nuevo. Es una acción manual (se visita cuando Israel quiera), no se
+    dispara sola."""
+    clave_recibida = request.args.get("clave", "")
+    if not DASHBOARD_PASSWORD or clave_recibida != DASHBOARD_PASSWORD:
+        return "🔒 Acceso no autorizado. Agrega ?clave=TU_CLAVE a la URL.", 401
+
+    with database.get_db_connection() as conn:
+        psids = [
+            r["telefono"] for r in conn.execute(
+                "SELECT DISTINCT telefono FROM pedidos WHERE canal = 'messenger'"
+            ).fetchall()
+        ]
+
+    resueltos, ya_en_cache, fallidos = [], [], []
+    for psid in psids:
+        if not psid:
+            continue
+        if database.obtener_nombre_messenger_cache(psid):
+            ya_en_cache.append(psid)
+            continue
+        try:
+            r = requests.get(
+                f"https://graph.facebook.com/{GRAPH_API_VERSION}/{psid}",
+                # 🔧 No sabemos de qué página de Facebook vino cada pedido
+                # viejo (ese dato no se guardaba antes), así que se usa la
+                # página principal -- igual que hace resolver_nombre_messenger
+                # cuando no le llega pagina_id. Si manejas varias páginas de
+                # Facebook, los PSID de páginas distintas a la principal
+                # pueden fallar aquí; quedan listados abajo en "fallidos".
+                params={"fields": "first_name,last_name", "access_token": token_para_pagina(None)},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                datos = r.json()
+                nombre = " ".join(p for p in [datos.get("first_name"), datos.get("last_name")] if p).strip()
+                if nombre:
+                    database.guardar_nombre_messenger_cache(psid, nombre)
+                    resueltos.append((psid, nombre))
+                else:
+                    fallidos.append((psid, "Facebook no regresó un nombre"))
+            else:
+                fallidos.append((psid, f"HTTP {r.status_code}: {r.text[:200]}"))
+        except requests.RequestException as e:
+            fallidos.append((psid, str(e)))
+        time.sleep(0.3)  # no saturar la API de Meta con muchas llamadas seguidas
+
+    filas_resueltos = "".join(f"<tr><td>{psid}</td><td>{nombre}</td></tr>" for psid, nombre in resueltos) or "<tr><td colspan='2'>Ninguno</td></tr>"
+    filas_fallidos = "".join(f"<tr><td>{psid}</td><td>{razon}</td></tr>" for psid, razon in fallidos) or "<tr><td colspan='2'>Ninguno</td></tr>"
+
+    html = f"""
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Resolver nombres de Messenger — Recuerditos Dalia</title>
+<style>
+  body {{ font-family: -apple-system, Arial, sans-serif; background:#e9dfda; margin:0; padding:24px; }}
+  .card {{ background:white; border-radius:12px; padding:20px 24px; margin-bottom:16px; box-shadow:0 1px 4px rgba(0,0,0,0.08); }}
+  table {{ width:100%; border-collapse:collapse; margin-top:8px; }}
+  th, td {{ text-align:left; padding:6px 10px; border-bottom:1px solid #eee; font-size:14px; }}
+  a {{ color:#c2185b; }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h2>👤 Resolver nombres de Facebook (pedidos ya existentes)</h2>
+    <p>PSIDs de Messenger encontrados en pedidos: {len(psids)}</p>
+    <p>✅ Nombres resueltos ahora: {len(resueltos)}</p>
+    <p>♻️ Ya estaban en caché (no se volvieron a pedir): {len(ya_en_cache)}</p>
+    <p>⚠️ No se pudieron resolver: {len(fallidos)}</p>
+  </div>
+  <div class="card">
+    <h3>Resueltos ahora</h3>
+    <table><tr><th>PSID</th><th>Nombre</th></tr>{filas_resueltos}</table>
+  </div>
+  <div class="card">
+    <h3>Fallidos</h3>
+    <table><tr><th>PSID</th><th>Motivo</th></tr>{filas_fallidos}</table>
+  </div>
+  <p><a href="/dashboard?clave={clave_recibida}">← Volver al dashboard</a></p>
 </body>
 </html>
 """

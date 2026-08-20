@@ -4266,6 +4266,13 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         print(f"🙅 Bot en silencio para {numero} (modo_atencion={modo_atencion}); mensaje guardado, sin respuesta automática.")
         return
 
+    # Se adelanta obtener_sesion() (antes se llamaba varias líneas más
+    # abajo) porque el saludo canónico de abajo ya necesita
+    # sesion["imagenes_enviadas"] para marcar la foto del osito con
+    # jaboncito como ya mandada. obtener_sesion() es idempotente (solo
+    # hidrata una vez por número), así que adelantarla no repite trabajo.
+    sesion = obtener_sesion(numero)
+
     # 🔧 CAMBIO DE DECISIÓN DE NEGOCIO (segunda vuelta): ahora sí se
     # fuerza otra vez un saludo garantizado en el primer mensaje de cada
     # cliente nuevo -- pero a diferencia de la primera versión (que
@@ -4274,6 +4281,13 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
     # como mensaje aparte y LUEGO el flujo sigue normal: el modelo
     # contesta la pregunta real del cliente en el mismo turno, sin que
     # tenga que repetirla.
+    #
+    # 🔧 (20 ago 2026) Ampliado a 3 partes por pedido explícito de Israel:
+    # 1) catálogo (como ya estaba), 2) texto invitando a ver los ositos
+    # con jaboncito + pregunta abierta de qué busca, 3) la foto del osito
+    # con jaboncito ($12). Se manda en ese orden, cada uno como mensaje
+    # aparte, ANTES de que el modelo conteste la pregunta real del
+    # cliente en el mismo turno.
     if es_primera_vez:
         saludo_catalogo = (
             "Buen día, te comparto nuestro catálogo con información de "
@@ -4283,11 +4297,22 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             saludo_catalogo += f"\n{URL_CATALOGO_PDF}"
         enviar_mensaje_canal(numero, saludo_catalogo, canal, pagina_id=pagina_id)
         crm.guardar_respuesta(cliente, saludo_catalogo, canal=canal)
-        print(f"👋 {numero}: saludo + link de catálogo enviado (cliente nuevo, canal={canal})")
+
+        saludo_osito = (
+            "Te mando también información de nuestros ositos con jaboncito. "
+            "o buscas algún recuerdito en específico?"
+        )
+        enviar_mensaje_canal(numero, saludo_osito, canal, pagina_id=pagina_id)
+        crm.guardar_respuesta(cliente, saludo_osito, canal=canal)
+
+        url_osito_jaboncito = url_imagen_producto("osito_con_jaboncito")
+        if url_osito_jaboncito:
+            enviar_imagen_canal(numero, url_osito_jaboncito, canal, pagina_id=pagina_id)
+            sesion["imagenes_enviadas"].add("osito_con_jaboncito")
+
+        print(f"👋 {numero}: saludo canónico completo enviado (catálogo + texto + foto osito con jaboncito; cliente nuevo, canal={canal})")
         # Sin return -- el flujo sigue abajo y el modelo contesta la
         # pregunta real del cliente como un mensaje aparte.
-
-    sesion = obtener_sesion(numero)
 
     # 🔧 Envío determinístico de imágenes clave (colores + productos de
     # una sola variante + variante específica de osito si el CLIENTE ya la

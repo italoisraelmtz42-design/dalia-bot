@@ -1,7 +1,7 @@
 PEDIDOS URGENTES
 
 Definición: el cliente necesita entrega ANTES del plazo normal
-(4 a 6 días hábiles después del anticipo).
+(4 días hábiles después del anticipo).
 
 Condiciones:
 - Cargo extra: $50 MXN por pedido (una sola vez, no por producto)

@@ -3703,6 +3703,26 @@ def dashboard():
             ).fetchone()
             venta_total_periodo = fila["total"]
 
+            # 🆕 (20 ago 2026, pedido explícito de Israel) Desglose por
+            # pedido del período: envío, cargo urgente, anticipo ya
+            # confirmado, saldo por pagar y total -- para verlo de un
+            # vistazo sin tener que abrir cada pedido. Mismas fuentes que
+            # ya usa calcular_total() en pedido_manager.py (subtotal de
+            # items + $50 si es urgente + costo_envio de la entrega), para
+            # que el total de aquí SIEMPRE cuadre con el que ve el cliente
+            # en su resumen. "Por pagar" = total - envío - anticipo (el
+            # envío y el anticipo ya se consideran cubiertos aparte).
+            filas_desglose_pedidos = conn.execute(
+                "SELECT p.folio, p.es_urgente, "
+                "COALESCE(e.costo_envio, 0) as envio, "
+                "COALESCE((SELECT SUM(pi.subtotal) FROM pedido_items pi WHERE pi.pedido_id = p.id), 0) as subtotal_items, "
+                "COALESCE((SELECT SUM(pg.monto) FROM pagos pg WHERE pg.pedido_id = p.id AND pg.confirmado = 1), 0) as anticipo "
+                "FROM pedidos p LEFT JOIN entregas e ON e.pedido_id = p.id "
+                "WHERE p.fecha_creacion >= ? "
+                "ORDER BY p.fecha_creacion DESC",
+                (fecha_inicio,),
+            ).fetchall()
+
             # 🆕 Histórico diario/semanal -- para poder ver "¿cuánto se
             # vendió ayer?" o "¿cómo nos fue la semana pasada?" sin tener
             # que ir cambiando de período uno por uno. Se trae una ventana
@@ -3816,6 +3836,45 @@ def dashboard():
     clientes_wa = _fila_canal_clientes("whatsapp")
     clientes_msg = _fila_canal_clientes("messenger")
 
+    def _dinero_o_raya(monto):
+        """Formatea un monto en dinero, o una raya si es $0 -- para que la
+        tabla de desglose sea más fácil de escanear (menos "$0.00" repetido)."""
+        return f"${monto:,.2f}" if monto else "—"
+
+    filas_desglose_calc = []
+    tot_envio = tot_urgente = tot_anticipo = tot_x_pagar = tot_total_desglose = 0.0
+    for f in filas_desglose_pedidos:
+        cargo_urgente = 50.0 if f["es_urgente"] else 0.0
+        total_pedido = f["subtotal_items"] + cargo_urgente + f["envio"]
+        x_pagar = total_pedido - f["envio"] - f["anticipo"]
+        filas_desglose_calc.append({
+            "folio": f["folio"],
+            "envio": f["envio"],
+            "urgente": cargo_urgente,
+            "anticipo": f["anticipo"],
+            "x_pagar": x_pagar,
+            "total": total_pedido,
+        })
+        tot_envio += f["envio"]
+        tot_urgente += cargo_urgente
+        tot_anticipo += f["anticipo"]
+        tot_x_pagar += x_pagar
+        tot_total_desglose += total_pedido
+
+    filas_desglose_html = "".join(
+        f"<tr><td>{d['folio']}</td><td>{_dinero_o_raya(d['envio'])}</td>"
+        f"<td>{_dinero_o_raya(d['urgente'])}</td><td>{_dinero_o_raya(d['anticipo'])}</td>"
+        f"<td>${d['x_pagar']:,.2f}</td><td>${d['total']:,.2f}</td></tr>"
+        for d in filas_desglose_calc
+    ) or "<tr><td colspan='6'>Sin pedidos en este período</td></tr>"
+
+    fila_total_desglose_html = (
+        f"<tr style='font-weight:700;background:#faf0f3;'><td>Total</td>"
+        f"<td>${tot_envio:,.2f}</td><td>${tot_urgente:,.2f}</td><td>${tot_anticipo:,.2f}</td>"
+        f"<td>${tot_x_pagar:,.2f}</td><td>${tot_total_desglose:,.2f}</td></tr>"
+        if filas_desglose_calc else ""
+    )
+
     filas_productos_html = "".join(
         f"<tr><td>{p['producto']}</td><td>{p['cantidad']}</td><td>${p['ingresos']:.2f}</td></tr>"
         for p in filas_productos
@@ -3919,6 +3978,13 @@ def dashboard():
       <div class="detalle">{openai_llamadas} llamada(s) · {pct_cache}% de tokens desde caché · (${openai_costo:.4f} USD)</div>
     </div>
   </div>
+
+  <h2>🧾 Desglose de pedidos del período ({etiqueta_periodo})</h2>
+  <table>
+    <tr><th>Pedido</th><th>Envíos</th><th>Urgentes</th><th>Anticipos</th><th>Por pagar</th><th>Total</th></tr>
+    {filas_desglose_html}
+    {fila_total_desglose_html}
+  </table>
 
   <h2>📅 Ventas por día (últimos 14 días)</h2>
   <table>

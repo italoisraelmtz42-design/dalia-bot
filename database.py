@@ -54,6 +54,62 @@ def reclamar_mensaje_procesado(mensaje_id):
         return False
 
 
+def obtener_nombre_messenger_cache(psid):
+    """Devuelve el nombre de Facebook ya guardado en caché para este PSID
+    de Messenger, o None si todavía no se ha resuelto. No llama a ningún
+    API externo -- solo lee la tabla nombres_messenger."""
+    if not psid:
+        return None
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT nombre FROM nombres_messenger WHERE psid = ?", (psid,)
+            ).fetchone()
+            return row["nombre"] if row else None
+    except Exception as e:
+        logger_db.error(f"obtener_nombre_messenger_cache: {e}")
+        return None
+
+
+def obtener_nombres_messenger_cache_multiples(psids):
+    """Igual que obtener_nombre_messenger_cache pero para varios PSIDs a
+    la vez (un solo query) -- pensado para listas del dashboard, para no
+    hacer N queries por N filas. Devuelve un dict {psid: nombre}, solo
+    con los que sí tienen nombre en caché."""
+    psids = [p for p in (psids or []) if p]
+    if not psids:
+        return {}
+    try:
+        with get_db_connection() as conn:
+            marcadores = ",".join("?" for _ in psids)
+            filas = conn.execute(
+                f"SELECT psid, nombre FROM nombres_messenger WHERE psid IN ({marcadores})",
+                psids,
+            ).fetchall()
+            return {f["psid"]: f["nombre"] for f in filas}
+    except Exception as e:
+        logger_db.error(f"obtener_nombres_messenger_cache_multiples: {e}")
+        return {}
+
+
+def guardar_nombre_messenger_cache(psid, nombre):
+    """Guarda (o actualiza) el nombre de Facebook resuelto para este PSID."""
+    if not psid or not nombre:
+        return
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                "INSERT INTO nombres_messenger (psid, nombre, fecha_actualizacion) "
+                "VALUES (?, ?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(psid) DO UPDATE SET nombre = excluded.nombre, "
+                "fecha_actualizacion = CURRENT_TIMESTAMP",
+                (psid, nombre),
+            )
+            conn.commit()
+    except Exception as e:
+        logger_db.error(f"guardar_nombre_messenger_cache: {e}")
+
+
 def init_order_tables():
     try:
         with get_db_connection() as conn:
@@ -146,6 +202,18 @@ def init_order_tables():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telefono TEXT NOT NULL,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+
+            # 🆕 (20 ago 2026, pedido explícito de Israel) Caché del nombre
+            # real de Facebook de cada cliente de Messenger -- el PSID por
+            # sí solo no le dice nada a Israel en el dashboard. Se llena
+            # una sola vez por PSID (ver resolver_nombre_messenger() en
+            # app.py) para no tener que llamarle al Graph API en cada
+            # mensaje.
+            cursor.execute("""CREATE TABLE IF NOT EXISTS nombres_messenger (
+                psid TEXT PRIMARY KEY,
+                nombre TEXT NOT NULL,
+                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
             
             # 🔥 Nueva tabla para borradores

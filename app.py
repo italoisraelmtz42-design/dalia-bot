@@ -730,6 +730,13 @@ def seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=None, t
 sesiones = {}
 sesiones_lock = threading.Lock()
 
+# 🔧 (21 ago 2026, a pedido explícito de Israel) Cuánto tiempo sin
+# actividad tiene que pasar para que una sesión se quite de RAM (ver
+# _limpiar_sesiones_inactivas). 2 horas es tiempo de sobra para que un
+# cliente que sigue escribiendo activamente no pierda nada, pero corto
+# para que la memoria no se quede acumulando clientes que ya se fueron.
+TIEMPO_INACTIVIDAD_SESION_SEGUNDOS = 2 * 60 * 60
+
 
 def ya_fue_procesado(mensaje_id):
     # 🔧 (19 ago 2026) Antes esto era un set() en memoria -- funcionaba
@@ -1224,7 +1231,22 @@ def obtener_sesion(numero):
                 "imagenes_enviadas": set(),
                 "lock": threading.Lock(),
             }
-        
+
+        # 🔧 (21 ago 2026, a pedido explícito de Israel -- fuga de memoria
+        # confirmada en Render, instancia caída por "out of memory") Antes
+        # las sesiones en RAM (este diccionario `sesiones`) solo se
+        # borraban con un reset manual explícito -- cualquier cliente que
+        # le escribiera al bot se quedaba ocupando memoria PARA SIEMPRE,
+        # sin importar si nunca volvía a escribir. Con el negocio
+        # recibiendo clientes nuevos todo el día, eso crecía sin límite
+        # hasta tumbar el proceso. Ahora se guarda cuándo fue la última
+        # vez que se usó cada sesión, para que _limpiar_sesiones_inactivas
+        # (que corre cada rato en el hilo de seguimientos ya existente)
+        # pueda quitar de RAM a los clientes inactivos con seguridad --
+        # es seguro porque obtener_sesion ya sabe reconstruir todo desde
+        # SQLite en cuanto ese cliente vuelva a escribir.
+        sesiones[numero]["_ultima_actividad"] = time.time()
+
         # 🔥 SIEMPRE recargamos el borrador desde SQLite al inicio de cada mensaje
         # 🔧 CORREGIDO: mismo problema que arriba pero en cada mensaje, no
         # solo al hidratar la sesión por primera vez -- este era el punto
@@ -1242,6 +1264,30 @@ def obtener_sesion(numero):
                 aplicar_precio_oficial(pedido_hid)
             sesiones[numero]["pedido"] = pedido_hid
         return sesiones[numero]
+
+
+def _limpiar_sesiones_inactivas():
+    """🔧 (21 ago 2026, a pedido explícito de Israel) Quita de RAM las
+    sesiones de clientes que no han escrito en más de
+    TIEMPO_INACTIVIDAD_SESION_SEGUNDOS -- es la corrección principal de
+    la fuga de memoria que tumbó la instancia de Render por "out of
+    memory" (el diccionario `sesiones` crecía sin límite porque antes
+    solo se limpiaba con un reset manual). Es seguro: en cuanto ese
+    cliente vuelva a escribir, obtener_sesion() reconstruye su sesión
+    completa desde SQLite (mensajes, pedido en borrador, etc.), igual que
+    ya hace hoy para cualquier sesión nueva."""
+    ahora = time.time()
+    numeros_a_quitar = []
+    with sesiones_lock:
+        for numero, datos_sesion in sesiones.items():
+            ultima_actividad = datos_sesion.get("_ultima_actividad", 0)
+            if ahora - ultima_actividad > TIEMPO_INACTIVIDAD_SESION_SEGUNDOS:
+                numeros_a_quitar.append(numero)
+        for numero in numeros_a_quitar:
+            sesiones.pop(numero, None)
+    if numeros_a_quitar:
+        print(f"🧹 [Limpieza de memoria] {len(numeros_a_quitar)} sesión(es) inactiva(s) "
+              f"quitadas de RAM (siguen intactas en SQLite): {numeros_a_quitar}")
 
 
 def resumen_info_enviada(info_enviada):
@@ -2372,8 +2418,16 @@ _PATRON_PAGO_YA_REALIZADO = re.compile(
 # aclarar el producto exacto. A propósito NO matchea un número suelto
 # sin palabra de cantidad/producto al lado (para no confundirlo con un
 # precio, un teléfono, una fecha, etc.).
+# 🔧 (21 ago 2026, bug real reportado por Israel con log de una clienta
+# real) "pzs?\.?" solo cubría "pz"/"pzs" -- pero "pza" y "pzas" (con "a")
+# son de las abreviaturas MÁS comunes en México ("30 pzas") y no
+# matcheaban nada, así que ese candado no se activaba. La clienta escribió
+# "30 pzas", el modelo lo entendió por su cuenta en el texto de respuesta
+# pero NUNCA llamó a la función para guardarlo -- el candado de respaldo
+# debía haberlo agarrado y no pudo. Ahora "pz(?:as?|s)?\.?" cubre las 4
+# formas: pz, pzs, pza, pzas (con o sin punto).
 _PATRON_CANTIDAD_EXPLICITA = re.compile(
-    r"\b(\d{1,4})\s*(?:x\s*)?(piezas?|pzs?\.?|unidades?|ositos?|ositas?|osos?)\b",
+    r"\b(\d{1,4})\s*(?:x\s*)?(piezas?|pz(?:as?|s)?\.?|unidades?|ositos?|ositas?|osos?)\b",
     re.IGNORECASE,
 )
 
@@ -2717,6 +2771,32 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
     return "función desconocida", [], False
 
 
+def _liberar_imagen_del_historial(historial, imagen_base64, texto_cliente):
+    """🔧 (21 ago 2026, a pedido explícito de Israel -- fuga de memoria
+    confirmada en Render, instancia caída por "out of memory") Cuando el
+    cliente manda una foto (captura del catálogo, comprobante de pago,
+    etc.), esa imagen completa en base64 se guardaba en el historial en
+    RAM de esa sesión y se quedaba ahí PARA SIEMPRE mientras el proceso
+    siguiera corriendo -- ya no se necesitaba después de que el modelo la
+    usó para responder este turno, pero nadie la quitaba. Con varios
+    clientes mandando fotos durante el día, esto se iba acumulando sin
+    límite. Ahora, justo después de que el modelo ya respondió a este
+    turno (o sea, ya no hace falta la imagen para nada más), se
+    reemplaza por un texto ligero -- se pierde la imagen del historial
+    en memoria (no de la conversación real, que sigue intacta en
+    WhatsApp/Messenger), pero se conserva el texto que la acompañaba
+    para que la conversación se siga leyendo con sentido.
+    Debe llamarse UNA sola vez por turno, después de que se agregó la
+    respuesta del asistente a `historial` -- así el turno del usuario que
+    se va a "aligerar" es siempre historial[-2]."""
+    if not imagen_base64 or len(historial) < 2:
+        return
+    historial[-2] = {
+        "role": "user",
+        "content": texto_cliente or "(el cliente mandó una imagen)",
+    }
+
+
 def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, canal="whatsapp", pagina_id=None):
     sesion = obtener_sesion(numero)
     historial = sesion["messages"]
@@ -2850,6 +2930,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
 
         texto = mensaje.content or "Disculpa, ¿me repites tu mensaje? 🙂"
         historial.append({"role": "assistant", "content": texto})
+        _liberar_imagen_del_historial(historial, imagen_base64, texto_cliente)
 
         # ================================================================
         # 🔧 CORREGIDO (Observación 4): antes este log revisaba
@@ -2894,6 +2975,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
 
     texto = "Disculpa, dame un segundo y te confirmo 🙂"
     historial.append({"role": "assistant", "content": texto})
+    _liberar_imagen_del_historial(historial, imagen_base64, texto_cliente)
     return texto
 
 
@@ -5196,6 +5278,15 @@ def _hilo_seguimientos():
             _revisar_seguimientos_una_vez()
         except Exception as e:
             print(f"⚠️ [Seguimiento] Error en la revisión periódica: {repr(e)}")
+        # 🔧 (21 ago 2026, a pedido explícito de Israel) Se reutiliza este
+        # mismo hilo, que ya corre cada rato, para también limpiar
+        # sesiones inactivas de RAM -- así no hace falta un hilo nuevo
+        # (evita repetir el mismo problema de hilos sueltos sin control
+        # que ya se había corregido antes, ver test_executor_fix.py).
+        try:
+            _limpiar_sesiones_inactivas()
+        except Exception as e:
+            print(f"⚠️ [Limpieza de memoria] Error limpiando sesiones inactivas: {repr(e)}")
         time.sleep(INTERVALO_SEGUIMIENTO_SEGUNDOS)
 
 

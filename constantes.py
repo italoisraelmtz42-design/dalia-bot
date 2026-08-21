@@ -196,24 +196,46 @@ def campos_faltantes_pedido(pedido: dict) -> list:
         for c in req:
             if _falta(pedido.get(c)):
                 faltantes.append(c)
-        return faltantes
+    else:
+        for i, it in enumerate(items, 1):
+            req = campos_requeridos_para(it.get("producto") or "")
+            # campos que viven en el item
+            item_campos = {
+                "producto", "cantidad", "color_toalla", "color_mono", "color_velita",
+                "tipo_jaboncito", "color_jaboncito", "nombre_bebe", "tarjetita",
+                "precio_unitario", "con_bolsa", "mono_personalizado",
+            }
+            for c in req:
+                if c in item_campos and _falta(it.get(c)):
+                    faltantes.append(f"item{i}.{c} ({it.get('producto') or '?'})")
+                elif c not in item_campos and _falta(pedido.get(c)):
+                    # fecha_evento, tipo_entrega, etc. a nivel pedido
+                    tag = f"{c}"
+                    if tag not in faltantes:
+                        faltantes.append(tag)
 
-    for i, it in enumerate(items, 1):
-        req = campos_requeridos_para(it.get("producto") or "")
-        # campos que viven en el item
-        item_campos = {
-            "producto", "cantidad", "color_toalla", "color_mono", "color_velita",
-            "tipo_jaboncito", "color_jaboncito", "nombre_bebe", "tarjetita",
-            "precio_unitario", "con_bolsa", "mono_personalizado",
-        }
-        for c in req:
-            if c in item_campos and _falta(it.get(c)):
-                faltantes.append(f"item{i}.{c} ({it.get('producto') or '?'})")
-            elif c not in item_campos and _falta(pedido.get(c)):
-                # fecha_evento, tipo_entrega, etc. a nivel pedido
-                tag = f"{c}"
-                if tag not in faltantes:
-                    faltantes.append(tag)
+    # 🔧 (21 ago 2026, bug real detectado con clienta real -- Silvia Mata,
+    # pedido de 50 ositos con jaboncito) Ninguna regla por producto pedía
+    # "municipio" -- es un dato del PEDIDO (depende de tipo_entrega), no
+    # del producto. Resultado real: el bot armó y le hizo confirmar a la
+    # clienta un resumen completo con total ($900, incluyendo $300 de
+    # envío por DHL) sin tener bien resuelto el municipio para cotizar.
+    # Ahora, si tipo_entrega es "domicilio", municipio se agrega aquí, a
+    # nivel pedido, para que el mismo mecanismo de "[📋 DATOS QUE TODAVÍA
+    # FALTAN]" que ya usa el prompt lo detecte y lo pida ANTES de armar el
+    # resumen.
+    #
+    # 🔧 (21 ago 2026, aclarado explícitamente por Israel) La DIRECCIÓN
+    # EXACTA NO es requisito para el bot -- con el municipio/ciudad basta
+    # para cotizar el envío y cerrar la venta. La dirección exacta la pide
+    # la vendedora real, por su cuenta, hasta que el cliente ya pagó el
+    # anticipo. Por eso "direccion" NO se agrega a faltantes: si el
+    # cliente la da por su cuenta se guarda igual (ver actualizar_pedido),
+    # pero el bot nunca debe bloquear ni pedir explícitamente ese dato.
+    if pedido.get("tipo_entrega") == "domicilio":
+        if _falta(pedido.get("municipio")) and "municipio" not in faltantes:
+            faltantes.append("municipio")
+
     return faltantes
 
 # --- DATACLASSES (Movidas aquí para evitar ImportError) ---

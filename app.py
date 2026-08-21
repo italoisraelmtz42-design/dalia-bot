@@ -2711,6 +2711,31 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                     "NO le digas al cliente que es urgente ni le cobres el cargo extra "
                     "de $50, aunque tú hayas pensado lo contrario."
                 )
+            # 🔧 CORREGIDO (bug real detectado 21 ago 2026, transcript de
+            # María Guadalupe): el modelo tiene que escribirle al cliente
+            # el nombre del día de la semana de la fecha de entrega ("te
+            # lo tengo para el viernes 28/08/2026"), pero calcular a mano
+            # qué día de la semana cae una fecha es justo el tipo de
+            # cuenta que a un modelo de lenguaje se le da mal -- en ese
+            # caso real le dijo "viernes" a un 22/08/2026 que en realidad
+            # era sábado, y después "jueves" a un 28/08/2026 que en
+            # realidad era viernes. Igual que con es_urgente, Python
+            # calcula aquí el día real con datetime (nunca se equivoca) y
+            # se lo manda siempre que se toque fecha_evento, para que el
+            # modelo no tenga que (ni deba) adivinarlo.
+            fecha_evento_real = parsear_fecha_pedido(pedido.get("fecha_evento"))
+            if fecha_evento_real is not None:
+                dias_semana_fecha_evento = [
+                    "lunes", "martes", "miércoles", "jueves",
+                    "viernes", "sábado", "domingo",
+                ]
+                dia_semana_real = dias_semana_fecha_evento[fecha_evento_real.weekday()]
+                mensaje_resultado += (
+                    f" 📆 DÍA DE LA SEMANA REAL (calculado por el sistema, no lo "
+                    f"calcules tú): {fecha_evento_real.strftime('%d/%m/%Y')} es "
+                    f"{dia_semana_real}. Si le mencionas el día de la semana al "
+                    "cliente, usa siempre este dato, nunca lo calcules de memoria."
+                )
         return mensaje_resultado, campos_modificados, anticipo_recien_confirmado
 
     if name == "agregar_item":

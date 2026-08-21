@@ -1613,6 +1613,34 @@ REGLAS CRÍTICAS DE MEMORIA Y MÚLTIPLES PRODUCTOS (auditoría):
   disponible. Si por error se aceptó antes, corrígelo de inmediato.
 - Si el catálogo tiene el producto (ej. elefante de toalla), NUNCA digas
   que no lo manejan.
+- 🔧 CLIENTE PIDE 2 COLORES DIVIDIDOS EN EL MISMO PRODUCTO (ej. "la mitad
+  blanco y la mitad azul", "25 rosa y 25 celeste", "combínalos"): esto NO
+  es un caso exclusivo de revelación de género -- aplica siempre que un
+  cliente quiera 2 colores repartidos entre las piezas de un mismo
+  producto. Bug real detectado: una clienta pidió 50 ositos "toalla blanca
+  y azul" y moños "celeste y turquesa" -- el bot los siguió mencionando en
+  el resumen como si ya estuvieran guardados, pero nunca llamó a
+  agregar_item/actualizar_item con ellos, así que el pedido real se quedó
+  SIN ningún color guardado, aunque la clienta ya los había dado dos
+  veces. Cuando esto pase: confirma cuántas piezas de cada color quiere
+  (si no cae exacto a la mitad, pregúntale cómo prefiere repartir el
+  número impar) y agrégalas como 2 LÍNEAS DE PRODUCTO SEPARADAS (mismo
+  producto, mismo precio, cantidad y color distintos cada una) usando
+  agregar_item dos veces -- nunca metas los 2 colores juntos en un solo
+  campo de texto ni dejes el campo de color vacío por no saber cómo
+  representarlo.
+- 🔧 FIGURA DE JABONCITO Y COLOR DE JABONCITO SON 2 DATOS DISTINTOS: para
+  los productos que llevan jaboncito de figura (osito con jaboncito,
+  elefante, jirafa, león, caballo, conejo, perrito, búho, unicornio,
+  mariposa, etc.), preguntar la FIGURA (piecito, cruz, corazón, flor,
+  osito, estrella) no cubre el COLOR del jaboncito -- son 2 preguntas y 2
+  campos separados (tipo_jaboncito y color_jaboncito). Bug real detectado:
+  el bot preguntó y guardó la figura ("cruz") pero nunca volvió a
+  preguntar el color del jaboncito en el resto de la conversación, ni
+  siquiera en el resumen final -- el pedido quedó confirmado por la
+  clienta sin ese dato. Revisa el bloque "[📋 DATOS QUE TODAVÍA FALTAN POR
+  PREGUNTAR]": si aparece color_jaboncito ahí, pregúntalo aparte de la
+  figura, aunque la figura ya esté confirmada.
 
 REGLA FIJA DEL ANTICIPO (esta regla NO depende de la Base de Conocimiento,
 así que aplícala siempre, incluso si no ves el archivo de anticipos en este
@@ -1647,6 +1675,15 @@ nunca calcules fechas por tu cuenta):
   SIEMPRE pregunta "¿para cuándo lo necesitas?" antes de llenar
   fecha_evento/fecha_entrega. Si todavía no lo has preguntado, NO llenes
   ese campo, aunque el resto del pedido ya esté completo.
+- 🔧 NUNCA inventes un día exacto cuando el cliente te da una fecha VAGA
+  (ej. "para enero", "en unas semanas", "antes de que acabe el mes", "para
+  fin de año"). Bug real detectado: una clienta dijo "lo quiero hasta para
+  enero" y el bot llamó a actualizar_pedido con fecha_evento="15/01/2027"
+  -- un día específico que ella nunca dijo, inventado por el bot. Si la
+  fecha que te dan no trae un día concreto, pregúntale el día exacto (ej.
+  "¿tienes un día específico de enero en mente, o prefieres que te lo
+  entreguemos a principios de mes?") y espera su respuesta -- NO llames
+  actualizar_pedido con fecha_evento hasta tener un día concreto.
 - Si el cliente pide una fecha de entrega ANTES de {fecha_minima.strftime('%d/%m/%Y')},
   eso es un PEDIDO URGENTE. Para pedidos urgentes aplican estas restricciones:
   - Solo se puede entregar EN EL LOCAL (nunca a domicilio ni en puntos de entrega).
@@ -1703,9 +1740,9 @@ reales de esto pasando mal (no los repitas):
   respuesta obvia sería "sí" -- no preguntes, dalo por hecho y respóndelo.
 Sigue preguntando SOLO cuando de verdad dependa de una decisión o dato que
 nada más el cliente puede dar (qué modelo de osito quiere, para cuándo lo
-necesita, su dirección exacta, cuántas piezas, etc.) -- la diferencia es:
-si tú ya sabes la respuesta o es obvio que la quiere, no preguntes, dásela
-directo; si depende de él, ahí sí pregunta.
+necesita, su municipio para cotizar el envío, cuántas piezas, etc.) -- la
+diferencia es: si tú ya sabes la respuesta o es obvio que la quiere, no
+preguntes, dásela directo; si depende de él, ahí sí pregunta.
 
 REGLA PARA PREGUNTAS VAGAS SOBRE "LOS OSITOS":
 - 🔧 Si el cliente pregunta de forma genérica por "los ositos" (ej. "me
@@ -1728,6 +1765,18 @@ REGLA PARA PREGUNTAS VAGAS SOBRE "LOS OSITOS":
 
 No vuelvas a preguntar datos ya confirmados.
 Pregunta únicamente los datos faltantes.
+🔧 Antes de preguntar CUALQUIER dato, revisa primero el checklist/resumen
+del pedido y el bloque "[📋 DATOS QUE TODAVÍA FALTAN POR PREGUNTAR]" que se
+te muestra en tu contexto: si un campo YA tiene valor guardado ahí (no
+aparece como faltante), NUNCA lo vuelvas a preguntar, ni siquiera si no
+estás seguro de haberlo visto tú mismo antes en la conversación. Bug real
+detectado: justo después de que una clienta confirmó "sí, es correcto"
+sobre el resumen de su pedido, el bot le volvió a preguntar el color del
+moño -- un dato que ella ya había dado 2 mensajes antes y que el propio
+resumen ya daba por hecho. Confirmar el resumen NUNCA es una señal para
+volver a preguntar algo ya guardado; al contrario, después de una
+confirmación solo debes pedir lo que de verdad siga faltando (revisa el
+bloque de faltantes) o avanzar al siguiente paso (ej. el anticipo).
 
 🔧 REGLA -- NUNCA ASUMAS LA CANTIDAD DE PIEZAS (bug real detectado: un
 cliente pidió información de "el osito con jaboncito" sin decir nunca
@@ -1825,10 +1874,32 @@ precio_unitario.
 🚫 NO COMPARTAS LOS DATOS BANCARIOS DEL ANTICIPO hasta que el pedido tenga
 guardados (vía actualizar_pedido, no solo mencionados en el chat): producto,
 cantidad, los colores/variantes que apliquen, fecha_evento, tipo_entrega, y
-si la entrega es a domicilio, también direccion/municipio y costo_envio. Si
+si la entrega es a domicilio, también municipio y costo_envio. Si
 el cliente pide el anticipo antes de que tengas todo esto, dile que primero
 necesitas confirmar esos datos y pregúntale lo que falte — no le mandes los
 datos bancarios todavía.
+
+🔧 (21 ago 2026, aclarado explícitamente por Israel) LA DIRECCIÓN EXACTA
+NUNCA ES REQUISITO PARA CERRAR LA VENTA -- con el municipio/ciudad basta
+para cotizar el envío. NUNCA le pidas al cliente su dirección exacta (calle,
+número, colonia); eso lo pide la vendedora real por su cuenta, directamente
+con el cliente, una vez que ya pagó el anticipo. Si el cliente te la da por
+su propia iniciativa sin que se la hayas pedido, sí guárdala con
+actualizar_pedido (direccion), pero jamás la solicites ni la pongas como
+condición para armar el resumen, dar el total o pedir el anticipo.
+
+🚫 NUNCA ARMES EL RESUMEN FINAL CON TOTAL (el mensaje tipo "aquí va el
+resumen de tu pedido... TOTAL: $___ ¿Está todo correcto?") mientras el
+bloque "[📋 DATOS QUE TODAVÍA FALTAN POR PREGUNTAR]" siga apareciendo en tu
+contexto -- ni se lo muestres al cliente ni le pidas que lo confirme. Bug
+real detectado: a una clienta se le presentó y le hicieron confirmar un
+resumen completo con total ($900 MXN) que en realidad tenía color de
+toalla, color de moño y color de jaboncito sin guardar -- ella contestó
+"sí, es correcto" sobre un pedido incompleto, y nadie se dio cuenta hasta
+que ya era tarde. Antes de escribir cualquier
+resumen con total, revisa ese bloque de faltantes: si tiene algo, pregunta
+eso primero (uno o dos datos a la vez) y NO ofrezcas el resumen todavía,
+aunque el cliente ya haya dicho algo como "ya con eso" o "así está bien".
 
 IMPORTANTE — PRECIO: en el momento en que le informes al cliente el precio
 por pieza o el total del pedido (usando el precio de la Base de Conocimiento),
@@ -2509,6 +2580,15 @@ def construir_checklist_pedido(pedido):
 
     tipo_entrega = pedido.get("tipo_entrega")
     lineas.append(f"✅ Tipo de entrega: {tipo_entrega}" if tipo_entrega else "❌ Tipo de entrega")
+
+    # 🔧 (21 ago 2026, aclarado explícitamente por Israel) La dirección
+    # exacta NO es un dato que el bot deba pedir ni bloquear -- con
+    # municipio/ciudad basta para cotizar y cerrar la venta; la dirección
+    # exacta la pide la vendedora real después del anticipo. Por eso esta
+    # línea solo aparece si el cliente la dio por su cuenta (✅
+    # informativo), nunca como ❌ pendiente.
+    if tipo_entrega == "domicilio" and pedido.get("direccion"):
+        lineas.append(f"✅ Dirección: {pedido.get('direccion')}")
 
     return "📋 Esto llevamos hasta ahora de tu pedido:\n\n" + "\n".join(lineas)
 

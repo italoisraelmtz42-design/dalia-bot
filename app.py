@@ -2383,6 +2383,122 @@ def eliminar_item_pedido(pedido, argumentos_json):
     return ["items"] if len(nuevos) != antes else []
 
 
+# 🆕 (21 ago 2026, a pedido explícito de Israel) Checklist visual del
+# pedido: se manda como mensaje de APOYO extra (no reemplaza las
+# preguntas normales del bot) mientras se sigue armando el pedido, para
+# que la clienta vea de un vistazo qué datos ya quedaron confirmados
+# (✅) y cuáles todavía faltan (❌) -- muchas clientas no saben bien qué
+# datos hay que dar (color de toalla, de moño, de jaboncito, etc.) y este
+# checklist se los deja ver clarito, con el mismo producto y precio que
+# ya está resuelto en el pedido. Mismo patrón que el resto de los
+# "candados" de este archivo: el estado de cada línea lo decide Python
+# revisando los datos reales del pedido, el modelo nunca decide qué
+# palomear.
+#
+# No intenta cubrir con precisión perfecta los ~30 productos del
+# catálogo -- para los que no caen en ninguna categoría conocida, solo
+# se muestran los campos que YA tienen un valor (nunca se marca "falta
+# X" para un campo que no estamos seguros que aplique, para no confundir
+# a la clienta con un dato que no le corresponde).
+_PRODUCTOS_CHECKLIST_SIN_COLORES = (
+    "domino", "dominó", "encendedor", "destapador", "espejo",
+    "oracion con decenario", "kit osito oracion velita", "oracion con velita",
+)
+_PRODUCTOS_CHECKLIST_VELA = ("vela de toalla", "vela chica", "vela grande", "velita chica", "velita grande")
+_PRODUCTOS_CHECKLIST_ABANICO = ("abanico",)
+# Llevan toalla + moño pero SIN opción de figura/color de jaboncito
+# (jaboncito de inicial fijo, sin aroma, o sin jaboncito del todo).
+_PRODUCTOS_CHECKLIST_SIN_OPCION_JABONCITO = (
+    "osito inicial chica", "osito con inicial chica",
+    "osito doble inicial", "osito inicial grande", "osito con inicial grande",
+    "rosa de toalla", "rosa",
+)
+_PALABRAS_CHECKLIST_SIN_JABON = ("sencillo", "sin jabon", "sin jaboncito")
+
+
+def _campos_checklist_item(item):
+    """Lista ordenada de (etiqueta, valor_actual_o_None) que aplican para
+    ESTE producto en particular, según su familia (ver nota arriba)."""
+    clave = normalizar_producto_clave(item.get("producto") or "")
+    campos = []
+
+    if any(p in clave for p in _PRODUCTOS_CHECKLIST_SIN_COLORES):
+        return campos  # este producto no usa líneas de color
+
+    if any(p in clave for p in _PRODUCTOS_CHECKLIST_VELA):
+        campos.append(("Color de vela/listón", item.get("color_velita")))
+        return campos
+
+    if any(p in clave for p in _PRODUCTOS_CHECKLIST_ABANICO):
+        campos.append(("Color de moño", item.get("color_mono")))
+        return campos
+
+    # Familia general de animalitos/ositos de toalla.
+    campos.append(("Color de toalla", item.get("color_toalla")))
+
+    if "afelpad" in clave or "peluche" in clave:
+        # Toalla y moño vienen en pareja fija de fábrica -- solo se pide
+        # el color de moño aparte si el cliente pidió cambio de moño.
+        if item.get("mono_personalizado"):
+            campos.append(("Color de moño (cambio)", item.get("color_mono")))
+        return campos
+
+    campos.append(("Color de moño", item.get("color_mono")))
+
+    if any(p in clave for p in _PRODUCTOS_CHECKLIST_SIN_OPCION_JABONCITO):
+        return campos
+    if any(p in clave for p in _PALABRAS_CHECKLIST_SIN_JABON):
+        return campos  # variante "sin jaboncito" -- no aplica figura/color
+
+    # Familia con jaboncito de figura (osito con jaboncito, elefante,
+    # jirafa, león, caballo, conejo, perrito, búho, búho birrete,
+    # unicornio, mariposa, osito doble pie).
+    campos.append(("Color de jaboncito", item.get("color_jaboncito")))
+    if "doble pie" not in clave:
+        # En "osito doble pie" la figura ya es fija (piecito), no se
+        # elige -- en el resto sí es una elección del cliente.
+        campos.insert(-1, ("Figura de jaboncito", item.get("tipo_jaboncito")))
+    return campos
+
+
+def construir_checklist_pedido(pedido):
+    """Arma el texto del checklist visual (✅/❌) del pedido completo. No
+    incluye nombre ni teléfono del cliente (eso se pide hasta el
+    anticipo, no aquí). Regresa None si el pedido todavía no tiene
+    ningún producto agregado."""
+    items = pedido.get("items") if isinstance(pedido.get("items"), list) else []
+    if not items:
+        return None
+
+    lineas = []
+    for item in items:
+        producto = item.get("producto") or "producto"
+        cantidad = item.get("cantidad")
+        precio = item.get("precio_unitario")
+        if precio is not None and not item.get("_precio_pendiente"):
+            lineas.append(f"✅ {cantidad or '?'} x {producto} — ${precio:.2f} c/u")
+        else:
+            lineas.append(f"❌ {producto} (precio pendiente de confirmar)")
+
+        for etiqueta, valor in _campos_checklist_item(item):
+            lineas.append(f"✅ {etiqueta}: {valor}" if valor else f"❌ {etiqueta}")
+
+    # --- Campos a nivel del pedido completo (una sola vez, no por item) ---
+    fecha_evento = pedido.get("fecha_evento")
+    lineas.append(f"✅ Fecha de entrega: {fecha_evento}" if fecha_evento else "❌ Fecha de entrega")
+
+    if fecha_evento and pedido.get("es_urgente") is not None:
+        tipo_pedido = "urgente" if pedido.get("es_urgente") else "normal"
+        lineas.append(f"✅ Tipo de pedido: {tipo_pedido}")
+    else:
+        lineas.append("❌ Tipo de pedido (normal/urgente)")
+
+    tipo_entrega = pedido.get("tipo_entrega")
+    lineas.append(f"✅ Tipo de entrega: {tipo_entrega}" if tipo_entrega else "❌ Tipo de entrega")
+
+    return "📋 Esto llevamos hasta ahora de tu pedido:\n\n" + "\n".join(lineas)
+
+
 # 🔧 (19 ago 2026, candado nuevo a pedido explícito de Israel) Caso real
 # detectado: el bot preguntó "¿cuál es el monto que VAS A PAGAR de
 # anticipo?" (a futuro), la clienta contestó solo "$50 MXN" (la cantidad
@@ -4766,6 +4882,30 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             print(f"📨 {canal} respondió: {r.status_code}")
         else:
             print(f"❌ enviar_mensaje_canal ({canal}) devolvió None")
+
+        # 🆕 (21 ago 2026, a pedido explícito de Israel) Checklist visual
+        # del pedido: mensaje de APOYO adicional (no reemplaza la
+        # respuesta de arriba) para que la clienta vea de un vistazo qué
+        # datos del pedido ya quedaron confirmados y cuáles faltan. Se
+        # manda solo mientras el pedido tenga al menos un producto y
+        # todavía falte algo (deja de mandarse solo una vez que ya no
+        # falta nada -- en ese punto ya aplica el resumen final). Se evita
+        # reenviar el mismo checklist sin cambios turno tras turno (ej. si
+        # el cliente solo hizo una pregunta sin dar datos nuevos).
+        try:
+            checklist_texto = construir_checklist_pedido(sesion.get("pedido") or {})
+            if (
+                checklist_texto
+                and "❌" in checklist_texto
+                and checklist_texto != sesion.get("_ultimo_checklist_enviado")
+            ):
+                time.sleep(1.2)
+                crm.guardar_respuesta(cliente, checklist_texto, canal=canal)
+                enviar_mensaje_canal(numero, checklist_texto, canal, pagina_id=pagina_id)
+                sesion["_ultimo_checklist_enviado"] = checklist_texto
+                print("📋 Checklist del pedido enviado (actualizado)")
+        except Exception as e:
+            print("⚠️ Error armando/mandando el checklist del pedido (no afecta la respuesta ya enviada):", repr(e))
 
         # 🔧 Envío determinístico de imágenes cuando es el BOT quien
         # recomienda colores o menciona/cotiza una variante específica de

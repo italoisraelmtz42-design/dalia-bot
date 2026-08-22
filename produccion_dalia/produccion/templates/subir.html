@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block titulo %}Subir nota — Producción Dalia{% endblock %}
+{% block contenido %}
+<h2>📸 Subir nota confirmada</h2>
+<p class="muted">
+  Sube la foto de la nota que ya se confirmó con el cliente (la que se manda
+  para cerrar el pedido). La IA va a leer los datos automáticamente y en la
+  siguiente pantalla los vas a poder revisar y corregir antes de guardar.
+</p>
+<form method="post" enctype="multipart/form-data" class="card">
+  <label for="foto">Foto de la nota</label>
+  <input type="file" id="foto" name="foto" accept="image/*" capture="environment" required>
+  <button type="submit" class="primario" style="width:100%;margin-top:16px;">Leer nota con IA</button>
+</form>
+{% endblock %}

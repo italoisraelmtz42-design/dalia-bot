@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block titulo %}Producción — Producción Dalia{% endblock %}
+{% block contenido %}
+<h2 style="margin-bottom:4px;">{{ titulo }}</h2>
+<p class="muted" style="margin-top:0;">{{ pedidos|length }} pedido(s)</p>
+
+<nav class="tabs" style="padding:0 0 14px 0;margin:0 0 6px 0;">
+  <a href="{{ url_for('dashboard', vista='hoy') }}" class="{{ 'activo' if vista=='hoy' else '' }}">Hoy</a>
+  <a href="{{ url_for('dashboard', vista='manana') }}" class="{{ 'activo' if vista=='manana' else '' }}">Mañana</a>
+  <a href="{{ url_for('dashboard', vista='semana') }}" class="{{ 'activo' if vista=='semana' else '' }}">Semana</a>
+  <a href="{{ url_for('dashboard', vista='mes') }}" class="{{ 'activo' if vista=='mes' else '' }}">Mes</a>
+  <a href="{{ url_for('dashboard', vista='atrasados') }}" class="{{ 'activo' if vista=='atrasados' else '' }}">⚠️ Atrasados</a>
+  <a href="{{ url_for('dashboard', vista='todos') }}" class="{{ 'activo' if vista=='todos' else '' }}">Todos</a>
+</nav>
+
+{% if vista == 'todos' and sin_fecha_reconocida %}
+  <div class="flash">
+    ⚠️ {{ sin_fecha_reconocida }} pedido(s) tienen una fecha de entrega que no se pudo
+    reconocer (revisa que esté como DD/MM/AAAA) -- por eso no aparecen en las
+    pestañas de Hoy/Mañana/Semana/Mes/Atrasados. Edítalos para corregir la fecha.
+  </div>
+{% endif %}
+
+{% if not pedidos %}
+  <div class="card muted">No hay pedidos en este período.</div>
+{% endif %}
+
+{% for p in pedidos %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;">
+    <h3>{{ p.cliente or 'Cliente sin nombre' }}</h3>
+    <span class="muted" style="white-space:nowrap;">{{ p.fecha_entrega or 'sin fecha' }}</span>
+  </div>
+  <div class="muted">
+    {% for prod in p.productos %}
+      {{ prod.cantidad }} x {{ prod.producto }}{% if prod.colores %} ({{ prod.colores }}){% endif %}{% if not loop.last %}, {% endif %}
+    {% endfor %}
+  </div>
+  <div class="muted">
+    {{ p.tipo_entrega.replace('_',' ') if p.tipo_entrega else 'tipo de entrega no especificado' }}
+    {% if p.municipio %} — {{ p.municipio }}{% endif %}
+  </div>
+
+  <div class="row-botones">
+    <span class="badge {{ 'listo' if p.estatus_fabricacion == 'listo' else ('proceso' if p.estatus_fabricacion == 'en_proceso' else 'pendiente') }}">
+      Fabricación: {{ p.estatus_fabricacion.replace('_',' ') }}
+    </span>
+    <span class="badge {{ 'entregado' if p.estatus_entrega == 'entregado' else 'pendiente' }}">
+      Entrega: {{ p.estatus_entrega }}
+    </span>
+  </div>
+
+  <div class="row-botones">
+    {% if p.estatus_fabricacion != 'en_proceso' %}
+    <form class="inline" method="post" action="{{ url_for('cambiar_estatus', pedido_id=p.id) }}">
+      <input type="hidden" name="campo" value="estatus_fabricacion">
+      <input type="hidden" name="valor" value="en_proceso">
+      <button type="submit">En proceso</button>
+    </form>
+    {% endif %}
+    {% if p.estatus_fabricacion != 'listo' %}
+    <form class="inline" method="post" action="{{ url_for('cambiar_estatus', pedido_id=p.id) }}">
+      <input type="hidden" name="campo" value="estatus_fabricacion">
+      <input type="hidden" name="valor" value="listo">
+      <button type="submit" class="verde">Fabricación lista</button>
+    </form>
+    {% endif %}
+    {% if p.estatus_entrega != 'entregado' %}
+    <form class="inline" method="post" action="{{ url_for('cambiar_estatus', pedido_id=p.id) }}">
+      <input type="hidden" name="campo" value="estatus_entrega">
+      <input type="hidden" name="valor" value="entregado">
+      <button type="submit" class="verde">Marcar entregado</button>
+    </form>
+    {% endif %}
+    <a class="btn" href="{{ url_for('pedido_detalle', pedido_id=p.id) }}">Ver detalle</a>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

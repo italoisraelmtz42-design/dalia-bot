@@ -3021,15 +3021,30 @@ def _liberar_imagen_del_historial(historial, imagen_base64, texto_cliente):
     en memoria (no de la conversación real, que sigue intacta en
     WhatsApp/Messenger), pero se conserva el texto que la acompañaba
     para que la conversación se siga leyendo con sentido.
-    Debe llamarse UNA sola vez por turno, después de que se agregó la
-    respuesta del asistente a `historial` -- así el turno del usuario que
-    se va a "aligerar" es siempre historial[-2]."""
-    if not imagen_base64 or len(historial) < 2:
+
+    🔧 (22 ago 2026) ANTES esta función asumía que el turno con la
+    imagen siempre quedaba en historial[-2] (justo antes de la respuesta
+    del asistente que se acababa de agregar). Eso es cierto en 2 de los
+    3 lugares donde preguntar_ia puede terminar el turno -- pero en el
+    camino de "se acaba de confirmar un anticipo" NO se agrega ninguna
+    respuesta del asistente al historial (la respuesta fija se manda
+    aparte, ver `anticipo_recien_confirmado_este_turno`), así que ahí el
+    turno con la imagen se queda en historial[-1], no [-2]. Como la
+    llamada a esta función faltaba justo en ese camino, la imagen de
+    CADA comprobante de pago (que es casi todas las ventas reales) se
+    quedaba pegada en RAM para siempre -- el causante principal de la
+    fuga. Ahora, en vez de adivinar la posición por índice, se busca
+    desde el final la última entrada del cliente que todavía trae la
+    imagen completa (content es una lista, no texto plano) y se aligera
+    esa -- así funciona sin importar cuántas cosas se hayan agregado
+    después en este turno, y no se puede volver a "olvidar" por un
+    camino de salida nuevo que se agregue más adelante."""
+    if not imagen_base64:
         return
-    historial[-2] = {
-        "role": "user",
-        "content": texto_cliente or "(el cliente mandó una imagen)",
-    }
+    for entrada in reversed(historial):
+        if entrada.get("role") == "user" and isinstance(entrada.get("content"), list):
+            entrada["content"] = texto_cliente or "(el cliente mandó una imagen)"
+            return
 
 
 def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, canal="whatsapp", pagina_id=None):
@@ -3156,6 +3171,12 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
                 # mensajes fijos + notificar a Dalia.
                 sesion["_anticipo_recien_confirmado"] = True
                 print("⏳ Anticipo confirmado en este turno — se cortan las respuestas automáticas del modelo")
+                # 🔧 (22 ago 2026) Este return se salía SIN liberar la
+                # imagen del historial -- ver docstring de
+                # _liberar_imagen_del_historial arriba. Como casi toda
+                # venta real trae foto de comprobante, este era el
+                # camino que más se ejecutaba y el que más RAM acumulaba.
+                _liberar_imagen_del_historial(historial, imagen_base64, texto_cliente)
                 return None
 
             mensajes_completos[0]["content"] = construir_system_prompt(

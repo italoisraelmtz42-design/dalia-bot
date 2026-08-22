@@ -8,23 +8,30 @@ from database import get_connection
 
 def crear_cliente(telefono, nombre=None):
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    ahora = datetime.now().isoformat()
+        ahora = datetime.now().isoformat()
 
-    cur.execute("""
-        INSERT OR IGNORE INTO clientes
-        (telefono, nombre, fecha_alta, ultima_interaccion)
-        VALUES (?, ?, ?, ?)
-    """, (
-        telefono,
-        nombre,
-        ahora,
-        ahora
-    ))
+        cur.execute("""
+            INSERT OR IGNORE INTO clientes
+            (telefono, nombre, fecha_alta, ultima_interaccion)
+            VALUES (?, ?, ?, ?)
+        """, (
+            telefono,
+            nombre,
+            ahora,
+            ahora
+        ))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        # 🔧 (22 ago 2026, a pedido de Israel -- fuga de memoria/conexiones)
+        # Antes, si cur.execute() tronaba (ej. base de datos ocupada),
+        # conn.close() nunca se alcanzaba a llamar y la conexión se
+        # quedaba abierta para siempre. Con try/finally se cierra pase lo
+        # que pase.
+        conn.close()
 
 
 # ==========================================
@@ -34,19 +41,20 @@ def crear_cliente(telefono, nombre=None):
 def buscar_cliente(telefono):
 
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    cur.execute("""
-        SELECT *
-        FROM clientes
-        WHERE telefono = ?
-    """, (telefono,))
+        cur.execute("""
+            SELECT *
+            FROM clientes
+            WHERE telefono = ?
+        """, (telefono,))
 
-    cliente = cur.fetchone()
+        cliente = cur.fetchone()
 
-    conn.close()
-
-    return cliente
+        return cliente
+    finally:
+        conn.close()
 
 
 # ==========================================
@@ -72,21 +80,23 @@ def obtener_o_crear_cliente(telefono, nombre=None):
 def actualizar_ultima_interaccion(telefono):
 
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    ahora = datetime.now().isoformat()
+        ahora = datetime.now().isoformat()
 
-    cur.execute("""
-        UPDATE clientes
-        SET ultima_interaccion = ?
-        WHERE telefono = ?
-    """, (
-        ahora,
-        telefono
-    ))
+        cur.execute("""
+            UPDATE clientes
+            SET ultima_interaccion = ?
+            WHERE telefono = ?
+        """, (
+            ahora,
+            telefono
+        ))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ==========================================
@@ -96,19 +106,21 @@ def actualizar_ultima_interaccion(telefono):
 def guardar_nombre(telefono, nombre):
 
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    cur.execute("""
-        UPDATE clientes
-        SET nombre = ?
-        WHERE telefono = ?
-    """, (
-        nombre,
-        telefono
-    ))
+        cur.execute("""
+            UPDATE clientes
+            SET nombre = ?
+            WHERE telefono = ?
+        """, (
+            nombre,
+            telefono
+        ))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ==========================================
@@ -118,16 +130,17 @@ def guardar_nombre(telefono, nombre):
 def obtener_clientes():
 
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    cur.execute("""
-        SELECT *
-        FROM clientes
-        ORDER BY ultima_interaccion DESC
-    """)
+        cur.execute("""
+            SELECT *
+            FROM clientes
+            ORDER BY ultima_interaccion DESC
+        """)
 
-    clientes = cur.fetchall()
+        clientes = cur.fetchall()
 
-    conn.close()
-
-    return clientes
+        return clientes
+    finally:
+        conn.close()

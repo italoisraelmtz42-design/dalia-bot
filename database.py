@@ -14,10 +14,29 @@ if db_dir and not os.path.exists(db_dir):
     except Exception as e:
         logger_db.warning(f"No se pudo crear el directorio {db_dir}: {e}")
 
+class _ConexionAutoCierre(sqlite3.Connection):
+    """🔧 (22 ago 2026, a pedido de Israel -- fuga de memoria/conexiones)
+    `with conn:` en sqlite3 solo hace commit/rollback automático al
+    salir del bloque -- NO cierra la conexión. Los ~25 lugares del
+    proyecto que hacen `with get_db_connection() as conn:` daban por
+    hecho que sí se cerraba, así que la conexión (y su memoria/handle de
+    archivo) se quedaba abierta hasta que el recolector de basura de
+    Python decidiera reclamarla, lo cual no es inmediato ni está
+    garantizado -- con mensajes llegando seguido, esto acumula
+    conexiones abiertas de más. Esta subclase cierra la conexión también
+    al salir del `with`, sin tener que tocar ninguno de esos ~25
+    lugares -- nada más cambia cómo se crea la conexión aquí."""
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            super().__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self.close()
+
+
 def get_db_connection():
     # timeout=10: si la BD está ocupada, espera hasta 10s antes de fallar
     # (en vez de tronar de inmediato con "database is locked").
-    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn = sqlite3.connect(DB_PATH, timeout=10, factory=_ConexionAutoCierre)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     # WAL permite lecturas mientras alguien más escribe. Con varios mensajes

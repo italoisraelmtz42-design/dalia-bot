@@ -9,30 +9,36 @@ from database import get_connection
 def guardar_mensaje(cliente_id, rol, mensaje, tipo="texto"):
 
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    ahora = datetime.now().isoformat()
+        ahora = datetime.now().isoformat()
 
-    cur.execute("""
-        INSERT INTO conversaciones
-        (
+        cur.execute("""
+            INSERT INTO conversaciones
+            (
+                cliente_id,
+                fecha,
+                rol,
+                mensaje,
+                tipo
+            )
+            VALUES (?, ?, ?, ?, ?)
+        """, (
             cliente_id,
-            fecha,
+            ahora,
             rol,
             mensaje,
             tipo
-        )
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        cliente_id,
-        ahora,
-        rol,
-        mensaje,
-        tipo
-    ))
+        ))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        # 🔧 (22 ago 2026, a pedido de Israel -- fuga de memoria/conexiones)
+        # Antes, si cur.execute() tronaba, conn.close() nunca se llamaba
+        # y la conexión se quedaba abierta para siempre. Con try/finally
+        # se cierra pase lo que pase.
+        conn.close()
 
 
 # ==========================================
@@ -42,24 +48,25 @@ def guardar_mensaje(cliente_id, rol, mensaje, tipo="texto"):
 def obtener_historial(cliente_id, limite=100):
 
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    cur.execute("""
-        SELECT *
-        FROM conversaciones
-        WHERE cliente_id = ?
-        ORDER BY id DESC
-        LIMIT ?
-    """, (
-        cliente_id,
-        limite
-    ))
+        cur.execute("""
+            SELECT *
+            FROM conversaciones
+            WHERE cliente_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+        """, (
+            cliente_id,
+            limite
+        ))
 
-    historial = cur.fetchall()
+        historial = cur.fetchall()
 
-    conn.close()
-
-    return list(reversed(historial))
+        return list(reversed(historial))
+    finally:
+        conn.close()
 
 
 # ==========================================
@@ -69,16 +76,18 @@ def obtener_historial(cliente_id, limite=100):
 def borrar_historial(cliente_id):
 
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    cur.execute("""
-        DELETE
-        FROM conversaciones
-        WHERE cliente_id = ?
-    """, (cliente_id,))
+        cur.execute("""
+            DELETE
+            FROM conversaciones
+            WHERE cliente_id = ?
+        """, (cliente_id,))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ==========================================
@@ -88,19 +97,20 @@ def borrar_historial(cliente_id):
 def contar_mensajes(cliente_id):
 
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    cur.execute("""
-        SELECT COUNT(*) total
-        FROM conversaciones
-        WHERE cliente_id = ?
-    """, (cliente_id,))
+        cur.execute("""
+            SELECT COUNT(*) total
+            FROM conversaciones
+            WHERE cliente_id = ?
+        """, (cliente_id,))
 
-    total = cur.fetchone()["total"]
+        total = cur.fetchone()["total"]
 
-    conn.close()
-
-    return total
+        return total
+    finally:
+        conn.close()
 
 
 # ==========================================
@@ -110,18 +120,19 @@ def contar_mensajes(cliente_id):
 def ultimo_mensaje(cliente_id):
 
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    cur.execute("""
-        SELECT *
-        FROM conversaciones
-        WHERE cliente_id = ?
-        ORDER BY id DESC
-        LIMIT 1
-    """, (cliente_id,))
+        cur.execute("""
+            SELECT *
+            FROM conversaciones
+            WHERE cliente_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (cliente_id,))
 
-    mensaje = cur.fetchone()
+        mensaje = cur.fetchone()
 
-    conn.close()
-
-    return mensaje
+        return mensaje
+    finally:
+        conn.close()

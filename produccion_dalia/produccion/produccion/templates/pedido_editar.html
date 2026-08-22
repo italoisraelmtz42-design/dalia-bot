@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block titulo %}Editar pedido — Producción Dalia{% endblock %}
+{% block contenido %}
+<a class="link-suave" href="{{ url_for('pedido_detalle', pedido_id=p.id) }}">← Volver</a>
+<h2>✏️ Editar pedido</h2>
+
+<form method="post">
+  <div class="card">
+    <label for="cliente">Cliente</label>
+    <input type="text" id="cliente" name="cliente" value="{{ p.cliente or '' }}">
+
+    <label for="telefono">Teléfono</label>
+    <input type="tel" id="telefono" name="telefono" value="{{ p.telefono or '' }}">
+
+    <label for="municipio">Municipio</label>
+    <input type="text" id="municipio" name="municipio" value="{{ p.municipio or '' }}">
+
+    <label for="fecha_entrega">Fecha de entrega</label>
+    <input type="text" id="fecha_entrega" name="fecha_entrega" placeholder="DD/MM/AAAA" value="{{ p.fecha_entrega or '' }}">
+
+    <label for="tipo_entrega">Tipo de entrega</label>
+    <select id="tipo_entrega" name="tipo_entrega">
+      <option value="">-- Selecciona --</option>
+      {% for t in tipos_entrega %}
+        <option value="{{ t }}" {% if p.tipo_entrega == t %}selected{% endif %}>{{ t.replace('_', ' ') }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="direccion">Dirección (opcional)</label>
+    <input type="text" id="direccion" name="direccion" value="{{ p.direccion or '' }}">
+  </div>
+
+  <div class="card">
+    <h3 style="margin-bottom:8px;">Productos</h3>
+    <div id="productos-lista">
+      {% for prod in p.productos %}
+      <div class="producto-fila">
+        <label>Producto</label>
+        <input type="text" name="producto_{{ loop.index0 }}" value="{{ prod.producto or '' }}">
+        <label>Cantidad</label>
+        <input type="number" name="cantidad_{{ loop.index0 }}" value="{{ prod.cantidad or '' }}">
+        <label>Colores / detalles</label>
+        <input type="text" name="colores_{{ loop.index0 }}" value="{{ prod.colores or '' }}">
+        <label>Precio unitario</label>
+        <input type="number" step="0.01" name="precio_{{ loop.index0 }}" value="{{ prod.precio_unitario or '' }}">
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button" class="btn" style="margin-top:10px;" onclick="agregarProducto()">+ Agregar otro producto</button>
+  </div>
+
+  <div class="card">
+    <label for="anticipo">Anticipo pagado</label>
+    <input type="number" step="0.01" id="anticipo" name="anticipo" value="{{ p.anticipo or 0 }}">
+
+    <label for="total">Total del pedido</label>
+    <input type="number" step="0.01" id="total" name="total" value="{{ p.total or 0 }}">
+
+    <label for="notas">Notas</label>
+    <textarea id="notas" name="notas">{{ p.notas or '' }}</textarea>
+  </div>
+
+  <button type="submit" class="primario" style="width:100%;padding:14px;">Guardar cambios</button>
+</form>
+
+<script>
+  let contadorProductos = document.querySelectorAll('.producto-fila').length;
+  function agregarProducto() {
+    const contenedor = document.getElementById('productos-lista');
+    const i = contadorProductos++;
+    const div = document.createElement('div');
+    div.className = 'producto-fila';
+    div.innerHTML = `
+      <label>Producto</label>
+      <input type="text" name="producto_${i}">
+      <label>Cantidad</label>
+      <input type="number" name="cantidad_${i}">
+      <label>Colores / detalles</label>
+      <input type="text" name="colores_${i}">
+      <label>Precio unitario</label>
+      <input type="number" step="0.01" name="precio_${i}">
+    `;
+    contenedor.appendChild(div);
+  }
+</script>
+{% endblock %}

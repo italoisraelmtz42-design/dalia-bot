@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block titulo %}{{ p.cliente or 'Pedido' }} — Producción Dalia{% endblock %}
+{% block contenido %}
+<a class="link-suave" href="{{ url_for('dashboard') }}">← Volver</a>
+<h2 style="margin-bottom:2px;">{{ p.cliente or 'Cliente sin nombre' }}</h2>
+<p class="muted" style="margin-top:0;">Capturado el {{ p.fecha_captura[:16].replace('T', ' ') if p.fecha_captura else '' }}{% if p.subido_por %} por {{ p.subido_por }}{% endif %}</p>
+
+<div class="card">
+  <p><strong>Teléfono:</strong> {{ p.telefono or '—' }}</p>
+  <p><strong>Municipio:</strong> {{ p.municipio or '—' }}</p>
+  <p><strong>Fecha de entrega:</strong> {{ p.fecha_entrega or '—' }}</p>
+  <p><strong>Tipo de entrega:</strong> {{ p.tipo_entrega.replace('_',' ') if p.tipo_entrega else '—' }}</p>
+  {% if p.direccion %}<p><strong>Dirección:</strong> {{ p.direccion }}</p>{% endif %}
+</div>
+
+<div class="card">
+  <h3>Productos</h3>
+  {% for prod in p.productos %}
+    <p>• {{ prod.cantidad }} x {{ prod.producto }}{% if prod.colores %} — {{ prod.colores }}{% endif %}{% if prod.precio_unitario %} (${{ prod.precio_unitario }} c/u){% endif %}</p>
+  {% else %}
+    <p class="muted">Sin productos registrados.</p>
+  {% endfor %}
+</div>
+
+<div class="card totales">
+  <div class="item"><span class="muted">Anticipo</span><br><span class="num" style="font-size:1.1rem;">${{ '%.2f'|format(p.anticipo or 0) }}</span></div>
+  <div class="item"><span class="muted">Total</span><br><span class="num" style="font-size:1.1rem;">${{ '%.2f'|format(p.total or 0) }}</span></div>
+  <div class="item"><span class="muted">Saldo</span><br><span class="num" style="font-size:1.1rem;">${{ '%.2f'|format(p.saldo or 0) }}</span></div>
+</div>
+
+{% if p.notas %}
+<div class="card"><h3>Notas</h3><p>{{ p.notas }}</p></div>
+{% endif %}
+
+{% if p.foto_archivo %}
+<div class="card">
+  <h3>Foto original</h3>
+  <img class="foto-nota" src="{{ url_for('servir_foto', nombre_archivo=p.foto_archivo) }}" alt="Foto de la nota">
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="row-botones">
+    <span class="badge {{ 'listo' if p.estatus_fabricacion == 'listo' else ('proceso' if p.estatus_fabricacion == 'en_proceso' else 'pendiente') }}">
+      Fabricación: {{ p.estatus_fabricacion.replace('_',' ') }}
+    </span>
+    <span class="badge {{ 'entregado' if p.estatus_entrega == 'entregado' else 'pendiente' }}">
+      Entrega: {{ p.estatus_entrega }}
+    </span>
+  </div>
+  <div class="row-botones">
+    <a class="btn" href="{{ url_for('pedido_editar', pedido_id=p.id) }}">✏️ Editar</a>
+    <form class="inline" method="post" action="{{ url_for('pedido_eliminar', pedido_id=p.id) }}" onsubmit="return confirm('¿Seguro que quieres eliminar este pedido? No se puede deshacer.');">
+      <button type="submit" class="rojo">🗑️ Eliminar</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

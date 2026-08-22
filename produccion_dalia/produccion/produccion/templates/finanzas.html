@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block titulo %}Finanzas — Producción Dalia{% endblock %}
+{% block contenido %}
+<h2 style="margin-bottom:4px;">💰 {{ titulo }}</h2>
+
+<nav class="tabs" style="padding:0 0 14px 0;margin:0 0 6px 0;">
+  <a href="{{ url_for('finanzas', periodo='hoy') }}" class="{{ 'activo' if periodo=='hoy' else '' }}">Hoy</a>
+  <a href="{{ url_for('finanzas', periodo='semana') }}" class="{{ 'activo' if periodo=='semana' else '' }}">Semana</a>
+  <a href="{{ url_for('finanzas', periodo='mes') }}" class="{{ 'activo' if periodo=='mes' else '' }}">Mes</a>
+</nav>
+
+<div class="card totales">
+  <div class="item">
+    <div class="muted">Pedidos capturados</div>
+    <div class="num">{{ pedidos|length }}</div>
+  </div>
+  <div class="item">
+    <div class="muted">Anticipos recibidos</div>
+    <div class="num">${{ '%.2f'|format(total_anticipos) }}</div>
+  </div>
+  <div class="item">
+    <div class="muted">Total vendido</div>
+    <div class="num">${{ '%.2f'|format(total_ventas) }}</div>
+  </div>
+  <div class="item">
+    <div class="muted">Saldo pendiente</div>
+    <div class="num">${{ '%.2f'|format(total_saldos) }}</div>
+  </div>
+</div>
+
+{% if not pedidos %}
+  <div class="card muted">No se capturó ningún pedido en este período.</div>
+{% endif %}
+
+{% for p in pedidos %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;">
+    <h3>{{ p.cliente or 'Cliente sin nombre' }}</h3>
+    <span class="muted">{{ p.fecha_captura[:10] if p.fecha_captura else '' }}</span>
+  </div>
+  <div class="totales">
+    <div class="item"><span class="muted">Anticipo</span><br>${{ '%.2f'|format(p.anticipo or 0) }}</div>
+    <div class="item"><span class="muted">Total</span><br>${{ '%.2f'|format(p.total or 0) }}</div>
+    <div class="item"><span class="muted">Saldo</span><br>${{ '%.2f'|format(p.saldo or 0) }}</div>
+  </div>
+  <a class="link-suave" href="{{ url_for('pedido_detalle', pedido_id=p.id) }}">Ver detalle →</a>
+</div>
+{% endfor %}
+{% endblock %}

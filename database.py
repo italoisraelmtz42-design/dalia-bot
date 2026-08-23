@@ -75,9 +75,19 @@ class _ConexionAutoCierre(sqlite3.Connection):
 
 
 def get_db_connection():
-    # Espera hasta 10s a que el hilo anterior termine de usar el disco
-    # antes de rendirse (ver comentario de _db_lock arriba).
-    if not _db_lock.acquire(timeout=10):
+    # 🔧 (23 ago 2026, mismo día -- a los pocos minutos de subir el
+    # candado) Con 10s de margen, abrir el dashboard en varias pestañas
+    # al mismo tiempo (ej. "hoy" + "semana" + "mes") alcanzó a chocar:
+    # cada pestaña hace ~14 consultas en UNA sola conexión, y si el
+    # disco de Render está teniendo un momento lento (la razón de fondo
+    # de todo este problema), esas ~14 consultas pueden tardar más de
+    # 10s en total mientras las demás pestañas esperan su turno -- eso
+    # se vio en los logs como 5 errores seguidos de "tiempo de espera
+    # agotado" entre pestañas del dashboard, justo después del deploy.
+    # Subir a 25s le da mucho más margen para que el turno de cada quien
+    # simplemente tarde un poco más en vez de fallar. Sigue siendo mejor
+    # esperar unos segundos de más que mostrar un error.
+    if not _db_lock.acquire(timeout=25):
         logger_db.error("get_db_connection: tiempo de espera agotado para el candado de disco (posible hilo colgado).")
         raise sqlite3.OperationalError("tiempo de espera agotado para acceso exclusivo al disco")
     conn = None

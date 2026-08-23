@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block titulo %}Inventario — Producción Dalia{% endblock %}
+{% block contenido %}
+<h2 style="margin-bottom:4px;">📦 Inventario de materia prima</h2>
+<p class="muted" style="margin-top:0;">Lo que se compra para fabricar (telas, ositos base, listones, etc.)</p>
+
+<div class="card">
+  <h3 style="margin-bottom:8px;">Agregar material</h3>
+  <form method="post" action="{{ url_for('inventario_nuevo') }}">
+    <label for="nombre">Nombre</label>
+    <input type="text" id="nombre" name="nombre" placeholder="Ej. Toalla chica blanca" required>
+    <div style="display:flex;gap:10px;">
+      <div style="flex:1;">
+        <label for="cantidad">Cantidad</label>
+        <input type="number" step="0.01" id="cantidad" name="cantidad" value="0">
+      </div>
+      <div style="flex:1;">
+        <label for="unidad">Unidad</label>
+        <input type="text" id="unidad" name="unidad" placeholder="pza, m, kg..." value="pza">
+      </div>
+    </div>
+    <button type="submit" class="primario" style="width:100%;margin-top:14px;">+ Agregar al inventario</button>
+  </form>
+</div>
+
+{% if not items %}
+  <div class="card muted">Todavía no hay materiales registrados.</div>
+{% endif %}
+
+{% for it in items %}
+<div class="card">
+  <form method="post" action="{{ url_for('inventario_editar', item_id=it.id) }}">
+    <div style="display:flex;gap:10px;align-items:end;">
+      <div style="flex:2;">
+        <label for="nombre_{{ it.id }}">Material</label>
+        <input type="text" id="nombre_{{ it.id }}" name="nombre" value="{{ it.nombre }}">
+      </div>
+      <div style="flex:1;">
+        <label for="cantidad_{{ it.id }}">Cantidad</label>
+        <input type="number" step="0.01" id="cantidad_{{ it.id }}" name="cantidad" value="{{ it.cantidad }}">
+      </div>
+      <div style="flex:1;">
+        <label for="unidad_{{ it.id }}">Unidad</label>
+        <input type="text" id="unidad_{{ it.id }}" name="unidad" value="{{ it.unidad }}">
+      </div>
+    </div>
+    <div class="row-botones">
+      <button type="submit" class="verde">Guardar cambios</button>
+    </div>
+  </form>
+  <form class="inline" method="post" action="{{ url_for('inventario_eliminar', item_id=it.id) }}" onsubmit="return confirm('¿Eliminar {{ it.nombre }} del inventario?');" style="margin-top:6px;">
+    <button type="submit" class="rojo">🗑️ Eliminar</button>
+  </form>
+  <p class="muted" style="margin-top:8px;margin-bottom:0;">Actualizado: {{ it.actualizado_en[:16].replace('T',' ') if it.actualizado_en else '—' }}</p>
+</div>
+{% endfor %}
+{% endblock %}

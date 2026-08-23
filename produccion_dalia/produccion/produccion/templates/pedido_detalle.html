@@ -16,17 +16,19 @@
 <div class="card">
   <h3>Productos</h3>
   {% for prod in p.productos %}
-    <p>• {{ prod.cantidad }} x {{ prod.producto }}{% if prod.colores %} — {{ prod.colores }}{% endif %}{% if prod.precio_unitario %} (${{ prod.precio_unitario }} c/u){% endif %}</p>
+    <p>• {{ prod.cantidad }} x {{ prod.producto }}{% if prod.colores %} — {{ prod.colores }}{% endif %}{% if prod.precio_unitario and puede_ver_finanzas %} (${{ prod.precio_unitario }} c/u){% endif %}</p>
   {% else %}
     <p class="muted">Sin productos registrados.</p>
   {% endfor %}
 </div>
 
+{% if puede_ver_finanzas %}
 <div class="card totales">
   <div class="item"><span class="muted">Anticipo</span><br><span class="num" style="font-size:1.1rem;">${{ '%.2f'|format(p.anticipo or 0) }}</span></div>
   <div class="item"><span class="muted">Total</span><br><span class="num" style="font-size:1.1rem;">${{ '%.2f'|format(p.total or 0) }}</span></div>
   <div class="item"><span class="muted">Saldo</span><br><span class="num" style="font-size:1.1rem;">${{ '%.2f'|format(p.saldo or 0) }}</span></div>
 </div>
+{% endif %}
 
 {% if p.notas %}
 <div class="card"><h3>Notas</h3><p>{{ p.notas }}</p></div>

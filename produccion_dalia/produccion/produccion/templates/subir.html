@@ -4,16 +4,20 @@
 <h2>📸 Subir notas confirmadas</h2>
 <p class="muted">
   Sube la foto de una o varias notas ya confirmadas con el cliente. Puedes
-  seleccionar varias de una vez (hasta 100) -- la IA las va a ir leyendo una
-  por una y en la siguiente pantalla las vas a poder revisar y corregir
-  antes de guardar cada una.
+  seleccionar varias de una vez (hasta 100). La IA lee cada una con cuidado:
+  <strong>si la nota quedó clara, se guarda sola</strong>, sin detenerse a
+  pedirte que la confirmes. Solo te va a pedir revisar las que tengan algún
+  dato dudoso, borroso o incompleto.
 </p>
 <form method="post" enctype="multipart/form-data" class="card">
+  <p class="muted" style="margin-top:0;">Vas a subir esta tanda como <strong>{{ nombre_usuario }}</strong> (con quien iniciaste sesión).</p>
+
   <label for="fotos">Foto(s) de la(s) nota(s)</label>
   <input type="file" id="fotos" name="fotos" accept="image/*" capture="environment" multiple required>
   <p class="muted" style="margin-top:8px;">
-    Tip: si eliges varias, se van a revisar una por una en orden -- no hace
-    falta esperar a que la IA las lea todas de golpe.
+    Tip: puedes revisar el resultado de cualquier pedido después, entrando a
+    su detalle y dándole "Editar" -- por si alguna se guardó sola con algún
+    dato que quieras ajustar.
   </p>
   <button type="submit" class="primario" style="width:100%;margin-top:16px;">Leer nota(s) con IA</button>
 </form>

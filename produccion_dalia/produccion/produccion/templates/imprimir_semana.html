@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pedidos de la próxima semana — Producción Dalia</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #222; margin: 0; padding: 24px; max-width: 900px; margin: 0 auto;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 2px; }
+  .sub { color: #666; margin-top: 0; font-size: 0.9rem; }
+  .barra-acciones { margin: 14px 0 22px 0; }
+  .barra-acciones button {
+    font-size: 0.9rem; padding: 8px 16px; border-radius: 8px; border: 1px solid #e8598b;
+    background: #e8598b; color: white; cursor: pointer;
+  }
+  h2 { font-size: 1.1rem; border-bottom: 2px solid #e8598b; padding-bottom: 4px; margin-top: 28px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #ddd; font-size: 0.88rem; }
+  th { background: #fce8f0; color: #b8386a; }
+  .resumen-num { text-align: right; font-weight: 700; }
+  .pedido-cabecera { display: flex; justify-content: space-between; margin-top: 16px; }
+  .pedido-cabecera strong { font-size: 1rem; }
+  .muted { color: #777; font-size: 0.85rem; }
+  .vacio { color: #777; font-style: italic; }
+  @media print {
+    .barra-acciones { display: none; }
+    body { padding: 0; }
+    h2 { break-after: avoid; }
+    .pedido { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+  <h1>🖨️ Pedidos a entregar la próxima semana</h1>
+  <p class="sub">Del {{ ini.strftime('%d/%m/%Y') }} al {{ fin.strftime('%d/%m/%Y') }} — generado el {{ generado.strftime('%d/%m/%Y %H:%M') }}</p>
+
+  <div class="barra-acciones">
+    <button onclick="window.print()">🖨️ Imprimir / Guardar como PDF</button>
+  </div>
+
+  <h2>Resumen -- qué fabricar en total</h2>
+  {% if resumen %}
+  <table>
+    <thead><tr><th>Producto</th><th style="text-align:right;">Cantidad total</th></tr></thead>
+    <tbody>
+      {% for nombre, cantidad in resumen %}
+      <tr>
+        <td>{{ nombre }}</td>
+        <td class="resumen-num">{{ cantidad|int if cantidad == cantidad|int else cantidad }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="vacio">No hay pedidos con fecha de entrega en esa semana todavía.</p>
+  {% endif %}
+
+  <h2>Detalle por pedido ({{ pedidos|length }})</h2>
+  {% if not pedidos %}
+    <p class="vacio">Nada que mostrar.</p>
+  {% endif %}
+  {% for p in pedidos %}
+  <div class="pedido">
+    <div class="pedido-cabecera">
+      <strong>{{ p.cliente or 'Cliente sin nombre' }}</strong>
+      <span class="muted">Entrega: {{ p.fecha_entrega or '—' }}{% if p.tipo_entrega %} · {{ p.tipo_entrega.replace('_',' ') }}{% endif %}</span>
+    </div>
+    <div class="muted">
+      {% if p.municipio %}{{ p.municipio }}{% endif %}{% if p.direccion %} — {{ p.direccion }}{% endif %}
+    </div>
+    <table>
+      <thead><tr><th>Producto</th><th>Cantidad</th><th>Colores / detalles</th></tr></thead>
+      <tbody>
+        {% for prod in p.productos %}
+        <tr>
+          <td>{{ prod.producto }}</td>
+          <td>{{ prod.cantidad }}</td>
+          <td>{{ prod.colores or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if p.notas %}<p class="muted">Notas: {{ p.notas }}</p>{% endif %}
+  </div>
+  {% endfor %}
+</body>
+</html>

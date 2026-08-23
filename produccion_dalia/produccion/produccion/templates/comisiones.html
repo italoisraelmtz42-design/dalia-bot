@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block titulo %}Comisión — Producción Dalia{% endblock %}
+{% block contenido %}
+<h2 style="margin-bottom:4px;">💵 {{ 'Tu comisión' if es_propia else 'Comisión de ' + nombre_vendedor }}</h2>
+<p class="muted" style="margin-top:0;">{{ titulo_periodo }} — ${{ '%.2f'|format(monto_por_producto) }} por producto vendido</p>
+
+<nav class="tabs" style="padding:0 0 14px 0;margin:0 0 6px 0;">
+  <a href="{{ url_for('comisiones', periodo='semana', vendedor=vendedor) }}" class="{{ 'activo' if periodo=='semana' else '' }}">Semana</a>
+  <a href="{{ url_for('comisiones', periodo='mes', vendedor=vendedor) }}" class="{{ 'activo' if periodo=='mes' else '' }}">Mes</a>
+</nav>
+
+{% if otros_vendedores %}
+<p class="muted">Ver comisión de:
+  {% for v in ([vendedor] + otros_vendedores) %}
+    <a class="link-suave" href="{{ url_for('comisiones', periodo=periodo, vendedor=v) }}" style="{% if v == vendedor %}font-weight:700;{% endif %}">{{ v.title() }}</a>{% if not loop.last %} · {% endif %}
+  {% endfor %}
+</p>
+{% endif %}
+
+<div class="card totales">
+  <div class="item">
+    <div class="muted">Productos vendidos</div>
+    <div class="num">{{ total_piezas|int if total_piezas == total_piezas|int else total_piezas }}</div>
+  </div>
+  <div class="item">
+    <div class="muted">Comisión a pagar</div>
+    <div class="num">${{ '%.2f'|format(total_comision) }}</div>
+  </div>
+  <div class="item">
+    <div class="muted">Pedidos que cuentan</div>
+    <div class="num">{{ pedidos|length }}</div>
+  </div>
+</div>
+
+{% if not pedidos %}
+  <div class="card muted">No hay pedidos subidos por {{ nombre_vendedor }} en este período.</div>
+{% endif %}
+
+{% for p in pedidos %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;">
+    <h3>{{ p.cliente or 'Cliente sin nombre' }}</h3>
+    <span class="muted">{{ p.fecha_captura[:10] if p.fecha_captura else '' }}</span>
+  </div>
+  <div class="muted">
+    {% for prod in p.productos %}
+      {{ prod.cantidad }} x {{ prod.producto }}{% if not loop.last %}, {% endif %}
+    {% endfor %}
+  </div>
+  <a class="link-suave" href="{{ url_for('pedido_detalle', pedido_id=p.id) }}">Ver detalle →</a>
+</div>
+{% endfor %}
+{% endblock %}

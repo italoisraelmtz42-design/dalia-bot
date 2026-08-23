@@ -114,6 +114,17 @@ def init_db():
                 )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_fecha_entrega_iso ON pedidos_confirmados(fecha_entrega_iso)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_estatus_entrega ON pedidos_confirmados(estatus_entrega)")
+
+        # 🔧 (23 ago 2026, pedido de Israel: control de materia prima)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS materia_prima (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL,
+                cantidad REAL NOT NULL DEFAULT 0,
+                unidad TEXT NOT NULL DEFAULT 'pza',
+                actualizado_en TEXT NOT NULL
+            )
+        """)
     print(f"[DB producción] ✅ Lista en: {os.path.abspath(DB_PATH)}")
 
 
@@ -217,6 +228,63 @@ def listar_capturados_en_rango(fecha_captura_desde, fecha_captura_hasta):
             ORDER BY fecha_captura ASC
         """, (fecha_captura_desde, fecha_captura_hasta))
         return [_fila_a_dict(r) for r in cur.fetchall()]
+
+
+def listar_capturados_por_vendedor_en_rango(vendedor, fecha_captura_desde, fecha_captura_hasta):
+    """🔧 (23 ago 2026, pedido de Israel: comisiones de Diana -- $1 por
+    producto vendido) Igual que listar_capturados_en_rango, pero solo los
+    pedidos subidos por 'vendedor' (comparación sin importar mayúsculas ni
+    espacios de sobra). Ahora 'subido_por' se llena automáticamente con
+    quien inició sesión (ver app.py) -- ya no es un campo de texto libre
+    donde alguien pudo escribir "diana", "Diana " o con una falta -- así
+    que este filtro es confiable para calcular un pago real."""
+    with _cursor() as cur:
+        cur.execute("""
+            SELECT * FROM pedidos_confirmados
+            WHERE substr(fecha_captura, 1, 10) >= ? AND substr(fecha_captura, 1, 10) <= ?
+              AND lower(trim(COALESCE(subido_por, ''))) = lower(trim(?))
+            ORDER BY fecha_captura ASC
+        """, (fecha_captura_desde, fecha_captura_hasta, vendedor))
+        return [_fila_a_dict(r) for r in cur.fetchall()]
+
+
+# ----------------------------------------------------------------------
+# Inventario de materia prima
+# ----------------------------------------------------------------------
+def listar_materia_prima():
+    with _cursor() as cur:
+        cur.execute("SELECT * FROM materia_prima ORDER BY nombre COLLATE NOCASE ASC")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def obtener_materia_prima(item_id):
+    with _cursor() as cur:
+        cur.execute("SELECT * FROM materia_prima WHERE id=?", (item_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def crear_materia_prima(nombre, cantidad, unidad):
+    with _cursor() as cur:
+        cur.execute(
+            "INSERT INTO materia_prima (nombre, cantidad, unidad, actualizado_en) VALUES (?, ?, ?, ?)",
+            (nombre, float(cantidad or 0), unidad or "pza", datetime.datetime.now().isoformat(timespec="seconds")),
+        )
+        return cur.lastrowid
+
+
+def actualizar_materia_prima(item_id, nombre, cantidad, unidad):
+    with _cursor() as cur:
+        cur.execute(
+            "UPDATE materia_prima SET nombre=?, cantidad=?, unidad=?, actualizado_en=? WHERE id=?",
+            (nombre, float(cantidad or 0), unidad or "pza",
+             datetime.datetime.now().isoformat(timespec="seconds"), item_id),
+        )
+
+
+def eliminar_materia_prima(item_id):
+    with _cursor() as cur:
+        cur.execute("DELETE FROM materia_prima WHERE id=?", (item_id,))
 
 
 def _fila_a_dict(row):

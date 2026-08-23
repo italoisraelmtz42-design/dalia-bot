@@ -5,6 +5,13 @@
 {% if total and total > 1 %}
   <p class="badge proceso" style="margin-bottom:8px;">Nota {{ posicion }} de {{ total }} de esta tanda</p>
 {% endif %}
+
+{% if motivo_revision %}
+  <div class="flash" style="background:#fbe9e9;border-color:#f0c6c6;color:#8a3a3a;">
+    ⚠️ Esta nota necesita que la revises: {{ motivo_revision }}
+  </div>
+{% endif %}
+
 <p class="muted">
   Esto es lo que la IA leyó de la nota. Revisa cada dato, corrige lo que
   haga falta y guarda. Nada se queda registrado hasta que confirmes aquí.
@@ -13,8 +20,7 @@
 <form method="post">
   {% if lote_id %}<input type="hidden" name="lote" value="{{ lote_id }}">{% endif %}
   <div class="card">
-    <label for="subido_por">Tu nombre</label>
-    <input type="text" id="subido_por" name="subido_por" placeholder="¿Quién está subiendo esta nota?">
+    <p class="muted" style="margin-top:0;">Nota subida por <strong>{{ nombre_usuario }}</strong>.</p>
 
     <label for="cliente">Cliente</label>
     <input type="text" id="cliente" name="cliente" value="{{ datos.get('cliente') or '' }}">

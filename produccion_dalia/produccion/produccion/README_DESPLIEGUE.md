@@ -36,7 +36,9 @@ En **Environment**, agrega:
 
 | Variable | Valor |
 |---|---|
-| `PRODUCCION_PASSWORD` | La contraseña que van a usar Dalia, Diana y tú para entrar |
+| `PRODUCCION_PASSWORD_ISRAEL` | Tu contraseña |
+| `PRODUCCION_PASSWORD_DALIA` | La contraseña de Dalia |
+| `PRODUCCION_PASSWORD_DIANA` | La contraseña de Diana |
 | `FLASK_SECRET_KEY` | Cualquier texto largo y aleatorio (para las sesiones) |
 | `OPENAI_API_KEY` | La misma que ya usa el bot |
 | `PRODUCCION_DB_PATH` | `/var/data/produccion.db` |
@@ -46,16 +48,30 @@ Las dos últimas son las que hacen que la base de datos y las fotos se
 guarden dentro del Persistent Disk que agregaste en el paso 3, en vez del
 disco efímero.
 
+⚠️ **Actualización 23 ago 2026 — 3 contraseñas separadas.** Antes había
+una sola `PRODUCCION_PASSWORD` compartida por los 3. Ahora cada quien
+tiene la suya, para poder esconderle lo financiero del negocio a Diana y
+para que la comisión de cada quien se calcule sola y sin errores. Si ya
+tenías `PRODUCCION_PASSWORD` configurada, se sigue usando como respaldo
+de tu contraseña (Israel) mientras no agregues `PRODUCCION_PASSWORD_ISRAEL`
+-- pero **Dalia y Diana no van a poder entrar hasta que agregues sus dos
+contraseñas nuevas** en Render.
+
 ## 5. Listo
 
 Cuando termine de desplegar, te va a dar una URL tipo
-`https://produccion-dalia.onrender.com`. Compártela con Dalia y Diana junto
-con la contraseña. Desde el celular pueden entrar, subir la foto de la nota
-confirmada, revisar lo que la IA leyó, corregir si hace falta y guardar.
+`https://produccion-dalia.onrender.com`. Compártela con Dalia y Diana,
+cada quien con SU contraseña. Desde el celular pueden entrar, subir la
+foto de la nota confirmada, revisar lo que la IA leyó, corregir si hace
+falta y guardar.
 
-Tú vas a poder ver ahí mismo qué hay que fabricar/entregar hoy, mañana,
-en la semana o en el mes, y una pestaña de finanzas con anticipos, total
-vendido y saldo pendiente por período.
+Vas a poder ver ahí mismo qué hay que fabricar/entregar hoy, mañana, en
+la semana, en el mes, o cualquier día del calendario (pasado o futuro);
+una pestaña de finanzas con anticipos, total vendido y saldo pendiente
+por período (Diana no la ve); la comisión de Diana por período; el
+inventario de materia prima; y una lista imprimible de todo lo que se
+entrega la próxima semana con el resumen de cuánto fabricar de cada
+producto.
 
 ## Notas
 
@@ -66,3 +82,15 @@ vendido y saldo pendiente por período.
   en un formato raro (no DD/MM/AAAA), no va a aparecer en las pestañas de
   Hoy/Mañana/Semana/Mes hasta que se corrija -- pero sí va a aparecer en la
   pestaña "Todos" con un aviso, para que no se pierda.
+- Diana puede ver y corregir los datos de una nota (incluido el anticipo
+  y el total) justo cuando la sube y confirma -- son datos que ya trae
+  la nota física en la mano. Lo que no puede ver después es el resumen
+  financiero del negocio (Finanzas) ni los montos ya guardados de un
+  pedido al abrirlo o editarlo.
+- La comisión de Diana se calcula sobre los pedidos que ella misma sube
+  (ahora identificado automáticamente por su login, ya no por un campo de
+  texto). Pedidos que ya estaban guardados ANTES de esta actualización
+  conservan el texto que se haya escrito a mano en su momento -- si
+  coincide con "Diana" (sin importar mayúsculas), sí cuentan; si tenía
+  alguna falta de ortografía, no. De aquí en adelante ya no depende de
+  que nadie escriba nada a mano.

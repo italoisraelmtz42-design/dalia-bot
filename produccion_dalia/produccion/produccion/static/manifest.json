@@ -1,0 +1,17 @@
+{
+  "name": "Producción Dalia",
+  "short_name": "Prod. Dalia",
+  "description": "Producción, entregas, comisiones e inventario de Recuerditos Dalia.",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fffaf9",
+  "theme_color": "#e8598b",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/static/iconos/icono-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/iconos/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/iconos/icono-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/static/iconos/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

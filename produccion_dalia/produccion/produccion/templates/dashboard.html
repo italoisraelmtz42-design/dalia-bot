@@ -1,8 +1,10 @@
 {% extends "base.html" %}
-{% block titulo %}Producción — Producción Dalia{% endblock %}
+{% block titulo %}Entregas — Producción Dalia{% endblock %}
 {% block contenido %}
 <h2 style="margin-bottom:4px;">{{ titulo }}</h2>
+{% if not (vista == 'calendario' and not cal_fecha_sel) %}
 <p class="muted" style="margin-top:0;">{{ pedidos|length }} pedido(s)</p>
+{% endif %}
 
 <nav class="tabs" style="padding:0 0 14px 0;margin:0 0 6px 0;">
   <a href="{{ url_for('dashboard', vista='hoy') }}" class="{{ 'activo' if vista=='hoy' else '' }}">Hoy</a>
@@ -11,7 +13,55 @@
   <a href="{{ url_for('dashboard', vista='mes') }}" class="{{ 'activo' if vista=='mes' else '' }}">Mes</a>
   <a href="{{ url_for('dashboard', vista='atrasados') }}" class="{{ 'activo' if vista=='atrasados' else '' }}">⚠️ Atrasados</a>
   <a href="{{ url_for('dashboard', vista='todos') }}" class="{{ 'activo' if vista=='todos' else '' }}">Todos</a>
+  <a href="{{ url_for('dashboard', vista='calendario') }}" class="{{ 'activo' if vista=='calendario' else '' }}">📅 Calendario</a>
 </nav>
+
+<p style="margin:0 0 14px 0;">
+  <a class="link-suave" href="{{ url_for('imprimir_semana_proxima') }}" target="_blank">🖨️ Imprimir lista de la próxima semana</a>
+</p>
+
+{% if vista == 'calendario' %}
+  <div class="card" style="padding:10px 12px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <a class="btn" href="{{ url_for('dashboard', vista='calendario', anio=cal_mes_ant[0], mes=cal_mes_ant[1]) }}">←</a>
+      <strong>{{ ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][cal_mes] }} {{ cal_anio }}</strong>
+      <a class="btn" href="{{ url_for('dashboard', vista='calendario', anio=cal_mes_sig[0], mes=cal_mes_sig[1]) }}">→</a>
+    </div>
+    <table style="width:100%;border-collapse:collapse;text-align:center;">
+      <thead>
+        <tr>
+          {% for d in cal_dias_semana %}<th style="font-size:0.72rem;color:var(--gris);padding:4px 0;font-weight:600;">{{ d }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for semana in cal_semanas %}
+        <tr>
+          {% for dia in semana %}
+            {% if dia == 0 %}
+              <td></td>
+            {% else %}
+              {% set fecha_dia = "%04d-%02d-%02d"|format(cal_anio, cal_mes, dia) %}
+              <td style="padding:2px;">
+                <a href="{{ url_for('dashboard', vista='calendario', anio=cal_anio, mes=cal_mes, fecha=fecha_dia) }}"
+                   style="display:block;padding:6px 2px;border-radius:8px;text-decoration:none;font-size:0.85rem;
+                          {% if fecha_dia == cal_fecha_sel %}background:var(--rosa);color:white;font-weight:700;
+                          {% elif fecha_dia == hoy %}background:var(--rosa-suave);color:var(--rosa-oscuro);font-weight:700;
+                          {% else %}color:var(--texto);{% endif %}">
+                  {{ dia }}
+                  {% if cal_conteo.get(fecha_dia) %}<br><span style="font-size:0.62rem;">●{{ cal_conteo.get(fecha_dia) }}</span>{% endif %}
+                </a>
+              </td>
+            {% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if not cal_fecha_sel %}
+    <p class="muted" style="text-align:center;">Dale clic a un día para ver qué se entrega o se entregó.</p>
+  {% endif %}
+{% endif %}
 
 {% if vista == 'todos' and sin_fecha_reconocida %}
   <div class="flash">
@@ -21,7 +71,7 @@
   </div>
 {% endif %}
 
-{% if not pedidos %}
+{% if not pedidos and not (vista == 'calendario' and not cal_fecha_sel) %}
   <div class="card muted">No hay pedidos en este período.</div>
 {% endif %}
 

@@ -4,6 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block titulo %}Producción Dalia{% endblock %}</title>
+
+<!-- 🔧 (23 ago 2026, pedido de Israel: acceso directo desde el cel) Con
+     esto, al usar "Agregar a pantalla de inicio" en el celular (Android
+     o iPhone), la webapp queda como un ícono con el logo real, en vez
+     del ícono genérico del navegador. -->
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<meta name="theme-color" content="#e8598b">
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='iconos/favicon.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='iconos/apple-touch-icon.png') }}">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Prod. Dalia">
+<meta name="mobile-web-app-capable" content="yes">
+
 <style>
   :root {
     --rosa: #e8598b;
@@ -30,7 +44,9 @@
     display: flex; align-items: center; justify-content: space-between;
     position: sticky; top: 0; z-index: 10;
   }
-  header.top a.marca { color: white; text-decoration: none; font-weight: 700; font-size: 1.1rem; }
+  header.top a.marca { color: white; text-decoration: none; font-weight: 700; font-size: 1.1rem; display: flex; align-items: center; gap: 8px; }
+  header.top img.logo { height: 32px; width: 32px; border-radius: 50%; background: white; object-fit: cover; }
+  header.top .quien { color: white; opacity: 0.85; font-size: 0.78rem; display: block; text-align: right; }
   header.top a.salir { color: white; text-decoration: none; font-size: 0.85rem; opacity: 0.9; }
   main { max-width: 720px; margin: 0 auto; padding: 16px; }
   nav.tabs {
@@ -96,8 +112,14 @@
 <body>
 {% if session.get('autenticado') %}
 <header class="top">
-  <a class="marca" href="{{ url_for('dashboard') }}">🎀 Producción Dalia</a>
-  <a class="salir" href="{{ url_for('logout') }}">Salir</a>
+  <a class="marca" href="{{ url_for('dashboard') }}">
+    <img class="logo" src="{{ url_for('static', filename='logo.png') }}" alt="Recuerditos Dalia">
+    Producción Dalia
+  </a>
+  <div style="text-align:right;">
+    <span class="quien">👤 {{ nombre_usuario }}</span>
+    <a class="salir" href="{{ url_for('logout') }}">Salir</a>
+  </div>
 </header>
 {% endif %}
 
@@ -113,13 +135,23 @@
 {% if session.get('autenticado') %}
 <nav class="principal">
   <a href="{{ url_for('dashboard') }}" class="{{ 'activo' if request.endpoint == 'dashboard' else '' }}">
-    <span class="icono">📋</span>Producción
+    <span class="icono">🚚</span>Entregas
   </a>
+  {% if puede_ver_finanzas %}
   <a href="{{ url_for('finanzas') }}" class="{{ 'activo' if request.endpoint == 'finanzas' else '' }}">
     <span class="icono">💰</span>Finanzas
   </a>
+  {% endif %}
+  {% if hay_comisiones_configuradas %}
+  <a href="{{ url_for('comisiones') }}" class="{{ 'activo' if request.endpoint == 'comisiones' else '' }}">
+    <span class="icono">💵</span>Comisión{{ '' if tiene_comision else ' Diana' }}
+  </a>
+  {% endif %}
+  <a href="{{ url_for('inventario') }}" class="{{ 'activo' if request.endpoint == 'inventario' else '' }}">
+    <span class="icono">📦</span>Inventario
+  </a>
   <a href="{{ url_for('subir') }}" class="{{ 'activo' if request.endpoint in ('subir', 'confirmar') else '' }}">
-    <span class="icono">📸</span>Subir nota
+    <span class="icono">📸</span>Subir
   </a>
 </nav>
 {% endif %}

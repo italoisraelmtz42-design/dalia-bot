@@ -14,6 +14,7 @@ bot que le vende a los clientes nunca se ve afectado.
 """
 
 import base64
+import calendar as calendario_mod
 import datetime
 import io
 import json
@@ -34,7 +35,39 @@ import database
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "cambia-esta-clave-en-produccion")
 
-PRODUCCION_PASSWORD = os.getenv("PRODUCCION_PASSWORD", "")
+# 🔧 (23 ago 2026, pedido de Israel: "quiero acceso para 3 personas, pero
+# Diana no quiero que vea lo financiero") Antes había una sola contraseña
+# compartida para los 3. Ahora cada quien tiene la suya, y la app sabe
+# quién entró -- eso es lo que permite esconderle finanzas solo a Diana
+# (ver exigir_login / _puede_ver_finanzas más abajo), y también hace
+# confiable la nueva sección de comisiones: ya no depende de que alguien
+# escriba bien su nombre a mano, se toma directo de con qué contraseña
+# entró.
+# Se deja PRODUCCION_PASSWORD como respaldo de la contraseña de Israel
+# nada más para no romper el login de un día para otro con este mismo
+# deploy -- pero para que Dalia y Diana puedan entrar hace falta agregar
+# sus contraseñas nuevas en Render (ver README_DESPLIEGUE.md).
+USUARIOS = {
+    "israel": os.getenv("PRODUCCION_PASSWORD_ISRAEL") or os.getenv("PRODUCCION_PASSWORD", ""),
+    "dalia": os.getenv("PRODUCCION_PASSWORD_DALIA", ""),
+    "diana": os.getenv("PRODUCCION_PASSWORD_DIANA", ""),
+}
+NOMBRES_DISPLAY = {"israel": "Israel", "dalia": "Dalia", "diana": "Diana"}
+
+# Quién gana comisión y cuánto por cada producto vendido (pieza, no por
+# pedido). Ahorita solo Diana -- si más adelante alguien más gana
+# comisión, nada más se agrega aquí.
+VENDEDORES_CON_COMISION = {"diana": 1.0}
+
+_passwords_no_vacias = [p for p in USUARIOS.values() if p]
+if len(_passwords_no_vacias) != len(set(_passwords_no_vacias)):
+    print("⚠️ ADVERTENCIA: dos o más usuarios de Producción Dalia tienen la MISMA "
+          "contraseña configurada -- el login no va a poder distinguir quién es quién.")
+
+MESES_ES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+            "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+DIAS_SEMANA_ES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+
 FOTOS_DIR = os.getenv("FOTOS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fotos_notas"))
 os.makedirs(FOTOS_DIR, exist_ok=True)
 
@@ -62,12 +95,21 @@ EXTRACCIONES_PENDIENTES = {}
 # muchas peticiones cortas y funciona igual de bien con 2 fotos que con 200.
 LOTES = {}
 
+# Contador de cada tanda: cuántas notas se guardaron solas (la IA las leyó
+# claras) vs. cuántas necesitaron que alguien las revisara a mano. Se
+# muestra como resumen al terminar la tanda.
+LOTES_RESUMEN = {}
+
 database.init_db()
 
 
 # ----------------------------------------------------------------------
-# Autenticación (contraseña compartida)
+# Autenticación (una contraseña por persona)
 # ----------------------------------------------------------------------
+def _puede_ver_finanzas():
+    return session.get("usuario") != "diana"
+
+
 @app.before_request
 def exigir_login():
     rutas_publicas = {"login", "static"}
@@ -75,6 +117,12 @@ def exigir_login():
         return None
     if not session.get("autenticado"):
         return redirect(url_for("login", siguiente=request.path))
+    # 🔧 (23 ago 2026) A Diana no le corresponde ver lo financiero del
+    # negocio -- se bloquea aquí, a nivel de ruta, y no solo escondiendo
+    # el botón en la pantalla (aunque también se esconde, ver base.html).
+    if request.endpoint == "finanzas" and not _puede_ver_finanzas():
+        flash("Esa sección no está disponible con tu usuario.")
+        return redirect(url_for("dashboard"))
     return None
 
 
@@ -82,8 +130,14 @@ def exigir_login():
 def login():
     if request.method == "POST":
         clave = request.form.get("password", "")
-        if PRODUCCION_PASSWORD and clave == PRODUCCION_PASSWORD:
+        usuario_encontrado = None
+        for usuario, clave_correcta in USUARIOS.items():
+            if clave_correcta and clave == clave_correcta:
+                usuario_encontrado = usuario
+                break
+        if usuario_encontrado:
             session["autenticado"] = True
+            session["usuario"] = usuario_encontrado
             session.permanent = True
             siguiente = request.args.get("siguiente") or url_for("dashboard")
             return redirect(siguiente)
@@ -95,6 +149,21 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.context_processor
+def _inyectar_contexto_usuario():
+    """Disponible en TODOS los templates sin tener que pasarlo a mano en
+    cada render_template: quién entró, cómo se le muestra su nombre, y si
+    puede ver dinero del negocio."""
+    usuario = session.get("usuario")
+    return {
+        "usuario_actual": usuario,
+        "nombre_usuario": NOMBRES_DISPLAY.get(usuario, usuario or ""),
+        "puede_ver_finanzas": _puede_ver_finanzas(),
+        "tiene_comision": usuario in VENDEDORES_CON_COMISION,
+        "hay_comisiones_configuradas": bool(VENDEDORES_CON_COMISION),
+    }
 
 
 # ----------------------------------------------------------------------
@@ -119,6 +188,15 @@ def _rango_mes(hoy):
     return inicio, fin
 
 
+def _normalizar_anio_mes(anio, mes):
+    """Envuelve un número de mes fuera de 1-12 hacia el año que le
+    corresponde -- así 'mes siguiente' de diciembre 2026 da enero 2027,
+    y 'mes anterior' de enero 2026 da diciembre 2025, sin casos especiales."""
+    anio_ajustado = anio + (mes - 1) // 12
+    mes_ajustado = (mes - 1) % 12 + 1
+    return anio_ajustado, mes_ajustado
+
+
 # ----------------------------------------------------------------------
 # Dashboard de producción
 # ----------------------------------------------------------------------
@@ -131,6 +209,9 @@ def raiz():
 def dashboard():
     vista = request.args.get("vista", "hoy")
     hoy = _hoy()
+
+    if vista == "calendario":
+        return _vista_calendario(hoy)
 
     if vista == "hoy":
         desde = hasta = hoy.isoformat()
@@ -167,6 +248,61 @@ def dashboard():
     return render_template(
         "dashboard.html", pedidos=pedidos, vista=vista, titulo=titulo, hoy=hoy.isoformat(),
         sin_fecha_reconocida=sin_fecha_reconocida,
+    )
+
+
+def _vista_calendario(hoy):
+    """🔧 (23 ago 2026, pedido de Israel: "que haya un calendario del mes
+    y poder ver qué se entregará o entregó en días atrás") A diferencia
+    de Hoy/Mañana/Semana/Mes, aquí se puede navegar mes a mes (pasado o
+    futuro) y darle clic a CUALQUIER día para ver justo ese día -- sin
+    quedar limitado a los rangos fijos de las otras pestañas."""
+    try:
+        anio = int(request.args.get("anio", hoy.year))
+        mes = int(request.args.get("mes", hoy.month))
+    except (TypeError, ValueError):
+        anio, mes = hoy.year, hoy.month
+    anio, mes = _normalizar_anio_mes(anio, mes)
+
+    primer_dia = datetime.date(anio, mes, 1)
+    ultimo_dia_num = calendario_mod.monthrange(anio, mes)[1]
+    ultimo_dia = datetime.date(anio, mes, ultimo_dia_num)
+
+    pedidos_del_mes = database.listar_pedidos(
+        fecha_entrega_desde=primer_dia.isoformat(), fecha_entrega_hasta=ultimo_dia.isoformat(),
+    )
+    conteo_por_dia = {}
+    for p in pedidos_del_mes:
+        f = p.get("fecha_entrega_iso")
+        if f:
+            conteo_por_dia[f] = conteo_por_dia.get(f, 0) + 1
+
+    fecha_str = request.args.get("fecha")
+    fecha_sel = None
+    if fecha_str:
+        try:
+            fecha_sel = datetime.date.fromisoformat(fecha_str)
+        except ValueError:
+            fecha_sel = None
+
+    pedidos = []
+    titulo = f"Calendario — {MESES_ES[mes].capitalize()} {anio}"
+    if fecha_sel:
+        pedidos = database.listar_pedidos(
+            fecha_entrega_desde=fecha_sel.isoformat(), fecha_entrega_hasta=fecha_sel.isoformat(),
+        )
+        titulo = f"Entregas del {fecha_sel.strftime('%d/%m/%Y')}"
+
+    semanas = calendario_mod.Calendar(firstweekday=0).monthdayscalendar(anio, mes)
+    mes_ant_anio, mes_ant_mes = _normalizar_anio_mes(anio, mes - 1)
+    mes_sig_anio, mes_sig_mes = _normalizar_anio_mes(anio, mes + 1)
+
+    return render_template(
+        "dashboard.html", pedidos=pedidos, vista="calendario", titulo=titulo, hoy=hoy.isoformat(),
+        sin_fecha_reconocida=0,
+        cal_semanas=semanas, cal_anio=anio, cal_mes=mes, cal_dias_semana=DIAS_SEMANA_ES,
+        cal_conteo=conteo_por_dia, cal_fecha_sel=fecha_sel.isoformat() if fecha_sel else None,
+        cal_mes_ant=(mes_ant_anio, mes_ant_mes), cal_mes_sig=(mes_sig_anio, mes_sig_mes),
     )
 
 
@@ -211,6 +347,132 @@ def finanzas():
 
 
 # ----------------------------------------------------------------------
+# Comisiones (23 ago 2026, pedido de Israel: "$1 por producto que se
+# vende" -- aparte de su sueldo, a Diana le toca $1 por cada pieza
+# vendida. Diana entra y ve la suya; Israel/Dalia también la pueden
+# consultar para saber cuánto pagarle.)
+# ----------------------------------------------------------------------
+@app.route("/comisiones")
+def comisiones():
+    usuario = session.get("usuario")
+    if not VENDEDORES_CON_COMISION:
+        flash("No hay comisiones configuradas todavía.")
+        return redirect(url_for("dashboard"))
+
+    if usuario in VENDEDORES_CON_COMISION:
+        vendedor = usuario  # Diana (o quien tenga comisión) solo ve la suya
+    else:
+        vendedor = request.args.get("vendedor") or next(iter(VENDEDORES_CON_COMISION))
+        if vendedor not in VENDEDORES_CON_COMISION:
+            vendedor = next(iter(VENDEDORES_CON_COMISION))
+
+    monto_por_producto = VENDEDORES_CON_COMISION[vendedor]
+    periodo = request.args.get("periodo", "semana")
+    hoy = _hoy()
+    if periodo == "mes":
+        ini, fin = _rango_mes(hoy)
+        titulo_periodo = f"Este mes ({MESES_ES[hoy.month].capitalize()} {hoy.year})"
+    else:
+        ini, fin = _rango_semana(hoy)
+        titulo_periodo = f"Esta semana ({ini.strftime('%d/%m')} al {fin.strftime('%d/%m')})"
+        periodo = "semana"
+
+    pedidos = database.listar_capturados_por_vendedor_en_rango(vendedor, ini.isoformat(), fin.isoformat())
+    total_piezas = 0.0
+    for p in pedidos:
+        for prod in (p.get("productos") or []):
+            try:
+                total_piezas += float(prod.get("cantidad") or 0)
+            except (TypeError, ValueError):
+                pass
+    total_comision = round(total_piezas * monto_por_producto, 2)
+
+    return render_template(
+        "comisiones.html", pedidos=pedidos, periodo=periodo, titulo_periodo=titulo_periodo,
+        vendedor=vendedor, nombre_vendedor=NOMBRES_DISPLAY.get(vendedor, vendedor.title() if vendedor else ""),
+        monto_por_producto=monto_por_producto, total_piezas=total_piezas, total_comision=total_comision,
+        es_propia=(usuario == vendedor),
+        otros_vendedores=[v for v in VENDEDORES_CON_COMISION if v != vendedor] if usuario not in VENDEDORES_CON_COMISION else [],
+    )
+
+
+# ----------------------------------------------------------------------
+# Lista imprimible de la semana siguiente (23 ago 2026, pedido de Israel:
+# poder imprimir el viernes/sábado todo lo que se entrega la próxima
+# semana, con un resumen de cuánto fabricar de cada producto)
+# ----------------------------------------------------------------------
+@app.route("/imprimir/semana-proxima")
+def imprimir_semana_proxima():
+    hoy = _hoy()
+    ini_semana_actual, _ = _rango_semana(hoy)
+    ini = ini_semana_actual + datetime.timedelta(days=7)
+    fin = ini + datetime.timedelta(days=6)
+
+    pedidos = database.listar_pedidos(fecha_entrega_desde=ini.isoformat(), fecha_entrega_hasta=fin.isoformat())
+
+    resumen = {}
+    for p in pedidos:
+        for prod in (p.get("productos") or []):
+            nombre = (prod.get("producto") or "Producto sin nombre").strip() or "Producto sin nombre"
+            try:
+                cantidad = float(prod.get("cantidad") or 0)
+            except (TypeError, ValueError):
+                cantidad = 0
+            resumen[nombre] = resumen.get(nombre, 0) + cantidad
+    resumen_ordenado = sorted(resumen.items(), key=lambda item: item[0].lower())
+
+    return render_template(
+        "imprimir_semana.html", pedidos=pedidos, resumen=resumen_ordenado,
+        ini=ini, fin=fin, generado=datetime.datetime.now(),
+    )
+
+
+# ----------------------------------------------------------------------
+# Inventario de materia prima (23 ago 2026, pedido de Israel)
+# ----------------------------------------------------------------------
+@app.route("/inventario")
+def inventario():
+    items = database.listar_materia_prima()
+    return render_template("inventario.html", items=items)
+
+
+@app.route("/inventario/nuevo", methods=["POST"])
+def inventario_nuevo():
+    nombre = (request.form.get("nombre") or "").strip()
+    if not nombre:
+        flash("Ponle un nombre al material.")
+        return redirect(url_for("inventario"))
+    cantidad = request.form.get("cantidad") or 0
+    unidad = (request.form.get("unidad") or "").strip() or "pza"
+    database.crear_materia_prima(nombre, cantidad, unidad)
+    flash(f"'{nombre}' agregado al inventario.")
+    return redirect(url_for("inventario"))
+
+
+@app.route("/inventario/<int:item_id>/editar", methods=["POST"])
+def inventario_editar(item_id):
+    item = database.obtener_materia_prima(item_id)
+    if not item:
+        flash("Ese material ya no existe.")
+        return redirect(url_for("inventario"))
+    nombre = (request.form.get("nombre") or "").strip() or item["nombre"]
+    cantidad = request.form.get("cantidad")
+    if cantidad is None or cantidad == "":
+        cantidad = item["cantidad"]
+    unidad = (request.form.get("unidad") or "").strip() or item["unidad"]
+    database.actualizar_materia_prima(item_id, nombre, cantidad, unidad)
+    flash(f"'{nombre}' actualizado.")
+    return redirect(url_for("inventario"))
+
+
+@app.route("/inventario/<int:item_id>/eliminar", methods=["POST"])
+def inventario_eliminar(item_id):
+    database.eliminar_materia_prima(item_id)
+    flash("Material eliminado del inventario.")
+    return redirect(url_for("inventario"))
+
+
+# ----------------------------------------------------------------------
 # Subir nota -> IA extrae datos -> humano confirma
 # ----------------------------------------------------------------------
 PROMPT_EXTRACCION = """Eres un asistente que lee notas de pedidos de una tienda mexicana de \
@@ -220,6 +482,11 @@ abanicos, dominós, etc. para baby showers, XV años, bodas, etc.).
 Se te va a mostrar una foto de una nota de pedido YA CONFIRMADA con el \
 cliente (normalmente escrita a mano o en una nota de WhatsApp con el \
 resumen del pedido, colores, fecha de entrega y el anticipo pagado).
+
+Lee la nota con MUCHO cuidado -- revisa cada número dos veces antes de \
+contestar (cantidades, precios, anticipo, total). Estos datos alimentan \
+directamente lo que se fabrica y se cobra, así que un error aquí es un \
+error real en el negocio, no un detalle menor.
 
 Tu trabajo es leer la nota y devolver ÚNICAMENTE un JSON con esta forma \
 exacta (sin texto extra, sin explicaciones):
@@ -236,13 +503,17 @@ exacta (sin texto extra, sin explicaciones):
   ],
   "anticipo": numero_o_null,
   "total": numero_o_null,
-  "notas": "cualquier detalle extra relevante (tarjetita, urgente, etc.) o null"
+  "notas": "cualquier detalle extra relevante (tarjetita, urgente, etc.) o null",
+  "necesita_revision": true_o_false,
+  "motivo_revision": "explicación breve y concreta de qué no quedó claro, o null si no necesita revisión"
 }
 
 Reglas importantes:
 - Si un dato no aparece claramente en la nota, pon null (o lista vacía para productos) -- NO inventes ni adivines.
 - "cantidad" y los montos deben ser números (sin signo de $ ni comas), nunca texto.
-- Un humano va a revisar y corregir esto después, así que prioriza no inventar sobre completar todo.
+- Marca "necesita_revision": true si ocurre CUALQUIERA de estas cosas: falta el nombre del cliente, no hay ningún producto legible, algún producto no tiene cantidad clara, falta la fecha de entrega, la letra o la foto están borrosas en alguna parte importante, el total no cuadra aproximadamente con la suma de los productos (déjale margen por envío/redondeo), o simplemente no estás seguro de algo relevante.
+- Si TODOS los datos esenciales (cliente, al menos un producto con cantidad, fecha de entrega, y montos) se leyeron claros y consistentes, marca "necesita_revision": false.
+- Ante la duda, marca necesita_revision: true -- es preferible que un humano la revise de más a que se guarde un dato incorrecto.
 """
 
 
@@ -263,6 +534,13 @@ def subir():
         flash(f"Mejor sube máximo {MAX_FOTOS_POR_LOTE} fotos por tanda -- divide el resto en otra subida.")
         return redirect(url_for("subir"))
 
+    # 🔧 (23 ago 2026, pedido de Israel: comisiones de Diana confiables)
+    # Antes esto era un campo de texto libre ("¿quién sube esta tanda?").
+    # Ahora que cada quien entra con su propia contraseña, se toma
+    # directo de la sesión -- ya no puede haber typos ni notas
+    # atribuidas a la persona equivocada.
+    subido_por = NOMBRES_DISPLAY.get(session.get("usuario"), session.get("usuario"))
+
     temp_ids = []
     demasiado_pesadas = 0
     for archivo in archivos:
@@ -278,6 +556,7 @@ def subir():
             "procesado": False,   # la IA todavía no la ha leído -- se lee al llegar a /confirmar
             "foto_bytes": contenido_reducido,
             "foto_mime": mime,
+            "subido_por": subido_por,
         }
         temp_ids.append(temp_id)
 
@@ -292,6 +571,7 @@ def subir():
 
     lote_id = uuid.uuid4().hex[:10]
     LOTES[lote_id] = temp_ids
+    LOTES_RESUMEN[lote_id] = {"auto": 0, "manual": 0}
     return redirect(url_for("confirmar", temp_id=temp_ids[0], lote=lote_id))
 
 
@@ -334,6 +614,96 @@ def _extraer_datos_nota(imagen_bytes, imagen_mime):
     return json.loads(r.choices[0].message.content)
 
 
+def _revisar_calidad(datos):
+    """🔧 (22 ago 2026, pedido de Israel: "que la IA revise más a detalle y
+    si nota un error, no suba la nota hasta que sea más clara") No basta con
+    que la IA diga "necesita_revision: false" -- por eso, además de respetar
+    lo que diga el modelo, se vuelve a checar aquí mismo, en código, que los
+    datos esenciales de verdad estén completos y sean razonables (mismo
+    principio que usa el bot: nunca confiar 100% en que el modelo siguió las
+    instrucciones, verificar también de forma determinística).
+    Devuelve (necesita_revision: bool, motivo: str|None)."""
+    if datos.get("necesita_revision"):
+        return True, (datos.get("motivo_revision") or "La IA marcó que algo no quedó claro en la nota.")
+
+    motivos = []
+    cliente = datos.get("cliente")
+    if not cliente or not str(cliente).strip():
+        motivos.append("falta el nombre del cliente")
+
+    productos = datos.get("productos") or []
+    if not productos:
+        motivos.append("no se detectó ningún producto")
+    else:
+        for p in productos:
+            cant = p.get("cantidad")
+            cant_valida = False
+            try:
+                cant_valida = float(cant) > 0
+            except (TypeError, ValueError):
+                cant_valida = False
+            if not cant_valida:
+                motivos.append(f"falta la cantidad de '{p.get('producto') or 'un producto'}'")
+
+    fecha = datos.get("fecha_entrega")
+    if not fecha:
+        motivos.append("falta la fecha de entrega")
+    elif not database.normalizar_fecha_iso(str(fecha)):
+        motivos.append(f"la fecha de entrega ('{fecha}') no se reconoce como DD/MM/AAAA")
+
+    total = datos.get("total")
+    total_valido = False
+    try:
+        total_valido = float(total) > 0
+    except (TypeError, ValueError):
+        total_valido = False
+    if not total_valido:
+        motivos.append("falta el total del pedido")
+
+    if motivos:
+        return True, "Revisar: " + "; ".join(motivos) + "."
+    return False, None
+
+
+def _texto_o_none(v):
+    if v is None:
+        return None
+    v = str(v).strip()
+    return v or None
+
+
+def _guardar_pedido_desde_datos(datos, foto_bytes, subido_por=None):
+    """Construye el dict final y lo guarda -- usado tanto por el guardado
+    automático (nota clara, sin revisión) como por el formulario manual."""
+    productos = []
+    for p in (datos.get("productos") or []):
+        productos.append({
+            "producto": p.get("producto") or "",
+            "cantidad": p.get("cantidad") or "",
+            "colores": p.get("colores") or "",
+            "precio_unitario": p.get("precio_unitario") or "",
+        })
+    data = {
+        "fecha_captura": datetime.datetime.now().isoformat(timespec="seconds"),
+        "subido_por": subido_por,
+        "cliente": _texto_o_none(datos.get("cliente")),
+        "telefono": _texto_o_none(datos.get("telefono")),
+        "municipio": _texto_o_none(datos.get("municipio")),
+        "fecha_entrega": _texto_o_none(datos.get("fecha_entrega")),
+        "tipo_entrega": _texto_o_none(datos.get("tipo_entrega")),
+        "direccion": _texto_o_none(datos.get("direccion")),
+        "productos": productos,
+        "anticipo": datos.get("anticipo") or 0,
+        "total": datos.get("total") or 0,
+        "notas": _texto_o_none(datos.get("notas")),
+    }
+    nombre_archivo = f"{uuid.uuid4().hex}.jpg"
+    with open(os.path.join(FOTOS_DIR, nombre_archivo), "wb") as f:
+        f.write(foto_bytes)
+    data["foto_archivo"] = nombre_archivo
+    return database.guardar_pedido(data)
+
+
 def _info_lote(temp_id, lote_id):
     """Devuelve (posicion_1_based, total) si temp_id pertenece a ese lote, si no (None, None)."""
     lista = LOTES.get(lote_id)
@@ -366,25 +736,52 @@ def confirmar(temp_id):
         # 🔧 Lectura diferida: si viene de un lote y todavía no se ha leído
         # con IA, se lee justo ahora -- una nota a la vez, nunca las 42 de
         # la tanda juntas en la misma petición (ver comentario en /subir).
+        error_lectura = False
         if not pendiente.get("procesado"):
             try:
                 pendiente["datos"] = _extraer_datos_nota(pendiente["foto_bytes"], pendiente["foto_mime"])
             except Exception as e:
                 print(f"⚠️ Error leyendo la nota con IA: {repr(e)}")
-                flash("No se pudo leer esta nota automáticamente. Puedes llenar los datos a mano abajo.")
                 pendiente["datos"] = {}
+                error_lectura = True
             pendiente["procesado"] = True
+
+        # 🔧 (22 ago 2026, pedido de Israel) Si la nota se leyó clara y
+        # completa (sin necesitar revisión), se guarda derecho sin
+        # detenerse a pedir confirmación -- así ya no hay que revisar nota
+        # por nota cuando la IA le atinó bien. Si algo no quedó claro, sí
+        # se detiene aquí para que un humano la revise y corrija.
+        necesita_revision, motivo = (True, "No se pudo leer la foto automáticamente.") if error_lectura \
+            else _revisar_calidad(pendiente["datos"])
+
+        if not necesita_revision:
+            pedido_id = _guardar_pedido_desde_datos(pendiente["datos"], pendiente["foto_bytes"], pendiente.get("subido_por"))
+            EXTRACCIONES_PENDIENTES.pop(temp_id, None)
+            cliente_nombre = pendiente["datos"].get("cliente") or "cliente sin nombre"
+            flash(f"✅ Guardado automático (nota clara): {cliente_nombre}")
+
+            if lote_id:
+                resumen = LOTES_RESUMEN.setdefault(lote_id, {"auto": 0, "manual": 0})
+                resumen["auto"] += 1
+                siguiente = _siguiente_del_lote(temp_id, lote_id)
+                if siguiente:
+                    return redirect(url_for("confirmar", temp_id=siguiente, lote=lote_id))
+                LOTES.pop(lote_id, None)
+                LOTES_RESUMEN.pop(lote_id, None)
+                flash(f"¡Listo! Tanda terminada -- {resumen['auto']} guardadas automáticas, {resumen['manual']} revisadas a mano. 🎉")
+                return redirect(url_for("dashboard"))
+
+            return redirect(url_for("pedido_detalle", pedido_id=pedido_id))
 
         posicion, total = _info_lote(temp_id, lote_id)
         return render_template(
             "confirmar.html", temp_id=temp_id, datos=pendiente["datos"],
             tipos_entrega=TIPOS_ENTREGA_VALIDOS, lote_id=lote_id, posicion=posicion, total=total,
+            motivo_revision=motivo, subido_por_lote=pendiente.get("subido_por"),
         )
 
     productos = _leer_productos_del_form(request.form)
-    data = {
-        "fecha_captura": datetime.datetime.now().isoformat(timespec="seconds"),
-        "subido_por": (request.form.get("subido_por") or "").strip() or None,
+    datos_form = {
         "cliente": (request.form.get("cliente") or "").strip() or None,
         "telefono": (request.form.get("telefono") or "").strip() or None,
         "municipio": (request.form.get("municipio") or "").strip() or None,
@@ -396,23 +793,23 @@ def confirmar(temp_id):
         "total": request.form.get("total") or 0,
         "notas": (request.form.get("notas") or "").strip() or None,
     }
-
-    nombre_archivo = f"{uuid.uuid4().hex}.jpg"
-    ruta_absoluta = os.path.join(FOTOS_DIR, nombre_archivo)
-    with open(ruta_absoluta, "wb") as f:
-        f.write(pendiente["foto_bytes"])
-    data["foto_archivo"] = nombre_archivo
-
-    pedido_id = database.guardar_pedido(data)
+    # 🔧 (23 ago 2026) Igual que en /subir: siempre se toma de la sesión,
+    # nunca de lo que venga en el formulario -- así no hay forma de que
+    # una nota quede atribuida a la persona equivocada.
+    subido_por = NOMBRES_DISPLAY.get(session.get("usuario"), session.get("usuario"))
+    pedido_id = _guardar_pedido_desde_datos(datos_form, pendiente["foto_bytes"], subido_por)
     EXTRACCIONES_PENDIENTES.pop(temp_id, None)
     flash("Pedido guardado correctamente.")
 
     if lote_id:
+        resumen = LOTES_RESUMEN.setdefault(lote_id, {"auto": 0, "manual": 0})
+        resumen["manual"] += 1
         siguiente = _siguiente_del_lote(temp_id, lote_id)
         if siguiente:
             return redirect(url_for("confirmar", temp_id=siguiente, lote=lote_id))
         LOTES.pop(lote_id, None)
-        flash("¡Listo! Terminaste de revisar todas las notas de esta tanda. 🎉")
+        LOTES_RESUMEN.pop(lote_id, None)
+        flash(f"¡Listo! Tanda terminada -- {resumen['auto']} guardadas automáticas, {resumen['manual']} revisadas a mano. 🎉")
         return redirect(url_for("dashboard"))
 
     return redirect(url_for("pedido_detalle", pedido_id=pedido_id))
@@ -431,6 +828,7 @@ def confirmar_saltar(temp_id):
             flash("Nota saltada.")
             return redirect(url_for("confirmar", temp_id=siguiente, lote=lote_id))
         LOTES.pop(lote_id, None)
+        LOTES_RESUMEN.pop(lote_id, None)
         flash("Terminaste de revisar la tanda (algunas se saltaron).")
         return redirect(url_for("dashboard"))
 
@@ -478,6 +876,16 @@ def pedido_editar(pedido_id):
         return render_template("pedido_editar.html", p=pedido, tipos_entrega=TIPOS_ENTREGA_VALIDOS)
 
     productos = _leer_productos_del_form(request.form)
+    # 🔧 (23 ago 2026) A Diana no le corresponde tocar cifras de dinero --
+    # esto ya está oculto en pedido_editar.html, pero se refuerza aquí
+    # también por si alguien manda el formulario a mano sin pasar por la
+    # pantalla (siempre se guardan los valores que YA tenía el pedido).
+    if _puede_ver_finanzas():
+        anticipo = request.form.get("anticipo") or 0
+        total = request.form.get("total") or 0
+    else:
+        anticipo = pedido.get("anticipo") or 0
+        total = pedido.get("total") or 0
     data = {
         "cliente": (request.form.get("cliente") or "").strip() or None,
         "telefono": (request.form.get("telefono") or "").strip() or None,
@@ -486,8 +894,8 @@ def pedido_editar(pedido_id):
         "tipo_entrega": (request.form.get("tipo_entrega") or "").strip() or None,
         "direccion": (request.form.get("direccion") or "").strip() or None,
         "productos": productos,
-        "anticipo": request.form.get("anticipo") or 0,
-        "total": request.form.get("total") or 0,
+        "anticipo": anticipo,
+        "total": total,
         "notas": (request.form.get("notas") or "").strip() or None,
     }
     database.actualizar_pedido(pedido_id, data)

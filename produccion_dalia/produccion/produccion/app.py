@@ -343,12 +343,45 @@ def cambiar_estatus(pedido_id):
 def finanzas():
     periodo = request.args.get("periodo", "hoy")
     hoy = _hoy()
+    nav_anterior = nav_siguiente = nav_actual = None
+    es_actual = True
+
+    # 🔧 (23 ago 2026, pedido de Israel: "aquí no es el mismo caso que se
+    # pierde al terminar el mes?" -- mismo hueco que ya se corrigió en
+    # Comisiones) Antes "Semana"/"Mes" siempre eran el período ACTUAL, sin
+    # forma de consultar los totales de un mes/semana ya cerrado. Ahora se
+    # navega igual que en Comisiones y en el calendario de Entregas.
     if periodo == "semana":
-        ini, fin = _rango_semana(hoy)
-        titulo = f"Esta semana ({ini.strftime('%d/%m')} al {fin.strftime('%d/%m')})"
+        try:
+            inicio_qs = request.args.get("inicio")
+            inicio_pedido = datetime.date.fromisoformat(inicio_qs) if inicio_qs else hoy
+        except ValueError:
+            inicio_pedido = hoy
+        ini, fin = _rango_semana(inicio_pedido)
+        es_actual = (ini == _rango_semana(hoy)[0])
+        if es_actual:
+            titulo = f"Esta semana ({ini.strftime('%d/%m')} al {fin.strftime('%d/%m')})"
+        else:
+            titulo = f"Semana del {ini.strftime('%d/%m')} al {fin.strftime('%d/%m/%Y')}"
+        nav_anterior = {"periodo": "semana", "inicio": (ini - datetime.timedelta(days=7)).isoformat()}
+        nav_siguiente = {"periodo": "semana", "inicio": (ini + datetime.timedelta(days=7)).isoformat()}
+        nav_actual = {"periodo": "semana", "inicio": _rango_semana(hoy)[0].isoformat()}
     elif periodo == "mes":
-        ini, fin = _rango_mes(hoy)
-        titulo = f"Este mes ({ini.strftime('%B %Y')})"
+        try:
+            anio = int(request.args.get("anio", hoy.year))
+            mes = int(request.args.get("mes", hoy.month))
+        except (TypeError, ValueError):
+            anio, mes = hoy.year, hoy.month
+        anio, mes = _normalizar_anio_mes(anio, mes)
+        ini = datetime.date(anio, mes, 1)
+        fin = datetime.date(anio, mes, calendario_mod.monthrange(anio, mes)[1])
+        es_actual = (anio == hoy.year and mes == hoy.month)
+        titulo = f"{'Este mes' if es_actual else 'Mes'} ({MESES_ES[mes].capitalize()} {anio})"
+        anio_ant, mes_ant = _normalizar_anio_mes(anio, mes - 1)
+        anio_sig, mes_sig = _normalizar_anio_mes(anio, mes + 1)
+        nav_anterior = {"periodo": "mes", "anio": anio_ant, "mes": mes_ant}
+        nav_siguiente = {"periodo": "mes", "anio": anio_sig, "mes": mes_sig}
+        nav_actual = {"periodo": "mes", "anio": hoy.year, "mes": hoy.month}
     else:
         ini = fin = hoy
         titulo = f"Hoy — {hoy.strftime('%d/%m/%Y')}"
@@ -362,6 +395,7 @@ def finanzas():
     return render_template(
         "finanzas.html", pedidos=pedidos, periodo=periodo, titulo=titulo,
         total_anticipos=total_anticipos, total_ventas=total_ventas, total_saldos=total_saldos,
+        nav_anterior=nav_anterior, nav_siguiente=nav_siguiente, nav_actual=nav_actual, es_actual=es_actual,
     )
 
 

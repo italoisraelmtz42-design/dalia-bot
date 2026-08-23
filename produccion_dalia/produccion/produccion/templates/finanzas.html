@@ -9,6 +9,16 @@
   <a href="{{ url_for('finanzas', periodo='mes') }}" class="{{ 'activo' if periodo=='mes' else '' }}">Mes</a>
 </nav>
 
+{% if periodo in ('semana', 'mes') %}
+<div class="card" style="padding:10px 12px;display:flex;align-items:center;justify-content:space-between;">
+  <a class="btn" href="{{ url_for('finanzas', **nav_anterior) }}">← {{ 'Semana anterior' if periodo == 'semana' else 'Mes anterior' }}</a>
+  {% if not es_actual %}
+    <a class="link-suave" href="{{ url_for('finanzas', **nav_actual) }}">Ir a {{ 'esta semana' if periodo == 'semana' else 'este mes' }}</a>
+  {% endif %}
+  <a class="btn" href="{{ url_for('finanzas', **nav_siguiente) }}">{{ 'Semana siguiente' if periodo == 'semana' else 'Mes siguiente' }} →</a>
+</div>
+{% endif %}
+
 <div class="card totales">
   <div class="item">
     <div class="muted">Pedidos capturados</div>

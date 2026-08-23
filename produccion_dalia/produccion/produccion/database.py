@@ -1,364 +1,370 @@
+# -*- coding: utf-8 -*-
+"""
+Base de datos de PRODUCCIÓN (pedidos confirmados) -- Recuerditos Dalia.
+
+Esta base es completamente independiente de la del bot (dalia-bot). Aquí
+solo entran pedidos que YA fueron confirmados con el cliente (la nota que
+la vendedora vuelve a mandar para confirmar), nunca datos de la conversación
+en vivo del bot. Por eso vive en su propio servicio y su propio archivo.
+
+IMPORTANTE (Render): el disco de un Web Service normal es EFÍMERO -- se
+borra en cada deploy/reinicio. Si este servicio no tiene un Persistent Disk
+conectado, tanto esta base de datos como las fotos guardadas en
+FOTOS_DIR se van a perder tarde o temprano. Ver README_DESPLIEGUE.md.
+"""
+
+import datetime
+import json
 import os
+import re
 import sqlite3
-import logging
+from contextlib import contextmanager
 
-logger_db = logging.getLogger('database')
+DB_PATH = os.getenv("PRODUCCION_DB_PATH", "produccion.db")
 
-DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
 
-db_dir = os.path.dirname(DB_PATH)
-if db_dir and not os.path.exists(db_dir):
-    try:
-        os.makedirs(db_dir, exist_ok=True)
-        logger_db.info(f"Directorio de base de datos creado: {db_dir}")
-    except Exception as e:
-        logger_db.warning(f"No se pudo crear el directorio {db_dir}: {e}")
+# 🔧 (23 ago 2026, pedido de Israel: "hoy es 22 de agosto, en la app
+# aparece que es 23") Render corre el servidor en UTC. Monterrey/Apodaca
+# van 6 horas atrás y, desde la reforma de 2022, ya NO cambian de horario
+# (no aplica horario de verano ahí), así que el ajuste es un número fijo
+# -- no depende de una base de datos de zonas horarias que quizás no esté
+# instalada en el servidor. Sin esto, entre las 6pm y la medianoche hora
+# de Monterrey, el servidor (en UTC) ya "cree" que es el día siguiente,
+# y toda fecha que se guarde o se compare en ese rato sale adelantada un
+# día. TODO el código (aquí y en app.py) debe usar ahora_negocio()/
+# hoy_negocio() en vez de datetime.datetime.now()/datetime.date.today()
+# directo, para que "hoy" signifique siempre lo mismo en toda la app.
+ZONA_NEGOCIO = datetime.timezone(datetime.timedelta(hours=-6), name="America/Monterrey")
 
-class _ConexionAutoCierre(sqlite3.Connection):
-    """🔧 (22 ago 2026, a pedido de Israel -- fuga de memoria/conexiones)
-    `with conn:` en sqlite3 solo hace commit/rollback automático al
-    salir del bloque -- NO cierra la conexión. Los ~25 lugares del
-    proyecto que hacen `with get_db_connection() as conn:` daban por
-    hecho que sí se cerraba, así que la conexión (y su memoria/handle de
-    archivo) se quedaba abierta hasta que el recolector de basura de
-    Python decidiera reclamarla, lo cual no es inmediato ni está
-    garantizado -- con mensajes llegando seguido, esto acumula
-    conexiones abiertas de más. Esta subclase cierra la conexión también
-    al salir del `with`, sin tener que tocar ninguno de esos ~25
-    lugares -- nada más cambia cómo se crea la conexión aquí."""
-    def __exit__(self, exc_type, exc_val, exc_tb):
+
+def ahora_negocio():
+    return datetime.datetime.now(ZONA_NEGOCIO)
+
+
+def hoy_negocio():
+    return ahora_negocio().date()
+
+
+def normalizar_fecha_iso(texto_fecha):
+    """Convierte 'fecha_entrega' (que el humano escribe como DD/MM/AAAA,
+    el formato que usa todo el negocio) a AAAA-MM-DD para poder filtrar y
+    ordenar correctamente por fecha.
+
+    🔧 (21 ago 2026) Bug real detectado en pruebas: comparar fechas como
+    texto plano (ej. "15/01/2027" >= "2026-08-21") NO funciona -- la
+    comparación de strings no entiende fechas, compara caracter por
+    caracter. Por eso se guarda esta columna aparte ya normalizada, y
+    fecha_entrega se deja tal cual la escribió la persona (para mostrarla).
+    Si el texto no se puede interpretar como fecha, regresa None -- el
+    pedido simplemente no aparecerá en las vistas "hoy/mañana/semana/mes"
+    hasta que se corrija la fecha, pero sí sigue apareciendo en "Todos".
+    """
+    if not texto_fecha:
+        return None
+    texto_fecha = texto_fecha.strip()
+    formatos = ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d")
+    for fmt in formatos:
         try:
-            super().__exit__(exc_type, exc_val, exc_tb)
-        finally:
-            self.close()
+            return datetime.datetime.strptime(texto_fecha, fmt).date().isoformat()
+        except ValueError:
+            continue
+    # Intento adicional: "15-01-2027" o "15.01.2027"
+    m = re.match(r"^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$", texto_fecha)
+    if m:
+        dia, mes, anio = (int(x) for x in m.groups())
+        try:
+            return datetime.date(anio, mes, dia).isoformat()
+        except ValueError:
+            return None
+    return None
 
 
-def get_db_connection():
-    # timeout=10: si la BD está ocupada, espera hasta 10s antes de fallar
-    # (en vez de tronar de inmediato con "database is locked").
-    conn = sqlite3.connect(DB_PATH, timeout=10, factory=_ConexionAutoCierre)
+def _conectar():
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    # 🔧 (23 ago 2026, a pedido de Israel -- "disk I/O error" en TODAS las
-    # escrituras/lecturas de golpe) Antes usábamos journal_mode=WAL para
-    # permitir lecturas mientras alguien más escribe. El problema: WAL
-    # necesita archivos auxiliares (-wal y -shm) con memoria compartida
-    # mapeada (mmap), y los discos persistentes de Render son
-    # almacenamiento en red -- ese tipo de almacenamiento no siempre
-    # soporta bien ese mecanismo, y cuando falla, CADA operación truena
-    # con "disk I/O error" (justo lo que vimos: es_cliente_nuevo,
-    # chat_guardar_mensaje, uso_registrar_openai, etc., todo a la vez).
-    # DELETE es el modo clásico de SQLite (un solo archivo de journal,
-    # sin memoria compartida) -- más lento en teoría con muchos
-    # escritores al mismo tiempo, pero aquí solo hay 1 proceso (1 worker
-    # de gunicorn) con varios hilos, y busy_timeout ya hace que se
-    # esperen entre sí en vez de fallar. Mucho más confiable sobre disco
-    # de red que WAL.
-    conn.execute("PRAGMA journal_mode = DELETE;")
-    conn.execute("PRAGMA busy_timeout = 5000;")
+    # 🔧 (23 ago 2026) journal_mode=WAL necesita archivos auxiliares con
+    # memoria compartida mapeada (mmap), y el Disk persistente de Render
+    # es almacenamiento en red -- eso no siempre lo soporta bien, y
+    # cuando falla, TODAS las operaciones truenan con "disk I/O error"
+    # (esto es justo lo que le pasó hoy a dalia-bot, que usa el mismo
+    # patrón). DELETE es el modo clásico de SQLite, sin memoria
+    # compartida -- más confiable sobre disco de red.
+    conn.execute("PRAGMA journal_mode=DELETE;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    conn.execute("PRAGMA foreign_keys=ON;")
     return conn
 
-# Alias usado por clientes.py, historial.py y pedido_manager
-get_connection = get_db_connection
 
-
-def reclamar_mensaje_procesado(mensaje_id):
-    """Dedupe de mensajes entrantes a nivel de base de datos (ver tabla
-    mensajes_webhook_procesados). Devuelve True SOLO si este mensaje_id
-    YA se había procesado antes (por cualquier proceso de gunicorn) --
-    en ese caso el que llama debe ignorarlo. Devuelve False la primera
-    vez, y ese mismo INSERT ya lo deja marcado como procesado para la
-    próxima vez. Mismo patrón atómico que reclamar_seguimiento_23h en
-    pedido_manager.py."""
-    if not mensaje_id:
-        return False
+@contextmanager
+def _cursor():
+    conn = _conectar()
     try:
-        with get_db_connection() as conn:
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO mensajes_webhook_procesados (mensaje_id) VALUES (?)",
-                (mensaje_id,),
-            )
-            conn.commit()
-            return cur.rowcount == 0  # 0 filas insertadas = ya existía = duplicado
-    except Exception as e:
-        logger_db.error(f"reclamar_mensaje_procesado: {e}")
-        return False
+        cur = conn.cursor()
+        yield cur
+        conn.commit()
+    finally:
+        conn.close()
 
-
-def obtener_nombre_messenger_cache(psid):
-    """Devuelve el nombre de Facebook ya guardado en caché para este PSID
-    de Messenger, o None si todavía no se ha resuelto. No llama a ningún
-    API externo -- solo lee la tabla nombres_messenger."""
-    if not psid:
-        return None
-    try:
-        with get_db_connection() as conn:
-            row = conn.execute(
-                "SELECT nombre FROM nombres_messenger WHERE psid = ?", (psid,)
-            ).fetchone()
-            return row["nombre"] if row else None
-    except Exception as e:
-        logger_db.error(f"obtener_nombre_messenger_cache: {e}")
-        return None
-
-
-def obtener_nombres_messenger_cache_multiples(psids):
-    """Igual que obtener_nombre_messenger_cache pero para varios PSIDs a
-    la vez (un solo query) -- pensado para listas del dashboard, para no
-    hacer N queries por N filas. Devuelve un dict {psid: nombre}, solo
-    con los que sí tienen nombre en caché."""
-    psids = [p for p in (psids or []) if p]
-    if not psids:
-        return {}
-    try:
-        with get_db_connection() as conn:
-            marcadores = ",".join("?" for _ in psids)
-            filas = conn.execute(
-                f"SELECT psid, nombre FROM nombres_messenger WHERE psid IN ({marcadores})",
-                psids,
-            ).fetchall()
-            return {f["psid"]: f["nombre"] for f in filas}
-    except Exception as e:
-        logger_db.error(f"obtener_nombres_messenger_cache_multiples: {e}")
-        return {}
-
-
-def guardar_nombre_messenger_cache(psid, nombre):
-    """Guarda (o actualiza) el nombre de Facebook resuelto para este PSID."""
-    if not psid or not nombre:
-        return
-    try:
-        with get_db_connection() as conn:
-            conn.execute(
-                "INSERT INTO nombres_messenger (psid, nombre, fecha_actualizacion) "
-                "VALUES (?, ?, CURRENT_TIMESTAMP) "
-                "ON CONFLICT(psid) DO UPDATE SET nombre = excluded.nombre, "
-                "fecha_actualizacion = CURRENT_TIMESTAMP",
-                (psid, nombre),
-            )
-            conn.commit()
-    except Exception as e:
-        logger_db.error(f"guardar_nombre_messenger_cache: {e}")
-
-
-def init_order_tables():
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
-            if not cursor.fetchone():
-                current_version = 0
-            else:
-                cursor.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
-                row = cursor.fetchone()
-                current_version = row[0] if row else 0
-            
-            # Tablas existentes
-            cursor.execute("""CREATE TABLE IF NOT EXISTS pedidos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                folio TEXT UNIQUE NOT NULL,
-                cliente_id INTEGER,
-                telefono TEXT NOT NULL,
-                estado TEXT NOT NULL,
-                modo_atencion TEXT NOT NULL DEFAULT 'BOT',
-                es_urgente INTEGER DEFAULT 0,
-                porcentaje_completitud INTEGER DEFAULT 0,
-                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS pedido_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pedido_id INTEGER NOT NULL,
-                producto TEXT NOT NULL,
-                cantidad INTEGER NOT NULL,
-                precio_unitario REAL NOT NULL,
-                subtotal REAL NOT NULL,
-                color_toalla TEXT,
-                color_moño TEXT,
-                tipo_jaboncito TEXT,
-                color_jaboncito TEXT,
-                nombre_bebe TEXT,
-                tarjetita TEXT,
-                FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
-            )""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS pagos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pedido_id INTEGER NOT NULL,
-                tipo TEXT NOT NULL,
-                monto REAL NOT NULL,
-                metodo TEXT NOT NULL,
-                comprobante TEXT,
-                confirmado INTEGER DEFAULT 0,
-                fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
-            )""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS entregas (
-                pedido_id INTEGER PRIMARY KEY,
-                tipo_entrega TEXT NOT NULL,
-                municipio TEXT,
-                direccion TEXT,
-                fecha_entrega TIMESTAMP,
-                costo_envio REAL DEFAULT 0.0,
-                FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
-            )""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS pedido_historial (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pedido_id INTEGER NOT NULL,
-                campo TEXT NOT NULL,
-                valor_anterior TEXT,
-                valor_nuevo TEXT,
-                usuario TEXT,
-                fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
-            )""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS pedido_eventos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pedido_id INTEGER NOT NULL,
-                evento TEXT NOT NULL,
-                descripcion TEXT,
-                origen TEXT NOT NULL DEFAULT 'SISTEMA',
-                usuario TEXT,
-                fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (pedido_id) REFERENCES pedidos(id) ON DELETE CASCADE
-            )""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS historial_chat (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telefono TEXT NOT NULL,
-                mensaje TEXT NOT NULL,
-                emisor TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )""")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS uso_openai (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telefono TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )""")
-
-            # 🆕 (20 ago 2026, pedido explícito de Israel) Caché del nombre
-            # real de Facebook de cada cliente de Messenger -- el PSID por
-            # sí solo no le dice nada a Israel en el dashboard. Se llena
-            # una sola vez por PSID (ver resolver_nombre_messenger() en
-            # app.py) para no tener que llamarle al Graph API en cada
-            # mensaje.
-            cursor.execute("""CREATE TABLE IF NOT EXISTS nombres_messenger (
-                psid TEXT PRIMARY KEY,
-                nombre TEXT NOT NULL,
-                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )""")
-            
-            # 🔥 Nueva tabla para borradores
-            cursor.execute("""CREATE TABLE IF NOT EXISTS borradores_pedido (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telefono TEXT NOT NULL UNIQUE,
-                datos_json TEXT NOT NULL,
-                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )""")
-
-            # 🆘 Configuración global simple (clave/valor) -- se usa para
-            # el candado de emergencia por WhatsApp (pausar/reanudar el
-            # bot para TODOS los clientes sin tocar Render). Pensada para
-            # crecer a futuro si se necesita guardar algún otro ajuste
-            # global sin agregar una tabla nueva cada vez.
-            cursor.execute("""CREATE TABLE IF NOT EXISTS configuracion (
-                clave TEXT PRIMARY KEY,
-                valor TEXT NOT NULL,
-                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )""")
-
-            # 🆕 Seguimiento automático de ~23h a clientes silenciosos con
-            # un pedido en progreso (ver PENDIENTES.md sección 1). Cada
-            # fila = "ya se le mandó el mensaje de seguimiento a este
-            # teléfono en este canal". marca_ultimo_mensaje_cliente queda
-            # guardada solo como referencia/diagnóstico (desde cuándo
-            # estaba callado cuando se le mandó).
-            # 🔧 (18 ago 2026, decisión explícita de Israel) Máximo UN
-            # seguimiento por telefono+canal EN TOTAL, para siempre -- ya
-            # NO se manda otro aunque el cliente responda y se quede
-            # callado de nuevo más adelante. El filtro real que aplica
-            # esto vive en candidatos_seguimiento_23h() (pedido_manager.py),
-            # que excluye a cualquier telefono con una fila aquí antes de
-            # considerarlo candidato. El UNIQUE(telefono, marca) de abajo
-            # sigue existiendo solo como candado extra a nivel de base de
-            # datos (por si el hilo corriera dos veces), no como la regla
-            # de negocio.
-            cursor.execute("""CREATE TABLE IF NOT EXISTS seguimientos_23h (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telefono TEXT NOT NULL,
-                canal TEXT NOT NULL DEFAULT 'whatsapp',
-                marca_ultimo_mensaje_cliente TIMESTAMP NOT NULL,
-                fecha_enviado TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(telefono, marca_ultimo_mensaje_cliente)
-            )""")
-
-            # 🔧 Conversaciones silenciadas por Dalia (por cliente
-            # individual, no global). Se usa cuando Dalia contesta manual
-            # a un cliente específico desde Messenger porque notó que el
-            # bot se equivocó -- el bot deja de responder SOLO en esa
-            # conversación, sin afectar a nadie más. Independiente de si
-            # ya existe un pedido oficial confirmado o no (a diferencia
-            # de modo_atencion en la tabla pedidos, que solo aplica una
-            # vez que hay un pedido creado).
-            cursor.execute("""CREATE TABLE IF NOT EXISTS conversaciones_silenciadas (
-                telefono TEXT PRIMARY KEY,
-                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )""")
-
-            # 🔧 (19 ago 2026) Dedupe de mensajes entrantes (webhook) a
-            # nivel de base de datos, no solo en memoria. Antes esto vivía
-            # en un set() de Python dentro de app.py -- funcionaba bien
-            # con UN solo proceso de gunicorn, pero al pasar a 2+ procesos
-            # (ver Procfile, cambio para que el servicio no se quede
-            # colgado por completo si un proceso se traba) cada proceso
-            # tendría su propio set() separado, y un mismo mensaje
-            # reintentado por Meta/YCloud podría caer en otro proceso y
-            # procesarse dos veces (respuesta duplicada al cliente). Usa
-            # el mismo patrón atómico ya probado en seguimientos_23h:
-            # INSERT OR IGNORE + revisar rowcount, que SQLite garantiza
-            # correcto aunque dos procesos lo intenten al mismo tiempo.
-            cursor.execute("""CREATE TABLE IF NOT EXISTS mensajes_webhook_procesados (
-                mensaje_id TEXT PRIMARY KEY,
-                fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )""")
-
-            # 🔧 Migración segura: agrega la columna "canal" (whatsapp /
-            # messenger) a historial_chat y pedidos, si todavía no
-            # existe. SQLite no soporta "ALTER TABLE ... ADD COLUMN IF
-            # NOT EXISTS" directamente, así que se revisa primero con
-            # PRAGMA table_info -- así no truena en despliegues donde la
-            # columna ya se agregó antes.
-            def _agregar_columna_si_falta(tabla, columna, tipo_sql):
-                cursor.execute(f"PRAGMA table_info({tabla})")
-                columnas_existentes = {fila[1] for fila in cursor.fetchall()}
-                if columna not in columnas_existentes:
-                    cursor.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo_sql}")
-                    logger_db.info(f"[DB] Columna '{columna}' agregada a '{tabla}'.")
-
-            _agregar_columna_si_falta("historial_chat", "canal", "TEXT DEFAULT 'whatsapp'")
-            _agregar_columna_si_falta("pedidos", "canal", "TEXT DEFAULT 'whatsapp'")
-            _agregar_columna_si_falta("uso_openai", "modelo", "TEXT")
-            _agregar_columna_si_falta("uso_openai", "tokens_entrada", "INTEGER DEFAULT 0")
-            _agregar_columna_si_falta("uso_openai", "tokens_salida", "INTEGER DEFAULT 0")
-            _agregar_columna_si_falta("uso_openai", "tokens_cache", "INTEGER DEFAULT 0")
-            _agregar_columna_si_falta("uso_openai", "costo_estimado_usd", "REAL DEFAULT 0.0")
-            conn.commit()
-
-            if current_version == 0:
-                cursor.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, fecha TEXT DEFAULT CURRENT_TIMESTAMP)")
-                cursor.execute("INSERT INTO schema_version (version) VALUES (1)")
-                conn.commit()
-                logger_db.info("[DB] Migración inicial completada.")
-
-            logger_db.info("[DB] ✅ Tablas del sistema verificadas y listas.")
-    except Exception as e:
-        logger_db.error(f"[DB] ❌ Error al crear las tablas: {e}")
-        raise
 
 def init_db():
-    try:
-        init_order_tables()
-    except Exception as e:
-        logger_db.critical(f"[DB] Fallo crítico en la inicialización: {e}")
-        raise
+    with _cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pedidos_confirmados (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha_captura TEXT NOT NULL,
+                subido_por TEXT,
+                cliente TEXT,
+                telefono TEXT,
+                municipio TEXT,
+                fecha_entrega TEXT,
+                fecha_entrega_iso TEXT,
+                tipo_entrega TEXT,
+                direccion TEXT,
+                productos_json TEXT NOT NULL DEFAULT '[]',
+                anticipo REAL NOT NULL DEFAULT 0,
+                total REAL NOT NULL DEFAULT 0,
+                notas TEXT,
+                foto_archivo TEXT,
+                estatus_fabricacion TEXT NOT NULL DEFAULT 'pendiente',
+                estatus_entrega TEXT NOT NULL DEFAULT 'pendiente',
+                fecha_entregado TEXT
+            )
+        """)
+        # 🔧 (21 ago 2026) Migración suave: si la tabla ya existía de una
+        # versión anterior sin esta columna, se agrega aquí sin perder datos.
+        cur.execute("PRAGMA table_info(pedidos_confirmados)")
+        columnas = {fila[1] for fila in cur.fetchall()}
+        if "fecha_entrega_iso" not in columnas:
+            cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN fecha_entrega_iso TEXT")
+            cur.execute("SELECT id, fecha_entrega FROM pedidos_confirmados")
+            for pid, fecha in cur.fetchall():
+                cur.execute(
+                    "UPDATE pedidos_confirmados SET fecha_entrega_iso=? WHERE id=?",
+                    (normalizar_fecha_iso(fecha), pid),
+                )
+        # 🔧 (23 ago 2026, pedido de Israel: "las notas que tengan información
+        # por confirmar o error que detecte la IA hay que marcarlo como error,
+        # que se puedan subir, pero marcadas para que llamen la atención y se
+        # corrija ya dentro de la app") Antes, una nota dudosa DETENÍA la
+        # subida hasta corregirla ahí mismo. Ahora se guarda de todos modos
+        # -- con lo que se haya podido leer -- y se marca con estas 2 columnas
+        # para poder mostrar el aviso y corregirla después, sin bloquear el
+        # resto de la tanda.
+        if "necesita_revision" not in columnas:
+            cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN necesita_revision INTEGER NOT NULL DEFAULT 0")
+        if "motivo_revision" not in columnas:
+            cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN motivo_revision TEXT")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_fecha_entrega_iso ON pedidos_confirmados(fecha_entrega_iso)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_estatus_entrega ON pedidos_confirmados(estatus_entrega)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_necesita_revision ON pedidos_confirmados(necesita_revision)")
 
-init_db()
+        # 🔧 (23 ago 2026, pedido de Israel: control de materia prima)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS materia_prima (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL,
+                cantidad REAL NOT NULL DEFAULT 0,
+                unidad TEXT NOT NULL DEFAULT 'pza',
+                actualizado_en TEXT NOT NULL
+            )
+        """)
+    print(f"[DB producción] ✅ Lista en: {os.path.abspath(DB_PATH)}")
+
+
+def guardar_pedido(data):
+    """data: dict con los campos del formulario de confirmación.
+    'productos' debe ser una lista de dicts -> se guarda como JSON."""
+    productos_json = json.dumps(data.get("productos") or [], ensure_ascii=False)
+    fecha_entrega = data.get("fecha_entrega")
+    with _cursor() as cur:
+        cur.execute("""
+            INSERT INTO pedidos_confirmados
+                (fecha_captura, subido_por, cliente, telefono, municipio,
+                 fecha_entrega, fecha_entrega_iso, tipo_entrega, direccion, productos_json,
+                 anticipo, total, notas, foto_archivo, necesita_revision, motivo_revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            data.get("fecha_captura"), data.get("subido_por"), data.get("cliente"),
+            data.get("telefono"), data.get("municipio"), fecha_entrega,
+            normalizar_fecha_iso(fecha_entrega), data.get("tipo_entrega"), data.get("direccion"), productos_json,
+            float(data.get("anticipo") or 0), float(data.get("total") or 0),
+            data.get("notas"), data.get("foto_archivo"),
+            1 if data.get("necesita_revision") else 0, data.get("motivo_revision"),
+        ))
+        return cur.lastrowid
+
+
+def actualizar_pedido(pedido_id, data):
+    """🔧 (23 ago 2026) Editar un pedido -- desde la app, ya con calma -- es
+    justo la forma en que se corrige una nota marcada con error. Por eso,
+    cada vez que se guarda una edición, se apaga la bandera de
+    necesita_revision: se asume que quien editó ya dejó los datos bien."""
+    productos_json = json.dumps(data.get("productos") or [], ensure_ascii=False)
+    fecha_entrega = data.get("fecha_entrega")
+    with _cursor() as cur:
+        cur.execute("""
+            UPDATE pedidos_confirmados SET
+                cliente=?, telefono=?, municipio=?, fecha_entrega=?, fecha_entrega_iso=?, tipo_entrega=?,
+                direccion=?, productos_json=?, anticipo=?, total=?, notas=?,
+                necesita_revision=0, motivo_revision=NULL
+            WHERE id=?
+        """, (
+            data.get("cliente"), data.get("telefono"), data.get("municipio"),
+            fecha_entrega, normalizar_fecha_iso(fecha_entrega), data.get("tipo_entrega"), data.get("direccion"),
+            productos_json, float(data.get("anticipo") or 0), float(data.get("total") or 0),
+            data.get("notas"), pedido_id,
+        ))
+
+
+def actualizar_estatus(pedido_id, campo, valor):
+    assert campo in ("estatus_fabricacion", "estatus_entrega")
+    with _cursor() as cur:
+        if campo == "estatus_entrega" and valor == "entregado":
+            cur.execute(
+                f"UPDATE pedidos_confirmados SET {campo}=?, fecha_entregado=? WHERE id=?",
+                (valor, _hoy_iso(), pedido_id),
+            )
+        else:
+            cur.execute(f"UPDATE pedidos_confirmados SET {campo}=? WHERE id=?", (valor, pedido_id))
+
+
+def eliminar_pedido(pedido_id):
+    with _cursor() as cur:
+        cur.execute("DELETE FROM pedidos_confirmados WHERE id=?", (pedido_id,))
+
+
+def obtener_pedido(pedido_id):
+    with _cursor() as cur:
+        cur.execute("SELECT * FROM pedidos_confirmados WHERE id=?", (pedido_id,))
+        row = cur.fetchone()
+        return _fila_a_dict(row) if row else None
+
+
+def listar_pedidos(fecha_entrega_desde=None, fecha_entrega_hasta=None, solo_pendientes_entrega=False,
+                    incluir_sin_fecha=False):
+    """fecha_entrega_desde/hasta deben venir en formato ISO (AAAA-MM-DD) --
+    se comparan contra fecha_entrega_iso, NUNCA contra fecha_entrega (que
+    está en DD/MM/AAAA, el formato que usa la persona)."""
+    query = "SELECT * FROM pedidos_confirmados WHERE 1=1"
+    params = []
+    if fecha_entrega_desde or fecha_entrega_hasta:
+        if incluir_sin_fecha:
+            query += " AND (fecha_entrega_iso IS NULL"
+        else:
+            query += " AND (fecha_entrega_iso IS NOT NULL"
+        if fecha_entrega_desde:
+            query += " AND fecha_entrega_iso >= ?"
+            params.append(fecha_entrega_desde)
+        if fecha_entrega_hasta:
+            query += " AND fecha_entrega_iso <= ?"
+            params.append(fecha_entrega_hasta)
+        query += ")"
+    if solo_pendientes_entrega:
+        query += " AND estatus_entrega != 'entregado'"
+    query += " ORDER BY (fecha_entrega_iso IS NULL) ASC, fecha_entrega_iso ASC, id ASC"
+    with _cursor() as cur:
+        cur.execute(query, params)
+        return [_fila_a_dict(r) for r in cur.fetchall()]
+
+
+def buscar_pedidos_por_cliente(texto):
+    """🔧 (23 ago 2026, pedido de Israel: "habilita un buscador de cliente
+    por nombre para las notas") Busca en TODOS los pedidos (sin límite de
+    fecha), coincidencia parcial y sin importar mayúsculas/acentos básicos,
+    más reciente primero -- para encontrar una nota vieja de un cliente sin
+    tener que ir período por período."""
+    texto = (texto or "").strip()
+    if not texto:
+        return []
+    with _cursor() as cur:
+        cur.execute("""
+            SELECT * FROM pedidos_confirmados
+            WHERE lower(COALESCE(cliente, '')) LIKE ?
+            ORDER BY fecha_captura DESC
+        """, (f"%{texto.lower()}%",))
+        return [_fila_a_dict(r) for r in cur.fetchall()]
+
+
+def listar_capturados_en_rango(fecha_captura_desde, fecha_captura_hasta):
+    """Para la vista financiera: pedidos CAPTURADOS (no necesariamente
+    entregados) en un rango de fechas -- ej. 'cuántos anticipos entraron esta semana'."""
+    with _cursor() as cur:
+        cur.execute("""
+            SELECT * FROM pedidos_confirmados
+            WHERE substr(fecha_captura, 1, 10) >= ? AND substr(fecha_captura, 1, 10) <= ?
+            ORDER BY fecha_captura ASC
+        """, (fecha_captura_desde, fecha_captura_hasta))
+        return [_fila_a_dict(r) for r in cur.fetchall()]
+
+
+def listar_capturados_por_vendedor_en_rango(vendedor, fecha_captura_desde, fecha_captura_hasta):
+    """🔧 (23 ago 2026, pedido de Israel: comisiones de Diana -- $1 por
+    producto vendido) Igual que listar_capturados_en_rango, pero solo los
+    pedidos subidos por 'vendedor' (comparación sin importar mayúsculas ni
+    espacios de sobra). Ahora 'subido_por' se llena automáticamente con
+    quien inició sesión (ver app.py) -- ya no es un campo de texto libre
+    donde alguien pudo escribir "diana", "Diana " o con una falta -- así
+    que este filtro es confiable para calcular un pago real."""
+    with _cursor() as cur:
+        cur.execute("""
+            SELECT * FROM pedidos_confirmados
+            WHERE substr(fecha_captura, 1, 10) >= ? AND substr(fecha_captura, 1, 10) <= ?
+              AND lower(trim(COALESCE(subido_por, ''))) = lower(trim(?))
+            ORDER BY fecha_captura ASC
+        """, (fecha_captura_desde, fecha_captura_hasta, vendedor))
+        return [_fila_a_dict(r) for r in cur.fetchall()]
+
+
+# ----------------------------------------------------------------------
+# Inventario de materia prima
+# ----------------------------------------------------------------------
+def listar_materia_prima():
+    with _cursor() as cur:
+        cur.execute("SELECT * FROM materia_prima ORDER BY nombre COLLATE NOCASE ASC")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def obtener_materia_prima(item_id):
+    with _cursor() as cur:
+        cur.execute("SELECT * FROM materia_prima WHERE id=?", (item_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def crear_materia_prima(nombre, cantidad, unidad):
+    with _cursor() as cur:
+        cur.execute(
+            "INSERT INTO materia_prima (nombre, cantidad, unidad, actualizado_en) VALUES (?, ?, ?, ?)",
+            (nombre, float(cantidad or 0), unidad or "pza", ahora_negocio().isoformat(timespec="seconds")),
+        )
+        return cur.lastrowid
+
+
+def actualizar_materia_prima(item_id, nombre, cantidad, unidad):
+    with _cursor() as cur:
+        cur.execute(
+            "UPDATE materia_prima SET nombre=?, cantidad=?, unidad=?, actualizado_en=? WHERE id=?",
+            (nombre, float(cantidad or 0), unidad or "pza",
+             ahora_negocio().isoformat(timespec="seconds"), item_id),
+        )
+
+
+def eliminar_materia_prima(item_id):
+    with _cursor() as cur:
+        cur.execute("DELETE FROM materia_prima WHERE id=?", (item_id,))
+
+
+def _fila_a_dict(row):
+    d = dict(row)
+    try:
+        d["productos"] = json.loads(d.get("productos_json") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        d["productos"] = []
+    d["saldo"] = round((d.get("total") or 0) - (d.get("anticipo") or 0), 2)
+    return d
+
+
+def _hoy_iso():
+    # Se pasa desde afuera casi siempre (ver app.py); esta es solo una
+    # red de seguridad si algún caller no lo manda.
+    return hoy_negocio().isoformat()

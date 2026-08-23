@@ -23,6 +23,28 @@ from contextlib import contextmanager
 DB_PATH = os.getenv("PRODUCCION_DB_PATH", "produccion.db")
 
 
+# 🔧 (23 ago 2026, pedido de Israel: "hoy es 22 de agosto, en la app
+# aparece que es 23") Render corre el servidor en UTC. Monterrey/Apodaca
+# van 6 horas atrás y, desde la reforma de 2022, ya NO cambian de horario
+# (no aplica horario de verano ahí), así que el ajuste es un número fijo
+# -- no depende de una base de datos de zonas horarias que quizás no esté
+# instalada en el servidor. Sin esto, entre las 6pm y la medianoche hora
+# de Monterrey, el servidor (en UTC) ya "cree" que es el día siguiente,
+# y toda fecha que se guarde o se compare en ese rato sale adelantada un
+# día. TODO el código (aquí y en app.py) debe usar ahora_negocio()/
+# hoy_negocio() en vez de datetime.datetime.now()/datetime.date.today()
+# directo, para que "hoy" signifique siempre lo mismo en toda la app.
+ZONA_NEGOCIO = datetime.timezone(datetime.timedelta(hours=-6), name="America/Monterrey")
+
+
+def ahora_negocio():
+    return datetime.datetime.now(ZONA_NEGOCIO)
+
+
+def hoy_negocio():
+    return ahora_negocio().date()
+
+
 def normalizar_fecha_iso(texto_fecha):
     """Convierte 'fecha_entrega' (que el humano escribe como DD/MM/AAAA,
     el formato que usa todo el negocio) a AAAA-MM-DD para poder filtrar y
@@ -268,7 +290,7 @@ def crear_materia_prima(nombre, cantidad, unidad):
     with _cursor() as cur:
         cur.execute(
             "INSERT INTO materia_prima (nombre, cantidad, unidad, actualizado_en) VALUES (?, ?, ?, ?)",
-            (nombre, float(cantidad or 0), unidad or "pza", datetime.datetime.now().isoformat(timespec="seconds")),
+            (nombre, float(cantidad or 0), unidad or "pza", ahora_negocio().isoformat(timespec="seconds")),
         )
         return cur.lastrowid
 
@@ -278,7 +300,7 @@ def actualizar_materia_prima(item_id, nombre, cantidad, unidad):
         cur.execute(
             "UPDATE materia_prima SET nombre=?, cantidad=?, unidad=?, actualizado_en=? WHERE id=?",
             (nombre, float(cantidad or 0), unidad or "pza",
-             datetime.datetime.now().isoformat(timespec="seconds"), item_id),
+             ahora_negocio().isoformat(timespec="seconds"), item_id),
         )
 
 
@@ -300,5 +322,4 @@ def _fila_a_dict(row):
 def _hoy_iso():
     # Se pasa desde afuera casi siempre (ver app.py); esta es solo una
     # red de seguridad si algún caller no lo manda.
-    import datetime
-    return datetime.date.today().isoformat()
+    return hoy_negocio().isoformat()

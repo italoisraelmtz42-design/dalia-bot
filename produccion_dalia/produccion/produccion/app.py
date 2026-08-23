@@ -35,6 +35,21 @@ import database
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "cambia-esta-clave-en-produccion")
 
+
+# 🔧 (23 ago 2026, pedido de Israel: "quiero que los miles lleven
+# separación, $4,500 y no $4500") Filtro de Jinja para mostrar cualquier
+# monto en pesos con comas de miles y 2 decimales. Solo se usa en textos
+# de solo lectura (Finanzas, Comisiones, detalle de pedido) -- los
+# <input type="number"> de edición de precios NO llevan este filtro,
+# porque las comas romperían el parseo del navegador.
+@app.template_filter("moneda")
+def _filtro_moneda(valor):
+    try:
+        valor = float(valor or 0)
+    except (TypeError, ValueError):
+        valor = 0.0
+    return f"{valor:,.2f}"
+
 # 🔧 (23 ago 2026, pedido de Israel: "quiero acceso para 3 personas, pero
 # Diana no quiero que vea lo financiero") Antes había una sola contraseña
 # compartida para los 3. Ahora cada quien tiene la suya, y la app sabe
@@ -170,7 +185,11 @@ def _inyectar_contexto_usuario():
 # Utilidades de fecha
 # ----------------------------------------------------------------------
 def _hoy():
-    return datetime.date.today()
+    # 🔧 (23 ago 2026, pedido de Israel: "hoy es 22 de agosto, en la app
+    # aparece que es 23") Antes usaba la hora del servidor (Render corre
+    # en UTC), así que entre las 6pm y la medianoche hora de Monterrey la
+    # app ya mostraba el día siguiente. Ver database.hoy_negocio().
+    return database.hoy_negocio()
 
 
 def _rango_semana(hoy):
@@ -351,7 +370,27 @@ def finanzas():
 # vende" -- aparte de su sueldo, a Diana le toca $1 por cada pieza
 # vendida. Diana entra y ve la suya; Israel/Dalia también la pueden
 # consultar para saber cuánto pagarle.)
+#
+# 🔧 (23 ago 2026, aclaración de Israel: "la comisión de Diana solo debe
+# ser de productos, no por pedido urgente ni por envío a domicilio") El
+# prompt de extracción ya le pide a la IA que NUNCA meta el envío/urgencia
+# como si fueran un producto -- pero, como en el resto del código, no se
+# confía ciegamente en que la IA lo respete: aquí se vuelve a filtrar en
+# código cualquier renglón que se parezca a un cargo de envío/urgencia
+# antes de contar piezas para la comisión.
 # ----------------------------------------------------------------------
+PALABRAS_NO_PRODUCTO = ("envio", "envío", "domicilio", "flete", "urgente", "urgencia")
+
+
+def _es_producto_real(nombre_producto):
+    """False si el renglón claramente no es mercancía (envío, urgencia),
+    aunque haya quedado guardado por error dentro de 'productos'."""
+    nombre = (nombre_producto or "").strip().lower()
+    if not nombre:
+        return False
+    return not any(palabra in nombre for palabra in PALABRAS_NO_PRODUCTO)
+
+
 @app.route("/comisiones")
 def comisiones():
     usuario = session.get("usuario")
@@ -369,18 +408,52 @@ def comisiones():
     monto_por_producto = VENDEDORES_CON_COMISION[vendedor]
     periodo = request.args.get("periodo", "semana")
     hoy = _hoy()
+
+    # 🔧 (23 ago 2026, pedido de Israel: "si cambia de mes, ¿podemos ver
+    # las comisiones del mes anterior si no se le han pagado?") Antes
+    # "Semana"/"Mes" siempre eran la semana/mes ACTUAL, sin forma de ver
+    # atrás. Ahora se puede navegar período por período (como ya se podía
+    # en el calendario de Entregas), para poder cuadrar un pago aunque ya
+    # haya cambiado la semana o el mes.
     if periodo == "mes":
-        ini, fin = _rango_mes(hoy)
-        titulo_periodo = f"Este mes ({MESES_ES[hoy.month].capitalize()} {hoy.year})"
+        try:
+            anio = int(request.args.get("anio", hoy.year))
+            mes = int(request.args.get("mes", hoy.month))
+        except (TypeError, ValueError):
+            anio, mes = hoy.year, hoy.month
+        anio, mes = _normalizar_anio_mes(anio, mes)
+        ini = datetime.date(anio, mes, 1)
+        fin = datetime.date(anio, mes, calendario_mod.monthrange(anio, mes)[1])
+        es_actual = (anio == hoy.year and mes == hoy.month)
+        titulo_periodo = f"{'Este mes' if es_actual else 'Mes'} ({MESES_ES[mes].capitalize()} {anio})"
+        anio_ant, mes_ant = _normalizar_anio_mes(anio, mes - 1)
+        anio_sig, mes_sig = _normalizar_anio_mes(anio, mes + 1)
+        nav_anterior = {"periodo": "mes", "anio": anio_ant, "mes": mes_ant}
+        nav_siguiente = {"periodo": "mes", "anio": anio_sig, "mes": mes_sig}
+        nav_actual = {"periodo": "mes", "anio": hoy.year, "mes": hoy.month}
     else:
-        ini, fin = _rango_semana(hoy)
-        titulo_periodo = f"Esta semana ({ini.strftime('%d/%m')} al {fin.strftime('%d/%m')})"
         periodo = "semana"
+        try:
+            inicio_qs = request.args.get("inicio")
+            inicio_pedido = datetime.date.fromisoformat(inicio_qs) if inicio_qs else hoy
+        except ValueError:
+            inicio_pedido = hoy
+        ini, fin = _rango_semana(inicio_pedido)
+        es_actual = (ini == _rango_semana(hoy)[0])
+        if es_actual:
+            titulo_periodo = f"Esta semana ({ini.strftime('%d/%m')} al {fin.strftime('%d/%m')})"
+        else:
+            titulo_periodo = f"Semana del {ini.strftime('%d/%m')} al {fin.strftime('%d/%m/%Y')}"
+        nav_anterior = {"periodo": "semana", "inicio": (ini - datetime.timedelta(days=7)).isoformat()}
+        nav_siguiente = {"periodo": "semana", "inicio": (ini + datetime.timedelta(days=7)).isoformat()}
+        nav_actual = {"periodo": "semana", "inicio": _rango_semana(hoy)[0].isoformat()}
 
     pedidos = database.listar_capturados_por_vendedor_en_rango(vendedor, ini.isoformat(), fin.isoformat())
     total_piezas = 0.0
     for p in pedidos:
         for prod in (p.get("productos") or []):
+            if not _es_producto_real(prod.get("producto")):
+                continue
             try:
                 total_piezas += float(prod.get("cantidad") or 0)
             except (TypeError, ValueError):
@@ -393,6 +466,7 @@ def comisiones():
         monto_por_producto=monto_por_producto, total_piezas=total_piezas, total_comision=total_comision,
         es_propia=(usuario == vendedor),
         otros_vendedores=[v for v in VENDEDORES_CON_COMISION if v != vendedor] if usuario not in VENDEDORES_CON_COMISION else [],
+        nav_anterior=nav_anterior, nav_siguiente=nav_siguiente, nav_actual=nav_actual, es_actual=es_actual,
     )
 
 
@@ -413,6 +487,8 @@ def imprimir_semana_proxima():
     resumen = {}
     for p in pedidos:
         for prod in (p.get("productos") or []):
+            if not _es_producto_real(prod.get("producto")):
+                continue
             nombre = (prod.get("producto") or "Producto sin nombre").strip() or "Producto sin nombre"
             try:
                 cantidad = float(prod.get("cantidad") or 0)
@@ -423,7 +499,7 @@ def imprimir_semana_proxima():
 
     return render_template(
         "imprimir_semana.html", pedidos=pedidos, resumen=resumen_ordenado,
-        ini=ini, fin=fin, generado=datetime.datetime.now(),
+        ini=ini, fin=fin, generado=database.ahora_negocio(),
     )
 
 
@@ -509,6 +585,7 @@ exacta (sin texto extra, sin explicaciones):
 }
 
 Reglas importantes:
+- "productos" es SOLO para mercancía física que se fabrica y se entrega (ositos, jaboncitos, abanicos, dominós, etc.). El cobro de envío a domicilio y el cargo por pedido urgente NO son productos -- nunca los pongas como un renglón de "productos", aunque la nota los liste junto a los productos. Van reflejados nada más en el "total" y, si quieres anotarlos, en "notas" (ej. "incluye $100 de envío a domicilio", "es urgente").
 - Si un dato no aparece claramente en la nota, pon null (o lista vacía para productos) -- NO inventes ni adivines.
 - "cantidad" y los montos deben ser números (sin signo de $ ni comas), nunca texto.
 - Marca "necesita_revision": true si ocurre CUALQUIERA de estas cosas: falta el nombre del cliente, no hay ningún producto legible, algún producto no tiene cantidad clara, falta la fecha de entrega, la letra o la foto están borrosas en alguna parte importante, el total no cuadra aproximadamente con la suma de los productos (déjale margen por envío/redondeo), o simplemente no estás seguro de algo relevante.
@@ -684,7 +761,7 @@ def _guardar_pedido_desde_datos(datos, foto_bytes, subido_por=None):
             "precio_unitario": p.get("precio_unitario") or "",
         })
     data = {
-        "fecha_captura": datetime.datetime.now().isoformat(timespec="seconds"),
+        "fecha_captura": database.ahora_negocio().isoformat(timespec="seconds"),
         "subido_por": subido_por,
         "cliente": _texto_o_none(datos.get("cliente")),
         "telefono": _texto_o_none(datos.get("telefono")),

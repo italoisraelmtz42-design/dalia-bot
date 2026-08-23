@@ -2,12 +2,20 @@
 {% block titulo %}Comisión — Producción Dalia{% endblock %}
 {% block contenido %}
 <h2 style="margin-bottom:4px;">💵 {{ 'Tu comisión' if es_propia else 'Comisión de ' + nombre_vendedor }}</h2>
-<p class="muted" style="margin-top:0;">{{ titulo_periodo }} — ${{ '%.2f'|format(monto_por_producto) }} por producto vendido</p>
+<p class="muted" style="margin-top:0;">{{ titulo_periodo }} — ${{ monto_por_producto|moneda }} por producto vendido</p>
 
 <nav class="tabs" style="padding:0 0 14px 0;margin:0 0 6px 0;">
   <a href="{{ url_for('comisiones', periodo='semana', vendedor=vendedor) }}" class="{{ 'activo' if periodo=='semana' else '' }}">Semana</a>
   <a href="{{ url_for('comisiones', periodo='mes', vendedor=vendedor) }}" class="{{ 'activo' if periodo=='mes' else '' }}">Mes</a>
 </nav>
+
+<div class="card" style="padding:10px 12px;display:flex;align-items:center;justify-content:space-between;">
+  <a class="btn" href="{{ url_for('comisiones', vendedor=vendedor, **nav_anterior) }}">← {{ 'Semana anterior' if periodo == 'semana' else 'Mes anterior' }}</a>
+  {% if not es_actual %}
+    <a class="link-suave" href="{{ url_for('comisiones', vendedor=vendedor, **nav_actual) }}">Ir a {{ 'esta semana' if periodo == 'semana' else 'este mes' }}</a>
+  {% endif %}
+  <a class="btn" href="{{ url_for('comisiones', vendedor=vendedor, **nav_siguiente) }}">{{ 'Semana siguiente' if periodo == 'semana' else 'Mes siguiente' }} →</a>
+</div>
 
 {% if otros_vendedores %}
 <p class="muted">Ver comisión de:
@@ -24,7 +32,7 @@
   </div>
   <div class="item">
     <div class="muted">Comisión a pagar</div>
-    <div class="num">${{ '%.2f'|format(total_comision) }}</div>
+    <div class="num">${{ total_comision|moneda }}</div>
   </div>
   <div class="item">
     <div class="muted">Pedidos que cuentan</div>

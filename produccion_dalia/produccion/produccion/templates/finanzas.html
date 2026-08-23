@@ -16,15 +16,15 @@
   </div>
   <div class="item">
     <div class="muted">Anticipos recibidos</div>
-    <div class="num">${{ '%.2f'|format(total_anticipos) }}</div>
+    <div class="num">${{ total_anticipos|moneda }}</div>
   </div>
   <div class="item">
     <div class="muted">Total vendido</div>
-    <div class="num">${{ '%.2f'|format(total_ventas) }}</div>
+    <div class="num">${{ total_ventas|moneda }}</div>
   </div>
   <div class="item">
     <div class="muted">Saldo pendiente</div>
-    <div class="num">${{ '%.2f'|format(total_saldos) }}</div>
+    <div class="num">${{ total_saldos|moneda }}</div>
   </div>
 </div>
 
@@ -39,9 +39,9 @@
     <span class="muted">{{ p.fecha_captura[:10] if p.fecha_captura else '' }}</span>
   </div>
   <div class="totales">
-    <div class="item"><span class="muted">Anticipo</span><br>${{ '%.2f'|format(p.anticipo or 0) }}</div>
-    <div class="item"><span class="muted">Total</span><br>${{ '%.2f'|format(p.total or 0) }}</div>
-    <div class="item"><span class="muted">Saldo</span><br>${{ '%.2f'|format(p.saldo or 0) }}</div>
+    <div class="item"><span class="muted">Anticipo</span><br>${{ (p.anticipo or 0)|moneda }}</div>
+    <div class="item"><span class="muted">Total</span><br>${{ (p.total or 0)|moneda }}</div>
+    <div class="item"><span class="muted">Saldo</span><br>${{ (p.saldo or 0)|moneda }}</div>
   </div>
   <a class="link-suave" href="{{ url_for('pedido_detalle', pedido_id=p.id) }}">Ver detalle →</a>
 </div>

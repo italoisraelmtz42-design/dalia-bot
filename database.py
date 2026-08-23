@@ -3,143 +3,39 @@ import sqlite3
 import logging
 import threading
 import time
+import random
 
 logger_db = logging.getLogger('database')
 
-# 🔧 (23 ago 2026, a pedido de Israel -- "disk I/O error" recurrente en
-# ráfagas de tráfico real, AUN con journal_mode=DELETE) El Procfile usa
-# --workers 1 --threads 8: un solo proceso de gunicorn, pero hasta 8
-# hilos que pueden abrir su propia conexión SQLite y golpear el disco
-# AL MISMO TIEMPO (ej. varios mensajes de WhatsApp/Messenger llegando
-# juntos). journal_mode=DELETE + busy_timeout ya evita que se choquen
-# por locks normales de SQLite, pero el disco persistente de Render es
-# almacenamiento en red -- bajo varias operaciones de E/S simultáneas
-# puede fallar con "disk I/O error" real (eso NO es un lock, es una
-# falla de E/S), justo lo que se vio en los logs: varias funciones
-# distintas (es_cliente_nuevo, chat_guardar_mensaje, uso_registrar_openai,
-# guardar_borrador_pedido...) tronando juntas en ráfagas cortas.
-# Este candado global fuerza a que TODO el proceso use el disco desde
-# una sola conexión a la vez -- ya no hay forma de que 2+ hilos golpeen
-# el archivo .db al mismo tiempo. Es RLock (no Lock normal) para que un
-# mismo hilo pueda abrir una conexión "anidada" (una función que llama a
-# otra que también abre conexión) sin bloquearse a sí mismo. El costo es
-# una espera de milisegundos entre mensajes que llegan exactamente al
-# mismo tiempo -- mucho más barato que un "disk I/O error" que tumba la
-# respuesta al cliente.
+# 🔧 (23 ago 2026, 3:33pm -- REVERTIDO, a pedido de Israel: "hay clientes
+# preguntando y el bot callado") Hoy mismo, más temprano, se agregó un
+# candado global en Python (un solo hilo podía usar el disco a la vez)
+# para evitar el "disk I/O error" que salía cuando varios hilos tocaban
+# el disco de Render al mismo tiempo. Funcionó para ESE síntoma, pero
+# resultó ser una sobrecorrección grave: en cuanto llegó tráfico real de
+# VARIOS clientes distintos casi al mismo tiempo (varios mensajes de
+# Messenger en la misma ventana de segundos), el candado obligaba a
+# CADA mensaje a esperar su turno detrás de TODOS los demás para cada
+# una de sus ~4-6 idas y vueltas a la base de datos -- con el disco ya
+# de por sí lento a ratos hoy, esa cola se hizo más larga que los 25s de
+# paciencia de cada quien, y el bot se quedó completamente mudo con
+# clientes reales escribiendo. Es decir: el candado cambió "a veces un
+# mensaje truena con disk I/O error" (malo, pero aislado) por "el bot
+# entero deja de contestarle a todo mundo" (mucho peor). Ver
+# VIGILANTE_LIMITE_SEGUNDOS y _CandadoConVigilante en el historial de
+# git si hace falta consultar ese diseño -- ya no se usa.
 #
-# 🔧 (23 ago 2026, mismo día -- a los ~10 min de subir el candado) UN
-# candado normal (RLock) tiene un defecto grave que no se vio hasta que
-# pasó de verdad: si una sola operación se queda COLGADA de verdad (no
-# truena, simplemente el disco de red nunca contesta esa lectura/
-# escritura -- muy distinto a un "disk I/O error", que sí truena rápido),
-# el candado se queda tomado PARA SIEMPRE, y como es global, bloquea a
-# TODO el proceso -- ya nadie puede ni ver el dashboard ni el bot puede
-# contestarle a un cliente, hasta reiniciar el servicio a mano. Eso fue
-# justo lo que pasó: algo (muy probablemente el hilo de seguimientos de
-# 23h, que corre justo al arrancar) se coló en una consulta y dejó el
-# candado tomado varios minutos, con 0% de avance, aunque el disco en sí
-# resultó estar bien (se probó con sqlite3 desde la Shell mientras
-# estaba colgado y respondió al toque -- fue el candado de Python, no
-# el disco).
-#
-# _CandadoConVigilante reemplaza el RLock con uno reentrante (mismo
-# hilo puede volver a entrar sin bloquearse, igual que antes) pero que
-# ADEMÁS un hilo vigilante aparte puede liberar a la fuerza si ve que
-# lleva demasiado tiempo tomado -- un RLock normal de Python NO permite
-# esto (solo el hilo dueño puede liberarlo). Con esto, lo peor que puede
-# pasar ya no es "todo el proceso colgado para siempre", sino "todo el
-# proceso tarda hasta VIGILANTE_LIMITE_SEGUNDOS de más esa vez" y
-# después se recupera solo, sin que nadie tenga que reiniciar a mano.
-class _CandadoConVigilante:
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._guardia = threading.Lock()  # protege los 3 campos de abajo
-        self._dueno = None
-        self._contador = 0
-        self._tomado_desde = None
-
-    def acquire(self, timeout=-1):
-        yo = threading.get_ident()
-        with self._guardia:
-            if self._dueno == yo:
-                self._contador += 1
-                return True
-        obtenido = self._lock.acquire(timeout=timeout)
-        if obtenido:
-            with self._guardia:
-                self._dueno = yo
-                self._contador = 1
-                self._tomado_desde = time.monotonic()
-        return obtenido
-
-    def release(self):
-        yo = threading.get_ident()
-        with self._guardia:
-            if self._dueno != yo:
-                # Ya lo liberó el vigilante (o nunca fue nuestro) --
-                # no reventar, simplemente no hay nada que hacer.
-                return
-            self._contador -= 1
-            if self._contador > 0:
-                return
-            self._dueno = None
-            self._tomado_desde = None
-        try:
-            self._lock.release()
-        except RuntimeError:
-            pass
-
-    def liberar_si_lleva_colgado(self, limite_segundos):
-        """Llamado solo por el hilo vigilante (ver más abajo). Si el
-        candado lleva tomado más de limite_segundos, lo libera a la
-        fuerza y devuelve True (para que el vigilante lo reporte)."""
-        with self._guardia:
-            if self._dueno is None or self._tomado_desde is None:
-                return False
-            segundos_tomado = time.monotonic() - self._tomado_desde
-            if segundos_tomado <= limite_segundos:
-                return False
-            dueno_anterior = self._dueno
-            self._dueno = None
-            self._contador = 0
-            self._tomado_desde = None
-        try:
-            self._lock.release()
-        except RuntimeError:
-            pass
-        logger_db.critical(
-            f"[VIGILANTE] El candado de disco llevaba {segundos_tomado:.0f}s "
-            f"tomado (hilo id={dueno_anterior}) sin soltarse -- se liberó a "
-            f"la fuerza para no dejar el proceso colgado. Es probable que "
-            f"ese hilo siga atorado en una operación de disco de verdad "
-            f"lenta; si vuelve a pasar seguido, revisar con soporte de "
-            f"Render si el Disk está teniendo problemas."
-        )
-        return True
-
-
-_db_lock = _CandadoConVigilante()
-
-# Cada cuánto revisa el vigilante si el candado lleva demasiado tomado,
-# y cuánto es "demasiado". 45s da bastante margen para que una consulta
-# lenta de verdad (ej. el dashboard con el disco teniendo un mal
-# momento) termine sola sin que el vigilante la interrumpa de más --
-# pero ya no dependemos de que alguien note el problema y reinicie a
-# mano como pasó hoy.
-VIGILANTE_INTERVALO_SEGUNDOS = 5
-VIGILANTE_LIMITE_SEGUNDOS = 45
-
-
-def _hilo_vigilante_candado():
-    while True:
-        time.sleep(VIGILANTE_INTERVALO_SEGUNDOS)
-        try:
-            _db_lock.liberar_si_lleva_colgado(VIGILANTE_LIMITE_SEGUNDOS)
-        except Exception as e:
-            logger_db.error(f"[VIGILANTE] Error revisando el candado: {e}")
-
-
-threading.Thread(target=_hilo_vigilante_candado, daemon=True).start()
+# En su lugar: SIN candado global (se deja que SQLite -- que sí está
+# diseñado para esto -- maneje la concurrencia real con su propio
+# busy_timeout), y en cambio se reintenta automáticamente unas cuantas
+# veces, solo cuando el error es justo "disk I/O error" o "database is
+# locked" (fallas transitorias esperables en un disco de red bajo
+# carga), con una pausa cortita entre intento e intento. Esto deja que
+# 2 mensajes de clientes distintos se atiendan EN PARALELO la mayoría
+# de las veces (como debería ser), y solo se espera/reintenta cuando de
+# verdad chocan en el mismo instante exacto contra el mismo archivo.
+REINTENTOS_CONEXION = 4
+ESPERA_BASE_REINTENTO_SEGUNDOS = 0.15
 
 DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
 
@@ -169,78 +65,51 @@ class _ConexionAutoCierre(sqlite3.Connection):
         finally:
             self.close()
 
-    def close(self):
-        # 🔧 (23 ago 2026) Libera el candado global _db_lock aquí (no en
-        # __exit__) para que se libere tanto si se usó "with
-        # get_db_connection() as conn:" como si se usó el patrón manual
-        # "conn = get_connection() / try / finally: conn.close()" (hay
-        # ~25 lugares en clientes.py e historial.py con ese segundo
-        # patrón). getattr(..., False) evita reventar si close() se
-        # llama dos veces por error.
-        try:
-            super().close()
-        finally:
-            if not getattr(self, '_lock_liberado', False):
-                self._lock_liberado = True
-                try:
-                    _db_lock.release()
-                except RuntimeError:
-                    pass
-
 
 def get_db_connection():
-    # 🔧 (23 ago 2026, mismo día -- a los pocos minutos de subir el
-    # candado) Con 10s de margen, abrir el dashboard en varias pestañas
-    # al mismo tiempo (ej. "hoy" + "semana" + "mes") alcanzó a chocar:
-    # cada pestaña hace ~14 consultas en UNA sola conexión, y si el
-    # disco de Render está teniendo un momento lento (la razón de fondo
-    # de todo este problema), esas ~14 consultas pueden tardar más de
-    # 10s en total mientras las demás pestañas esperan su turno -- eso
-    # se vio en los logs como 5 errores seguidos de "tiempo de espera
-    # agotado" entre pestañas del dashboard, justo después del deploy.
-    # Subir a 25s le da mucho más margen para que el turno de cada quien
-    # simplemente tarde un poco más en vez de fallar. Sigue siendo mejor
-    # esperar unos segundos de más que mostrar un error.
-    if not _db_lock.acquire(timeout=25):
-        logger_db.error("get_db_connection: tiempo de espera agotado para el candado de disco (posible hilo colgado).")
-        raise sqlite3.OperationalError("tiempo de espera agotado para acceso exclusivo al disco")
-    conn = None
-    try:
-        # timeout=10: si la BD está ocupada, espera hasta 10s antes de
-        # fallar (en vez de tronar de inmediato con "database is locked").
-        conn = sqlite3.connect(DB_PATH, timeout=10, factory=_ConexionAutoCierre)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON;")
-        # 🔧 (23 ago 2026, a pedido de Israel -- "disk I/O error" en TODAS las
-        # escrituras/lecturas de golpe) Antes usábamos journal_mode=WAL para
-        # permitir lecturas mientras alguien más escribe. El problema: WAL
-        # necesita archivos auxiliares (-wal y -shm) con memoria compartida
-        # mapeada (mmap), y los discos persistentes de Render son
-        # almacenamiento en red -- ese tipo de almacenamiento no siempre
-        # soporta bien ese mecanismo, y cuando falla, CADA operación truena
-        # con "disk I/O error" (justo lo que vimos: es_cliente_nuevo,
-        # chat_guardar_mensaje, uso_registrar_openai, etc., todo a la vez).
-        # DELETE es el modo clásico de SQLite (un solo archivo de journal,
-        # sin memoria compartida) -- más lento en teoría con muchos
-        # escritores al mismo tiempo, pero aquí solo hay 1 proceso (1 worker
-        # de gunicorn) con varios hilos, y busy_timeout ya hace que se
-        # esperen entre sí en vez de fallar. Mucho más confiable sobre disco
-        # de red que WAL.
-        conn.execute("PRAGMA journal_mode = DELETE;")
-        conn.execute("PRAGMA busy_timeout = 5000;")
-    except Exception:
-        # Si algo truena antes de que la conexión quede lista, nadie
-        # más va a poder llamar conn.close() para liberar el candado --
-        # hay que liberarlo aquí mismo para no dejar el proceso trabado.
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        else:
-            _db_lock.release()
-        raise
-    return conn
+    # Reintenta solo ante fallas transitorias de disco/lock -- ver
+    # comentario grande arriba (REINTENTOS_CONEXION) sobre por qué ya no
+    # hay un candado global de por medio.
+    ultimo_error = None
+    for intento in range(REINTENTOS_CONEXION):
+        try:
+            # timeout=10: si la BD está ocupada, espera hasta 10s antes
+            # de fallar (en vez de tronar de inmediato con "database is
+            # locked") -- esto ya lo maneja SQLite solo, sin que
+            # nosotros tengamos que serializar nada a mano.
+            conn = sqlite3.connect(DB_PATH, timeout=10, factory=_ConexionAutoCierre)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON;")
+            # 🔧 (23 ago 2026, a pedido de Israel -- "disk I/O error" en TODAS las
+            # escrituras/lecturas de golpe) Antes usábamos journal_mode=WAL para
+            # permitir lecturas mientras alguien más escribe. El problema: WAL
+            # necesita archivos auxiliares (-wal y -shm) con memoria compartida
+            # mapeada (mmap), y los discos persistentes de Render son
+            # almacenamiento en red -- ese tipo de almacenamiento no siempre
+            # soporta bien ese mecanismo, y cuando falla, CADA operación truena
+            # con "disk I/O error" (justo lo que vimos: es_cliente_nuevo,
+            # chat_guardar_mensaje, uso_registrar_openai, etc., todo a la vez).
+            # DELETE es el modo clásico de SQLite (un solo archivo de journal,
+            # sin memoria compartida) -- más confiable sobre disco de red que WAL.
+            conn.execute("PRAGMA journal_mode = DELETE;")
+            conn.execute("PRAGMA busy_timeout = 5000;")
+            return conn
+        except sqlite3.OperationalError as e:
+            ultimo_error = e
+            texto = str(e).lower()
+            es_transitorio = "disk i/o error" in texto or "database is locked" in texto or "busy" in texto
+            if es_transitorio and intento < REINTENTOS_CONEXION - 1:
+                espera = ESPERA_BASE_REINTENTO_SEGUNDOS * (intento + 1) + random.uniform(0, 0.1)
+                logger_db.warning(
+                    f"get_db_connection: intento {intento + 1}/{REINTENTOS_CONEXION} "
+                    f"falló ({e}), reintentando en {espera:.2f}s..."
+                )
+                time.sleep(espera)
+                continue
+            raise
+    # No debería llegarse aquí (el for siempre hace return o raise),
+    # pero por si acaso:
+    raise ultimo_error or sqlite3.OperationalError("get_db_connection: fallo desconocido")
 
 # Alias usado por clientes.py, historial.py y pedido_manager
 get_connection = get_db_connection

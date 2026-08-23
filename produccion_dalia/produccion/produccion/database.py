@@ -134,8 +134,21 @@ def init_db():
                     "UPDATE pedidos_confirmados SET fecha_entrega_iso=? WHERE id=?",
                     (normalizar_fecha_iso(fecha), pid),
                 )
+        # 🔧 (23 ago 2026, pedido de Israel: "las notas que tengan información
+        # por confirmar o error que detecte la IA hay que marcarlo como error,
+        # que se puedan subir, pero marcadas para que llamen la atención y se
+        # corrija ya dentro de la app") Antes, una nota dudosa DETENÍA la
+        # subida hasta corregirla ahí mismo. Ahora se guarda de todos modos
+        # -- con lo que se haya podido leer -- y se marca con estas 2 columnas
+        # para poder mostrar el aviso y corregirla después, sin bloquear el
+        # resto de la tanda.
+        if "necesita_revision" not in columnas:
+            cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN necesita_revision INTEGER NOT NULL DEFAULT 0")
+        if "motivo_revision" not in columnas:
+            cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN motivo_revision TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_fecha_entrega_iso ON pedidos_confirmados(fecha_entrega_iso)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_estatus_entrega ON pedidos_confirmados(estatus_entrega)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_necesita_revision ON pedidos_confirmados(necesita_revision)")
 
         # 🔧 (23 ago 2026, pedido de Israel: control de materia prima)
         cur.execute("""
@@ -160,26 +173,32 @@ def guardar_pedido(data):
             INSERT INTO pedidos_confirmados
                 (fecha_captura, subido_por, cliente, telefono, municipio,
                  fecha_entrega, fecha_entrega_iso, tipo_entrega, direccion, productos_json,
-                 anticipo, total, notas, foto_archivo)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 anticipo, total, notas, foto_archivo, necesita_revision, motivo_revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data.get("fecha_captura"), data.get("subido_por"), data.get("cliente"),
             data.get("telefono"), data.get("municipio"), fecha_entrega,
             normalizar_fecha_iso(fecha_entrega), data.get("tipo_entrega"), data.get("direccion"), productos_json,
             float(data.get("anticipo") or 0), float(data.get("total") or 0),
             data.get("notas"), data.get("foto_archivo"),
+            1 if data.get("necesita_revision") else 0, data.get("motivo_revision"),
         ))
         return cur.lastrowid
 
 
 def actualizar_pedido(pedido_id, data):
+    """🔧 (23 ago 2026) Editar un pedido -- desde la app, ya con calma -- es
+    justo la forma en que se corrige una nota marcada con error. Por eso,
+    cada vez que se guarda una edición, se apaga la bandera de
+    necesita_revision: se asume que quien editó ya dejó los datos bien."""
     productos_json = json.dumps(data.get("productos") or [], ensure_ascii=False)
     fecha_entrega = data.get("fecha_entrega")
     with _cursor() as cur:
         cur.execute("""
             UPDATE pedidos_confirmados SET
                 cliente=?, telefono=?, municipio=?, fecha_entrega=?, fecha_entrega_iso=?, tipo_entrega=?,
-                direccion=?, productos_json=?, anticipo=?, total=?, notas=?
+                direccion=?, productos_json=?, anticipo=?, total=?, notas=?,
+                necesita_revision=0, motivo_revision=NULL
             WHERE id=?
         """, (
             data.get("cliente"), data.get("telefono"), data.get("municipio"),
@@ -237,6 +256,24 @@ def listar_pedidos(fecha_entrega_desde=None, fecha_entrega_hasta=None, solo_pend
     query += " ORDER BY (fecha_entrega_iso IS NULL) ASC, fecha_entrega_iso ASC, id ASC"
     with _cursor() as cur:
         cur.execute(query, params)
+        return [_fila_a_dict(r) for r in cur.fetchall()]
+
+
+def buscar_pedidos_por_cliente(texto):
+    """🔧 (23 ago 2026, pedido de Israel: "habilita un buscador de cliente
+    por nombre para las notas") Busca en TODOS los pedidos (sin límite de
+    fecha), coincidencia parcial y sin importar mayúsculas/acentos básicos,
+    más reciente primero -- para encontrar una nota vieja de un cliente sin
+    tener que ir período por período."""
+    texto = (texto or "").strip()
+    if not texto:
+        return []
+    with _cursor() as cur:
+        cur.execute("""
+            SELECT * FROM pedidos_confirmados
+            WHERE lower(COALESCE(cliente, '')) LIKE ?
+            ORDER BY fecha_captura DESC
+        """, (f"%{texto.lower()}%",))
         return [_fila_a_dict(r) for r in cur.fetchall()]
 
 

@@ -226,8 +226,22 @@ def raiz():
 
 @app.route("/dashboard")
 def dashboard():
-    vista = request.args.get("vista", "hoy")
     hoy = _hoy()
+
+    # 🔧 (23 ago 2026, pedido de Israel: "habilita un buscador de cliente
+    # por nombre para las notas") Si viene una búsqueda, tiene prioridad
+    # sobre las pestañas de período -- busca en TODOS los pedidos, sin
+    # importar la fecha de entrega.
+    busqueda = (request.args.get("q") or "").strip()
+    if busqueda:
+        pedidos = database.buscar_pedidos_por_cliente(busqueda)
+        return render_template(
+            "dashboard.html", pedidos=pedidos, vista="busqueda",
+            titulo=f'Resultados para "{busqueda}"', hoy=hoy.isoformat(),
+            sin_fecha_reconocida=0, busqueda=busqueda,
+        )
+
+    vista = request.args.get("vista", "hoy")
 
     if vista == "calendario":
         return _vista_calendario(hoy)
@@ -682,7 +696,7 @@ def subir():
 
     lote_id = uuid.uuid4().hex[:10]
     LOTES[lote_id] = temp_ids
-    LOTES_RESUMEN[lote_id] = {"auto": 0, "manual": 0}
+    LOTES_RESUMEN[lote_id] = {"auto": 0, "error": 0}
     return redirect(url_for("confirmar", temp_id=temp_ids[0], lote=lote_id))
 
 
@@ -783,9 +797,15 @@ def _texto_o_none(v):
     return v or None
 
 
-def _guardar_pedido_desde_datos(datos, foto_bytes, subido_por=None):
-    """Construye el dict final y lo guarda -- usado tanto por el guardado
-    automático (nota clara, sin revisión) como por el formulario manual."""
+def _guardar_pedido_desde_datos(datos, foto_bytes, subido_por=None, necesita_revision=False, motivo_revision=None):
+    """Construye el dict final y lo guarda.
+
+    🔧 (23 ago 2026, pedido de Israel: "que se puedan subir, pero marcadas
+    como error para que llamen la atención y se corrija ya dentro de la
+    app") Ya no hay un formulario manual aparte para las notas que
+    necesitan revisión -- TODO pasa por aquí, y si algo no quedó claro se
+    guarda de todos modos con necesita_revision=True/motivo_revision para
+    poder corregirlo después desde la pantalla normal de Editar."""
     productos = []
     for p in (datos.get("productos") or []):
         productos.append({
@@ -807,20 +827,14 @@ def _guardar_pedido_desde_datos(datos, foto_bytes, subido_por=None):
         "anticipo": datos.get("anticipo") or 0,
         "total": datos.get("total") or 0,
         "notas": _texto_o_none(datos.get("notas")),
+        "necesita_revision": necesita_revision,
+        "motivo_revision": _texto_o_none(motivo_revision),
     }
     nombre_archivo = f"{uuid.uuid4().hex}.jpg"
     with open(os.path.join(FOTOS_DIR, nombre_archivo), "wb") as f:
         f.write(foto_bytes)
     data["foto_archivo"] = nombre_archivo
     return database.guardar_pedido(data)
-
-
-def _info_lote(temp_id, lote_id):
-    """Devuelve (posicion_1_based, total) si temp_id pertenece a ese lote, si no (None, None)."""
-    lista = LOTES.get(lote_id)
-    if not lista or temp_id not in lista:
-        return None, None
-    return lista.index(temp_id) + 1, len(lista)
 
 
 def _siguiente_del_lote(temp_id, lote_id):
@@ -835,116 +849,66 @@ def _siguiente_del_lote(temp_id, lote_id):
     return None
 
 
-@app.route("/confirmar/<temp_id>", methods=["GET", "POST"])
+@app.route("/confirmar/<temp_id>")
 def confirmar(temp_id):
+    """🔧 (23 ago 2026, pedido de Israel: "las notas que tengan información
+    por confirmar o error que detecte la IA hay que marcarlo como error,
+    que se puedan subir, pero marcadas para que llamen la atención y se
+    corrija ya dentro de la app") Antes, si una nota no quedaba clara, esta
+    pantalla se detenía a pedir que alguien la llenara a mano antes de
+    guardarla -- eso hacía que subir una tanda se sintiera como "revisar
+    nota por nota". Ahora SIEMPRE se guarda de una vez, sea cual sea el
+    resultado: si algo no quedó claro se guarda de todos modos, marcada con
+    necesita_revision para corregirla después con calma desde Editar (igual
+    que cualquier otro pedido) -- ver database.actualizar_pedido()."""
     pendiente = EXTRACCIONES_PENDIENTES.get(temp_id)
-    lote_id = request.values.get("lote") or None
+    lote_id = request.args.get("lote") or None
     if not pendiente:
         flash("Esta nota ya fue confirmada o expiró. Súbela de nuevo si hace falta.")
         return redirect(url_for("subir"))
 
-    if request.method == "GET":
-        # 🔧 Lectura diferida: si viene de un lote y todavía no se ha leído
-        # con IA, se lee justo ahora -- una nota a la vez, nunca las 42 de
-        # la tanda juntas en la misma petición (ver comentario en /subir).
-        error_lectura = False
-        if not pendiente.get("procesado"):
-            try:
-                pendiente["datos"] = _extraer_datos_nota(pendiente["foto_bytes"], pendiente["foto_mime"])
-            except Exception as e:
-                print(f"⚠️ Error leyendo la nota con IA: {repr(e)}")
-                pendiente["datos"] = {}
-                error_lectura = True
-            pendiente["procesado"] = True
+    # 🔧 Lectura diferida: si viene de un lote y todavía no se ha leído
+    # con IA, se lee justo ahora -- una nota a la vez, nunca las 42 de
+    # la tanda juntas en la misma petición (ver comentario en /subir).
+    error_lectura = False
+    if not pendiente.get("procesado"):
+        try:
+            pendiente["datos"] = _extraer_datos_nota(pendiente["foto_bytes"], pendiente["foto_mime"])
+        except Exception as e:
+            print(f"⚠️ Error leyendo la nota con IA: {repr(e)}")
+            pendiente["datos"] = {}
+            error_lectura = True
+        pendiente["procesado"] = True
 
-        # 🔧 (22 ago 2026, pedido de Israel) Si la nota se leyó clara y
-        # completa (sin necesitar revisión), se guarda derecho sin
-        # detenerse a pedir confirmación -- así ya no hay que revisar nota
-        # por nota cuando la IA le atinó bien. Si algo no quedó claro, sí
-        # se detiene aquí para que un humano la revise y corrija.
-        necesita_revision, motivo = (True, "No se pudo leer la foto automáticamente.") if error_lectura \
-            else _revisar_calidad(pendiente["datos"])
+    necesita_revision, motivo = (True, "No se pudo leer la foto automáticamente.") if error_lectura \
+        else _revisar_calidad(pendiente["datos"])
 
-        if not necesita_revision:
-            pedido_id = _guardar_pedido_desde_datos(pendiente["datos"], pendiente["foto_bytes"], pendiente.get("subido_por"))
-            EXTRACCIONES_PENDIENTES.pop(temp_id, None)
-            cliente_nombre = pendiente["datos"].get("cliente") or "cliente sin nombre"
-            flash(f"✅ Guardado automático (nota clara): {cliente_nombre}")
-
-            if lote_id:
-                resumen = LOTES_RESUMEN.setdefault(lote_id, {"auto": 0, "manual": 0})
-                resumen["auto"] += 1
-                siguiente = _siguiente_del_lote(temp_id, lote_id)
-                if siguiente:
-                    return redirect(url_for("confirmar", temp_id=siguiente, lote=lote_id))
-                LOTES.pop(lote_id, None)
-                LOTES_RESUMEN.pop(lote_id, None)
-                flash(f"¡Listo! Tanda terminada -- {resumen['auto']} guardadas automáticas, {resumen['manual']} revisadas a mano. 🎉")
-                return redirect(url_for("dashboard"))
-
-            return redirect(url_for("pedido_detalle", pedido_id=pedido_id))
-
-        posicion, total = _info_lote(temp_id, lote_id)
-        return render_template(
-            "confirmar.html", temp_id=temp_id, datos=pendiente["datos"],
-            tipos_entrega=TIPOS_ENTREGA_VALIDOS, lote_id=lote_id, posicion=posicion, total=total,
-            motivo_revision=motivo, subido_por_lote=pendiente.get("subido_por"),
-        )
-
-    productos = _leer_productos_del_form(request.form)
-    datos_form = {
-        "cliente": (request.form.get("cliente") or "").strip() or None,
-        "telefono": (request.form.get("telefono") or "").strip() or None,
-        "municipio": (request.form.get("municipio") or "").strip() or None,
-        "fecha_entrega": (request.form.get("fecha_entrega") or "").strip() or None,
-        "tipo_entrega": (request.form.get("tipo_entrega") or "").strip() or None,
-        "direccion": (request.form.get("direccion") or "").strip() or None,
-        "productos": productos,
-        "anticipo": request.form.get("anticipo") or 0,
-        "total": request.form.get("total") or 0,
-        "notas": (request.form.get("notas") or "").strip() or None,
-    }
-    # 🔧 (23 ago 2026) Igual que en /subir: siempre se toma de la sesión,
-    # nunca de lo que venga en el formulario -- así no hay forma de que
-    # una nota quede atribuida a la persona equivocada.
-    subido_por = NOMBRES_DISPLAY.get(session.get("usuario"), session.get("usuario"))
-    pedido_id = _guardar_pedido_desde_datos(datos_form, pendiente["foto_bytes"], subido_por)
+    pedido_id = _guardar_pedido_desde_datos(
+        pendiente["datos"], pendiente["foto_bytes"], pendiente.get("subido_por"),
+        necesita_revision=necesita_revision, motivo_revision=motivo,
+    )
     EXTRACCIONES_PENDIENTES.pop(temp_id, None)
-    flash("Pedido guardado correctamente.")
+    cliente_nombre = pendiente["datos"].get("cliente") or "cliente sin nombre"
+    if necesita_revision:
+        flash(f"⚠️ Guardado CON ERROR (revisar y corregir): {cliente_nombre} -- {motivo}")
+    else:
+        flash(f"✅ Guardado automático (nota clara): {cliente_nombre}")
 
     if lote_id:
-        resumen = LOTES_RESUMEN.setdefault(lote_id, {"auto": 0, "manual": 0})
-        resumen["manual"] += 1
+        resumen = LOTES_RESUMEN.setdefault(lote_id, {"auto": 0, "error": 0})
+        resumen["error" if necesita_revision else "auto"] += 1
         siguiente = _siguiente_del_lote(temp_id, lote_id)
         if siguiente:
             return redirect(url_for("confirmar", temp_id=siguiente, lote=lote_id))
         LOTES.pop(lote_id, None)
         LOTES_RESUMEN.pop(lote_id, None)
-        flash(f"¡Listo! Tanda terminada -- {resumen['auto']} guardadas automáticas, {resumen['manual']} revisadas a mano. 🎉")
+        if resumen["error"]:
+            flash(f"¡Listo! Tanda terminada -- {resumen['auto']} guardadas bien, {resumen['error']} guardadas CON ERROR (corrígelas desde Editar). 🎉")
+        else:
+            flash(f"¡Listo! Tanda terminada -- {resumen['auto']} guardadas, todas claras. 🎉")
         return redirect(url_for("dashboard"))
 
     return redirect(url_for("pedido_detalle", pedido_id=pedido_id))
-
-
-@app.route("/confirmar/<temp_id>/saltar", methods=["POST"])
-def confirmar_saltar(temp_id):
-    """Descarta esta nota (no era una nota válida, foto borrosa, etc.) y
-    avanza a la siguiente del lote, si venía de una subida por tanda."""
-    lote_id = request.form.get("lote") or None
-    EXTRACCIONES_PENDIENTES.pop(temp_id, None)
-
-    if lote_id:
-        siguiente = _siguiente_del_lote(temp_id, lote_id)
-        if siguiente:
-            flash("Nota saltada.")
-            return redirect(url_for("confirmar", temp_id=siguiente, lote=lote_id))
-        LOTES.pop(lote_id, None)
-        LOTES_RESUMEN.pop(lote_id, None)
-        flash("Terminaste de revisar la tanda (algunas se saltaron).")
-        return redirect(url_for("dashboard"))
-
-    flash("Nota descartada.")
-    return redirect(url_for("subir"))
 
 
 def _leer_productos_del_form(form):

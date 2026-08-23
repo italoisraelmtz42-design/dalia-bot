@@ -6,6 +6,15 @@
 <p class="muted" style="margin-top:0;">{{ pedidos|length }} pedido(s)</p>
 {% endif %}
 
+<form method="get" action="{{ url_for('dashboard') }}" style="display:flex;gap:8px;margin:10px 0 4px 0;">
+  <input type="text" name="q" value="{{ busqueda or '' }}" placeholder="🔍 Buscar por nombre de cliente..."
+         style="flex:1;padding:9px 12px;border-radius:10px;border:1px solid var(--borde);font-size:0.9rem;">
+  <button type="submit">Buscar</button>
+  {% if vista == 'busqueda' %}
+  <a class="btn" href="{{ url_for('dashboard') }}">✕</a>
+  {% endif %}
+</form>
+
 <nav class="tabs" style="padding:0 0 14px 0;margin:0 0 6px 0;">
   <a href="{{ url_for('dashboard', vista='hoy') }}" class="{{ 'activo' if vista=='hoy' else '' }}">Hoy</a>
   <a href="{{ url_for('dashboard', vista='manana') }}" class="{{ 'activo' if vista=='manana' else '' }}">Mañana</a>
@@ -71,7 +80,9 @@
   </div>
 {% endif %}
 
-{% if not pedidos and not (vista == 'calendario' and not cal_fecha_sel) %}
+{% if not pedidos and vista == 'busqueda' %}
+  <div class="card muted">No se encontró ningún cliente que contenga "{{ busqueda }}".</div>
+{% elif not pedidos and not (vista == 'calendario' and not cal_fecha_sel) %}
   <div class="card muted">No hay pedidos en este período.</div>
 {% endif %}
 
@@ -81,6 +92,11 @@
     <h3>{{ p.cliente or 'Cliente sin nombre' }}</h3>
     <span class="muted" style="white-space:nowrap;">{{ p.fecha_entrega or 'sin fecha' }}</span>
   </div>
+  {% if p.necesita_revision %}
+  <div style="margin-bottom:6px;">
+    <span class="badge error" title="{{ p.motivo_revision or '' }}">⚠️ Revisar: {{ p.motivo_revision or 'la IA no quedó segura de algún dato' }}</span>
+  </div>
+  {% endif %}
   <div class="muted">
     {% for prod in p.productos %}
       {{ prod.cantidad }} x {{ prod.producto }}{% if prod.colores %} ({{ prod.colores }}){% endif %}{% if not loop.last %}, {% endif %}

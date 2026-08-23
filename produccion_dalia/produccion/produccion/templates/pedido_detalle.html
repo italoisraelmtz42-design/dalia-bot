@@ -5,6 +5,14 @@
 <h2 style="margin-bottom:2px;">{{ p.cliente or 'Cliente sin nombre' }}</h2>
 <p class="muted" style="margin-top:0;">Capturado el {{ p.fecha_captura[:16].replace('T', ' ') if p.fecha_captura else '' }}{% if p.subido_por %} por {{ p.subido_por }}{% endif %}</p>
 
+{% if p.necesita_revision %}
+<div class="flash" style="background:var(--rojo-suave);border-color:#f0c6c6;color:var(--rojo);">
+  ⚠️ <strong>Esta nota se guardó con error -- hay que corregirla.</strong><br>
+  {{ p.motivo_revision or 'La IA no quedó segura de algún dato.' }}<br>
+  Revisa los datos de abajo y dale a "✏️ Editar" para corregir lo que haga falta -- al guardar la edición, esta alerta se apaga sola.
+</div>
+{% endif %}
+
 <div class="card">
   <p><strong>Teléfono:</strong> {{ p.telefono or '—' }}</p>
   <p><strong>Municipio:</strong> {{ p.municipio or '—' }}</p>

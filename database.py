@@ -1,8 +1,31 @@
 import os
 import sqlite3
 import logging
+import threading
 
 logger_db = logging.getLogger('database')
+
+# 🔧 (23 ago 2026, a pedido de Israel -- "disk I/O error" recurrente en
+# ráfagas de tráfico real, AUN con journal_mode=DELETE) El Procfile usa
+# --workers 1 --threads 8: un solo proceso de gunicorn, pero hasta 8
+# hilos que pueden abrir su propia conexión SQLite y golpear el disco
+# AL MISMO TIEMPO (ej. varios mensajes de WhatsApp/Messenger llegando
+# juntos). journal_mode=DELETE + busy_timeout ya evita que se choquen
+# por locks normales de SQLite, pero el disco persistente de Render es
+# almacenamiento en red -- bajo varias operaciones de E/S simultáneas
+# puede fallar con "disk I/O error" real (eso NO es un lock, es una
+# falla de E/S), justo lo que se vio en los logs: varias funciones
+# distintas (es_cliente_nuevo, chat_guardar_mensaje, uso_registrar_openai,
+# guardar_borrador_pedido...) tronando juntas en ráfagas cortas.
+# Este candado global fuerza a que TODO el proceso use el disco desde
+# una sola conexión a la vez -- ya no hay forma de que 2+ hilos golpeen
+# el archivo .db al mismo tiempo. Es RLock (no Lock normal) para que un
+# mismo hilo pueda abrir una conexión "anidada" (una función que llama a
+# otra que también abre conexión) sin bloquearse a sí mismo. El costo es
+# una espera de milisegundos entre mensajes que llegan exactamente al
+# mismo tiempo -- mucho más barato que un "disk I/O error" que tumba la
+# respuesta al cliente.
+_db_lock = threading.RLock()
 
 DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
 
@@ -32,18 +55,67 @@ class _ConexionAutoCierre(sqlite3.Connection):
         finally:
             self.close()
 
+    def close(self):
+        # 🔧 (23 ago 2026) Libera el candado global _db_lock aquí (no en
+        # __exit__) para que se libere tanto si se usó "with
+        # get_db_connection() as conn:" como si se usó el patrón manual
+        # "conn = get_connection() / try / finally: conn.close()" (hay
+        # ~25 lugares en clientes.py e historial.py con ese segundo
+        # patrón). getattr(..., False) evita reventar si close() se
+        # llama dos veces por error.
+        try:
+            super().close()
+        finally:
+            if not getattr(self, '_lock_liberado', False):
+                self._lock_liberado = True
+                try:
+                    _db_lock.release()
+                except RuntimeError:
+                    pass
+
 
 def get_db_connection():
-    # timeout=10: si la BD está ocupada, espera hasta 10s antes de fallar
-    # (en vez de tronar de inmediato con "database is locked").
-    conn = sqlite3.connect(DB_PATH, timeout=10, factory=_ConexionAutoCierre)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    # WAL permite lecturas mientras alguien más escribe. Con varios mensajes
-    # de WhatsApp llegando casi al mismo tiempo (cada uno en su propio hilo),
-    # esto evita errores intermitentes de "database is locked".
-    conn.execute("PRAGMA journal_mode = WAL;")
-    conn.execute("PRAGMA busy_timeout = 5000;")
+    # Espera hasta 10s a que el hilo anterior termine de usar el disco
+    # antes de rendirse (ver comentario de _db_lock arriba).
+    if not _db_lock.acquire(timeout=10):
+        logger_db.error("get_db_connection: tiempo de espera agotado para el candado de disco (posible hilo colgado).")
+        raise sqlite3.OperationalError("tiempo de espera agotado para acceso exclusivo al disco")
+    conn = None
+    try:
+        # timeout=10: si la BD está ocupada, espera hasta 10s antes de
+        # fallar (en vez de tronar de inmediato con "database is locked").
+        conn = sqlite3.connect(DB_PATH, timeout=10, factory=_ConexionAutoCierre)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON;")
+        # 🔧 (23 ago 2026, a pedido de Israel -- "disk I/O error" en TODAS las
+        # escrituras/lecturas de golpe) Antes usábamos journal_mode=WAL para
+        # permitir lecturas mientras alguien más escribe. El problema: WAL
+        # necesita archivos auxiliares (-wal y -shm) con memoria compartida
+        # mapeada (mmap), y los discos persistentes de Render son
+        # almacenamiento en red -- ese tipo de almacenamiento no siempre
+        # soporta bien ese mecanismo, y cuando falla, CADA operación truena
+        # con "disk I/O error" (justo lo que vimos: es_cliente_nuevo,
+        # chat_guardar_mensaje, uso_registrar_openai, etc., todo a la vez).
+        # DELETE es el modo clásico de SQLite (un solo archivo de journal,
+        # sin memoria compartida) -- más lento en teoría con muchos
+        # escritores al mismo tiempo, pero aquí solo hay 1 proceso (1 worker
+        # de gunicorn) con varios hilos, y busy_timeout ya hace que se
+        # esperen entre sí en vez de fallar. Mucho más confiable sobre disco
+        # de red que WAL.
+        conn.execute("PRAGMA journal_mode = DELETE;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
+    except Exception:
+        # Si algo truena antes de que la conexión quede lista, nadie
+        # más va a poder llamar conn.close() para liberar el candado --
+        # hay que liberarlo aquí mismo para no dejar el proceso trabado.
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        else:
+            _db_lock.release()
+        raise
     return conn
 
 # Alias usado por clientes.py, historial.py y pedido_manager

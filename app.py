@@ -5554,6 +5554,26 @@ def _revisar_seguimientos_canal(canal, horas_min, horas_max):
         except Exception as e:
             print(f"⚠️ [Seguimiento {canal}] Error procesando a {telefono}: {repr(e)}")
 
+        # 🔧 (23 ago 2026, a pedido de Israel -- mensajes de clientes reales
+        # sin respuesta) Cada candidato de este for hace 2-3 idas y vueltas
+        # rápidas a la base de datos (obtener_modo_atencion,
+        # cargar_borrador_pedido, reclamar_seguimiento_23h), una tras otra
+        # casi sin pausa. Con muchos candidatos en la lista, este hilo
+        # puede terminar acaparando el candado global de disco (ver
+        # database.py) casi todo el tiempo -- deja pasar tan poco aire
+        # entre una conexión y la siguiente que un mensaje real de
+        # WhatsApp/Messenger que llega justo en ese momento puede quedarse
+        # esperando su turno más de los 25s que espera antes de rendirse
+        # (esto fue justo lo que le pasó a un mensaje de Israel a las
+        # 3:08pm: se quedó pidiendo el candado una y otra vez sin nunca
+        # alcanzar a tomarlo). Esta pausa le da un respiro real a
+        # cualquier otra petición (un cliente escribiéndole al bot, o el
+        # dashboard) para que alcance a colarse entre candidato y
+        # candidato -- 0.3s por candidato es insignificante para este
+        # hilo (que de por sí solo corre cada 15 min), pero le devuelve
+        # prioridad a lo que sí es urgente: contestarle a un cliente real.
+        time.sleep(0.3)
+
 
 def _revisar_seguimientos_una_vez():
     if pedido_manager.bot_pausado_globalmente():

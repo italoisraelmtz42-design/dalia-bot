@@ -2,6 +2,7 @@ import os
 import sqlite3
 import logging
 import threading
+import time
 
 logger_db = logging.getLogger('database')
 
@@ -25,7 +26,120 @@ logger_db = logging.getLogger('database')
 # una espera de milisegundos entre mensajes que llegan exactamente al
 # mismo tiempo -- mucho más barato que un "disk I/O error" que tumba la
 # respuesta al cliente.
-_db_lock = threading.RLock()
+#
+# 🔧 (23 ago 2026, mismo día -- a los ~10 min de subir el candado) UN
+# candado normal (RLock) tiene un defecto grave que no se vio hasta que
+# pasó de verdad: si una sola operación se queda COLGADA de verdad (no
+# truena, simplemente el disco de red nunca contesta esa lectura/
+# escritura -- muy distinto a un "disk I/O error", que sí truena rápido),
+# el candado se queda tomado PARA SIEMPRE, y como es global, bloquea a
+# TODO el proceso -- ya nadie puede ni ver el dashboard ni el bot puede
+# contestarle a un cliente, hasta reiniciar el servicio a mano. Eso fue
+# justo lo que pasó: algo (muy probablemente el hilo de seguimientos de
+# 23h, que corre justo al arrancar) se coló en una consulta y dejó el
+# candado tomado varios minutos, con 0% de avance, aunque el disco en sí
+# resultó estar bien (se probó con sqlite3 desde la Shell mientras
+# estaba colgado y respondió al toque -- fue el candado de Python, no
+# el disco).
+#
+# _CandadoConVigilante reemplaza el RLock con uno reentrante (mismo
+# hilo puede volver a entrar sin bloquearse, igual que antes) pero que
+# ADEMÁS un hilo vigilante aparte puede liberar a la fuerza si ve que
+# lleva demasiado tiempo tomado -- un RLock normal de Python NO permite
+# esto (solo el hilo dueño puede liberarlo). Con esto, lo peor que puede
+# pasar ya no es "todo el proceso colgado para siempre", sino "todo el
+# proceso tarda hasta VIGILANTE_LIMITE_SEGUNDOS de más esa vez" y
+# después se recupera solo, sin que nadie tenga que reiniciar a mano.
+class _CandadoConVigilante:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._guardia = threading.Lock()  # protege los 3 campos de abajo
+        self._dueno = None
+        self._contador = 0
+        self._tomado_desde = None
+
+    def acquire(self, timeout=-1):
+        yo = threading.get_ident()
+        with self._guardia:
+            if self._dueno == yo:
+                self._contador += 1
+                return True
+        obtenido = self._lock.acquire(timeout=timeout)
+        if obtenido:
+            with self._guardia:
+                self._dueno = yo
+                self._contador = 1
+                self._tomado_desde = time.monotonic()
+        return obtenido
+
+    def release(self):
+        yo = threading.get_ident()
+        with self._guardia:
+            if self._dueno != yo:
+                # Ya lo liberó el vigilante (o nunca fue nuestro) --
+                # no reventar, simplemente no hay nada que hacer.
+                return
+            self._contador -= 1
+            if self._contador > 0:
+                return
+            self._dueno = None
+            self._tomado_desde = None
+        try:
+            self._lock.release()
+        except RuntimeError:
+            pass
+
+    def liberar_si_lleva_colgado(self, limite_segundos):
+        """Llamado solo por el hilo vigilante (ver más abajo). Si el
+        candado lleva tomado más de limite_segundos, lo libera a la
+        fuerza y devuelve True (para que el vigilante lo reporte)."""
+        with self._guardia:
+            if self._dueno is None or self._tomado_desde is None:
+                return False
+            segundos_tomado = time.monotonic() - self._tomado_desde
+            if segundos_tomado <= limite_segundos:
+                return False
+            dueno_anterior = self._dueno
+            self._dueno = None
+            self._contador = 0
+            self._tomado_desde = None
+        try:
+            self._lock.release()
+        except RuntimeError:
+            pass
+        logger_db.critical(
+            f"[VIGILANTE] El candado de disco llevaba {segundos_tomado:.0f}s "
+            f"tomado (hilo id={dueno_anterior}) sin soltarse -- se liberó a "
+            f"la fuerza para no dejar el proceso colgado. Es probable que "
+            f"ese hilo siga atorado en una operación de disco de verdad "
+            f"lenta; si vuelve a pasar seguido, revisar con soporte de "
+            f"Render si el Disk está teniendo problemas."
+        )
+        return True
+
+
+_db_lock = _CandadoConVigilante()
+
+# Cada cuánto revisa el vigilante si el candado lleva demasiado tomado,
+# y cuánto es "demasiado". 45s da bastante margen para que una consulta
+# lenta de verdad (ej. el dashboard con el disco teniendo un mal
+# momento) termine sola sin que el vigilante la interrumpa de más --
+# pero ya no dependemos de que alguien note el problema y reinicie a
+# mano como pasó hoy.
+VIGILANTE_INTERVALO_SEGUNDOS = 5
+VIGILANTE_LIMITE_SEGUNDOS = 45
+
+
+def _hilo_vigilante_candado():
+    while True:
+        time.sleep(VIGILANTE_INTERVALO_SEGUNDOS)
+        try:
+            _db_lock.liberar_si_lleva_colgado(VIGILANTE_LIMITE_SEGUNDOS)
+        except Exception as e:
+            logger_db.error(f"[VIGILANTE] Error revisando el candado: {e}")
+
+
+threading.Thread(target=_hilo_vigilante_candado, daemon=True).start()
 
 DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
 

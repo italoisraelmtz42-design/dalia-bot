@@ -3818,6 +3818,20 @@ CONTACTO_PRIVACIDAD = os.getenv("CONTACTO_PRIVACIDAD_EMAIL", "italoisraelmtz42@o
 FECHA_ACTUALIZACION_PRIVACIDAD = "17 de agosto de 2026"
 
 
+# 🔧 (23 ago 2026, a pedido de Israel -- que Render detecte solo cuando el
+# bot se queda colgado) Esta ruta NO toca la base de datos a propósito:
+# solo confirma que el proceso de Flask sigue vivo y puede responder algo.
+# Configúrala en Render como "Health Check Path" (Settings del servicio) --
+# así Render la va a llamar cada cierto tiempo, y si alguna vez el proceso
+# se vuelve a trabar (como pasó dos veces la noche del 22-23 de agosto),
+# esta ruta tampoco va a responder, Render lo va a notar solo, y va a
+# reiniciar el servicio automáticamente -- sin que tengas que darte cuenta
+# tú primero y darle "Manual Deploy" a mano.
+@app.route("/health")
+def health():
+    return {"status": "ok"}, 200
+
+
 @app.route("/privacidad")
 def politica_privacidad():
     html = f"""<!DOCTYPE html>

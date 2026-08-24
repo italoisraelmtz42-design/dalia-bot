@@ -17,12 +17,18 @@
   <a class="btn" href="{{ url_for('comisiones', vendedor=vendedor, **nav_siguiente) }}">{{ 'Semana siguiente' if periodo == 'semana' else 'Mes siguiente' }} →</a>
 </div>
 
-{% if otros_vendedores %}
-<p class="muted">Ver comisión de:
-  {% for v in ([vendedor] + otros_vendedores) %}
-    <a class="link-suave" href="{{ url_for('comisiones', periodo=periodo, vendedor=v) }}" style="{% if v == vendedor %}font-weight:700;{% endif %}">{{ v.title() }}</a>{% if not loop.last %} · {% endif %}
+{% if resumen_vendedores %}
+<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+  {% for r in resumen_vendedores %}
+  <a href="{{ url_for('comisiones', periodo=periodo, vendedor=r.vendedor) }}"
+     class="card" style="flex:1;min-width:130px;text-decoration:none;color:inherit;
+            {% if r.activo %}border-color:var(--rosa);background:var(--rosa-suave);{% endif %}">
+    <div class="muted" style="font-weight:600;">{{ r.nombre }}</div>
+    <div style="font-size:1.2rem;font-weight:700;margin-top:2px;">${{ r.comision|moneda }}</div>
+    <div class="muted" style="font-size:0.78rem;">{{ r.piezas|int if r.piezas == r.piezas|int else r.piezas }} pieza(s)</div>
+  </a>
   {% endfor %}
-</p>
+</div>
 {% endif %}
 
 <div class="card totales">
@@ -40,8 +46,14 @@
   </div>
 </div>
 
+{% if sin_folio_reconocido %}
+<div class="flash" style="background:var(--rojo-suave);border-color:#f0c6c6;color:var(--rojo);">
+  ⚠️ Hay {{ sin_folio_reconocido }} nota{{ 's' if sin_folio_reconocido != 1 else '' }} en este período sin folio reconocido (vacío o con un prefijo que no es de Dalia/Diana/Karo) -- no se le sumaron a nadie. Revísalas desde <a href="{{ url_for('dashboard', vista='todos') }}">"Todos"</a> en Entregas (deberían aparecer marcadas con ⚠️) y corrígeles el folio.
+</div>
+{% endif %}
+
 {% if not pedidos %}
-  <div class="card muted">No hay pedidos subidos por {{ nombre_vendedor }} en este período.</div>
+  <div class="card muted">No hay pedidos de {{ nombre_vendedor }} en este período.</div>
 {% endif %}
 
 {% for p in pedidos %}
@@ -49,6 +61,9 @@
   <div style="display:flex;justify-content:space-between;">
     <h3>{{ p.cliente or 'Cliente sin nombre' }}</h3>
     <span class="muted">{{ p.fecha_captura[:10] if p.fecha_captura else '' }}</span>
+  </div>
+  <div class="muted">
+    Folio: {{ p.folio or '—' }}
   </div>
   <div class="muted">
     {% for prod in p.productos %}

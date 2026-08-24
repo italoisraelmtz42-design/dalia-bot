@@ -86,10 +86,30 @@
   <div class="card muted">No hay pedidos en este período.</div>
 {% endif %}
 
+{% if pedidos %}
+<form id="form-eliminar-varios" method="post" action="{{ url_for('pedidos_eliminar_varios') }}"
+      onsubmit="return confirmarEliminarVarios();">
+  <input type="hidden" name="volver" value="{{ request.full_path }}">
+</form>
+<div class="card" style="padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+  <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;margin:0;font-weight:400;color:var(--texto);">
+    <input type="checkbox" id="chk-todos" onchange="toggleTodos(this)" style="width:auto;">
+    Seleccionar todos
+  </label>
+  <button type="submit" form="form-eliminar-varios" class="rojo btn-eliminar-varios" disabled>
+    🗑️ Eliminar seleccionados (<span class="contador-sel">0</span>)
+  </button>
+</div>
+{% endif %}
+
 {% for p in pedidos %}
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;">
-    <h3>{{ p.cliente or 'Cliente sin nombre' }}</h3>
+    <div style="display:flex;align-items:start;gap:8px;">
+      <input type="checkbox" name="pedido_id" value="{{ p.id }}" form="form-eliminar-varios"
+             class="chk-pedido" style="width:auto;margin-top:5px;">
+      <h3 style="margin:0;">{{ p.cliente or 'Cliente sin nombre' }}</h3>
+    </div>
     <span class="muted" style="white-space:nowrap;">{{ p.fecha_entrega or 'sin fecha' }}</span>
   </div>
   {% if p.necesita_revision %}
@@ -142,4 +162,58 @@
   </div>
 </div>
 {% endfor %}
+
+{% if pedidos|length > 4 %}
+<div class="card" style="padding:10px 12px;display:flex;align-items:center;justify-content:flex-end;gap:10px;">
+  <button type="submit" form="form-eliminar-varios" class="rojo btn-eliminar-varios" disabled>
+    🗑️ Eliminar seleccionados (<span class="contador-sel">0</span>)
+  </button>
+</div>
+{% endif %}
+
+{% if pedidos %}
+<script>
+  (function () {
+    function chks() {
+      return Array.prototype.slice.call(document.querySelectorAll('.chk-pedido'));
+    }
+
+    function actualizarContadorSeleccion() {
+      var seleccionados = chks().filter(function (c) { return c.checked; }).length;
+      document.querySelectorAll('.contador-sel').forEach(function (span) {
+        span.textContent = seleccionados;
+      });
+      document.querySelectorAll('.btn-eliminar-varios').forEach(function (btn) {
+        btn.disabled = seleccionados === 0;
+      });
+      var todos = document.getElementById('chk-todos');
+      if (todos) {
+        todos.checked = seleccionados > 0 && seleccionados === chks().length;
+      }
+    }
+
+    window.toggleTodos = function (origen) {
+      chks().forEach(function (c) { c.checked = origen.checked; });
+      actualizarContadorSeleccion();
+    };
+
+    window.confirmarEliminarVarios = function () {
+      var seleccionados = chks().filter(function (c) { return c.checked; }).length;
+      if (seleccionados === 0) {
+        alert('No seleccionaste ningún pedido.');
+        return false;
+      }
+      return confirm('¿Seguro que quieres eliminar ' + seleccionados + ' pedido(s)? No se puede deshacer.');
+    };
+
+    document.addEventListener('change', function (e) {
+      if (e.target.classList.contains('chk-pedido')) {
+        actualizarContadorSeleccion();
+      }
+    });
+
+    actualizarContadorSeleccion();
+  })();
+</script>
+{% endif %}
 {% endblock %}

@@ -145,7 +145,7 @@
   {% endif %}
   {% if hay_comisiones_configuradas %}
   <a href="{{ url_for('comisiones') }}" class="{{ 'activo' if request.endpoint == 'comisiones' else '' }}">
-    <span class="icono">💵</span>Comisión{{ '' if tiene_comision else ' Diana' }}
+    <span class="icono">💵</span>Comisiones
   </a>
   {% endif %}
   <a href="{{ url_for('inventario') }}" class="{{ 'activo' if request.endpoint == 'inventario' else '' }}">

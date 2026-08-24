@@ -14,6 +14,7 @@
 {% endif %}
 
 <div class="card">
+  <p><strong>Folio:</strong> {{ p.folio or '—' }}{% if nombre_vendedora_folio %} <span class="muted">({{ nombre_vendedora_folio }})</span>{% elif p.folio %} <span class="muted">(⚠️ no reconocido -- revisar)</span>{% endif %}</p>
   <p><strong>Teléfono:</strong> {{ p.telefono or '—' }}</p>
   <p><strong>Municipio:</strong> {{ p.municipio or '—' }}</p>
   <p><strong>Fecha de entrega:</strong> {{ p.fecha_entrega or '—' }}</p>

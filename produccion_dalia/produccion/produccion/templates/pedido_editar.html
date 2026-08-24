@@ -6,6 +6,10 @@
 
 <form method="post">
   <div class="card">
+    <label for="folio">Folio</label>
+    <input type="text" id="folio" name="folio" placeholder="Ej. D-142, DE-014, K-023" value="{{ p.folio or '' }}">
+    <p class="muted" style="margin-top:2px;font-size:0.85rem;">De este folio depende a quién se le suma la comisión: empieza con "DE" = Dalia, "D" = Diana, "K" = Karo.</p>
+
     <label for="cliente">Cliente</label>
     <input type="text" id="cliente" name="cliente" value="{{ p.cliente or '' }}">
 

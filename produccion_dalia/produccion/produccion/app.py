@@ -19,6 +19,7 @@ import datetime
 import io
 import json
 import os
+import re
 import uuid
 
 from flask import (
@@ -49,6 +50,22 @@ def _filtro_moneda(valor):
     except (TypeError, ValueError):
         valor = 0.0
     return f"{valor:,.2f}"
+
+
+# 🔧 (24 ago 2026, pedido de Israel: "en finanzas 2026/08/13 cámbialo por
+# 13/agosto/2026") Filtro de Jinja para mostrar cualquier fecha ISO
+# (AAAA-MM-DD, con o sin hora pegada) como texto largo en español. Usa el
+# mismo diccionario MESES_ES que ya se usa en el resto de la app (ver más
+# abajo) para que el nombre del mes salga igual en todos lados.
+@app.template_filter("fecha_larga")
+def _filtro_fecha_larga(valor):
+    if not valor:
+        return ""
+    try:
+        fecha = datetime.date.fromisoformat(str(valor)[:10])
+    except ValueError:
+        return valor
+    return f"{fecha.day}/{MESES_ES[fecha.month]}/{fecha.year}"
 
 # 🔧 (23 ago 2026, pedido de Israel: "quiero acceso para 3 personas, pero
 # Diana no quiero que vea lo financiero") Antes había una sola contraseña
@@ -175,7 +192,11 @@ def exigir_login():
     # 🔧 (23 ago 2026) A Diana no le corresponde ver lo financiero del
     # negocio -- se bloquea aquí, a nivel de ruta, y no solo escondiendo
     # el botón en la pantalla (aunque también se esconde, ver base.html).
-    if request.endpoint == "finanzas" and not _puede_ver_finanzas():
+    # 🔧 (24 ago 2026, pedido de Israel: nuevas secciones de Ventas e
+    # Indicadores) Ambas muestran dinero/volumen de ventas del negocio,
+    # así que se les aplica la misma regla que a Finanzas -- Israel
+    # confirmó que deben quedar ocultas para Diana igual que Finanzas.
+    if request.endpoint in ("finanzas", "ventas", "indicadores") and not _puede_ver_finanzas():
         flash("Esa sección no está disponible con tu usuario.")
         return redirect(url_for("dashboard"))
     return None
@@ -446,9 +467,22 @@ def finanzas():
     total_ventas = round(sum(p.get("total") or 0 for p in pedidos), 2)
     total_saldos = round(sum(p.get("saldo") or 0 for p in pedidos), 2)
 
+    # 🔧 (24 ago 2026, pedido de Israel: "resumen de ventas por mes, que se
+    # actualice al momento de subir notas") Aparte del total del período
+    # que se esté viendo (Hoy/Semana/Mes), siempre se calcula también el
+    # del MES ACTUAL para la tarjeta fija de arriba -- así se ve de
+    # entrada sin tener que cambiarle al tab "Mes". Se recalcula desde
+    # cero en cada visita a la página (no se guarda en ningún lado), así
+    # que en cuanto se sube o se corrige una nota, la próxima vez que se
+    # entre aquí ya sale actualizado.
+    ini_mes_actual, fin_mes_actual = _rango_mes(hoy)
+    pedidos_mes_actual = database.listar_capturados_en_rango(ini_mes_actual.isoformat(), fin_mes_actual.isoformat())
+    resumen_venta_mes = round(sum(p.get("total") or 0 for p in pedidos_mes_actual), 2)
+
     return render_template(
         "finanzas.html", pedidos=pedidos, periodo=periodo, titulo=titulo,
         total_anticipos=total_anticipos, total_ventas=total_ventas, total_saldos=total_saldos,
+        resumen_venta_mes=resumen_venta_mes, resumen_titulo_mes=f"{MESES_ES[hoy.month].capitalize()} {hoy.year}",
         nav_anterior=nav_anterior, nav_siguiente=nav_siguiente, nav_actual=nav_actual, es_actual=es_actual,
     )
 
@@ -501,12 +535,16 @@ def comisiones():
         flash("No hay comisiones configuradas todavía.")
         return redirect(url_for("dashboard"))
 
-    if usuario in VENDEDORES_CON_COMISION:
-        vendedor = usuario  # Diana (o quien tenga comisión) solo ve la suya
-    else:
-        vendedor = request.args.get("vendedor") or next(iter(VENDEDORES_CON_COMISION))
-        if vendedor not in VENDEDORES_CON_COMISION:
-            vendedor = next(iter(VENDEDORES_CON_COMISION))
+    # 🔧 (24 ago 2026, pedido de Israel: "que cada vendedora pueda ver las
+    # comisiones de los demás") ANTES: quien tenía su propia comisión
+    # (Dalia/Diana) solo podía ver la suya -- era privacidad a propósito
+    # entre vendedoras. Israel confirmó que ya no quiere esa restricción:
+    # ahora cualquiera que entre (tenga o no comisión propia) puede
+    # cambiar de vendedora con el selector de abajo y ver la comisión de
+    # cualquiera de las 3.
+    vendedor = request.args.get("vendedor") or usuario or next(iter(VENDEDORES_CON_COMISION))
+    if vendedor not in VENDEDORES_CON_COMISION:
+        vendedor = usuario if usuario in VENDEDORES_CON_COMISION else next(iter(VENDEDORES_CON_COMISION))
 
     monto_por_producto = VENDEDORES_CON_COMISION[vendedor]
     # 🔧 (24 ago 2026, pedido de Israel: "debe verse el acumulado de
@@ -571,34 +609,158 @@ def comisiones():
     total_piezas, total_comision = _total_piezas_y_comision(pedidos, monto_por_producto)
 
     # 🔧 (24 ago 2026, pedido de Israel: "debe aparecer, comisiones dalia,
-    # diana y karo") Quien puede ver comisiones de todas (Israel, o
-    # cualquiera que no sea ella misma una vendedora con comisión) ahora ve
-    # de un vistazo el total de las 3 -- ya no tiene que ir cambiando de
-    # una en una con el selector para comparar. Diana (o quien tenga su
-    # propia comisión) sigue viendo solo la suya, como ya era el caso --
-    # eso no cambió, es privacidad entre vendedoras.
+    # diana y karo") Todos ven de un vistazo el total de las 3 -- ya no hay
+    # que ir cambiando de una en una con el selector para comparar.
+    # 🔧 (24 ago 2026, pedido de Israel: quitar la privacidad entre
+    # vendedoras) Antes esta comparación solo se armaba para quien NO
+    # tuviera comisión propia (Israel). Ahora se arma siempre, para
+    # cualquiera que entre -- Dalia y Diana también pueden ver aquí la
+    # comisión de las otras dos.
     resumen_vendedores = []
-    if usuario not in VENDEDORES_CON_COMISION:
-        for v, monto_v in VENDEDORES_CON_COMISION.items():
-            pedidos_v = [p for p in todos_en_rango if vendedora_por_folio(p.get("folio")) == v]
-            piezas_v, comision_v = _total_piezas_y_comision(pedidos_v, monto_v)
-            resumen_vendedores.append({
-                "vendedor": v,
-                "nombre": NOMBRES_DISPLAY.get(v, v.title()),
-                "piezas": piezas_v,
-                "comision": comision_v,
-                "activo": v == vendedor,
-            })
+    for v, monto_v in VENDEDORES_CON_COMISION.items():
+        pedidos_v = [p for p in todos_en_rango if vendedora_por_folio(p.get("folio")) == v]
+        piezas_v, comision_v = _total_piezas_y_comision(pedidos_v, monto_v)
+        resumen_vendedores.append({
+            "vendedor": v,
+            "nombre": NOMBRES_DISPLAY.get(v, v.title()),
+            "piezas": piezas_v,
+            "comision": comision_v,
+            "activo": v == vendedor,
+        })
 
     return render_template(
         "comisiones.html", pedidos=pedidos, periodo=periodo, titulo_periodo=titulo_periodo,
         vendedor=vendedor, nombre_vendedor=NOMBRES_DISPLAY.get(vendedor, vendedor.title() if vendedor else ""),
         monto_por_producto=monto_por_producto, total_piezas=total_piezas, total_comision=total_comision,
         es_propia=(usuario == vendedor),
-        otros_vendedores=[v for v in VENDEDORES_CON_COMISION if v != vendedor] if usuario not in VENDEDORES_CON_COMISION else [],
+        otros_vendedores=[v for v in VENDEDORES_CON_COMISION if v != vendedor],
         resumen_vendedores=resumen_vendedores,
         nav_anterior=nav_anterior, nav_siguiente=nav_siguiente, nav_actual=nav_actual, es_actual=es_actual,
         sin_folio_reconocido=sin_folio_reconocido,
+    )
+
+
+# ----------------------------------------------------------------------
+# Ventas por producto (24 ago 2026, pedido de Israel: "productos vendidos
+# del mes" + "añadir ventas, con la imagen de los productos + el %
+# porcentaje de ventas del mes"). Mismo criterio de privacidad que
+# Finanzas -- ver exigir_login().
+# ----------------------------------------------------------------------
+def _imagen_producto(nombre_producto):
+    """🔧 (24 ago 2026) Todavía no hay fotos individuales por producto en
+    el repo (solo el catálogo en PDF, catalogo/catalogo_2026.pdf) -- así
+    que se deja este 'gancho' lista para usarse sola en cuanto existan:
+    si algún día se sube una imagen a static/productos/<nombre-en-
+    minúsculas-con-guiones>.jpg (.jpeg/.png/.webp), aparece aquí sin
+    tocar código de nuevo. Mientras tanto regresa None y la plantilla
+    muestra un ícono genérico en su lugar."""
+    slug = re.sub(r"[^a-z0-9]+", "-", (nombre_producto or "").strip().lower()).strip("-")
+    if not slug:
+        return None
+    for ext in ("jpg", "jpeg", "png", "webp"):
+        ruta = os.path.join(app.static_folder, "productos", f"{slug}.{ext}")
+        if os.path.isfile(ruta):
+            return url_for("static", filename=f"productos/{slug}.{ext}")
+    return None
+
+
+@app.route("/ventas")
+def ventas():
+    hoy = _hoy()
+    try:
+        anio = int(request.args.get("anio", hoy.year))
+        mes = int(request.args.get("mes", hoy.month))
+    except (TypeError, ValueError):
+        anio, mes = hoy.year, hoy.month
+    anio, mes = _normalizar_anio_mes(anio, mes)
+    ini = datetime.date(anio, mes, 1)
+    fin = datetime.date(anio, mes, calendario_mod.monthrange(anio, mes)[1])
+    es_actual = (anio == hoy.year and mes == hoy.month)
+    titulo = f"{'Este mes' if es_actual else 'Mes'} ({MESES_ES[mes].capitalize()} {anio})"
+    anio_ant, mes_ant = _normalizar_anio_mes(anio, mes - 1)
+    anio_sig, mes_sig = _normalizar_anio_mes(anio, mes + 1)
+    nav_anterior = {"anio": anio_ant, "mes": mes_ant}
+    nav_siguiente = {"anio": anio_sig, "mes": mes_sig}
+    nav_actual = {"anio": hoy.year, "mes": hoy.month}
+
+    pedidos = database.listar_capturados_en_rango(ini.isoformat(), fin.isoformat())
+
+    # 🔧 (24 ago 2026) Se agrupa por nombre de producto igual que en
+    # imprimir_semana_proxima(), para sumar piezas vendidas. El % se
+    # calcula sobre PIEZAS y no sobre dinero: no todas las notas traen
+    # precio_unitario en cada línea (depende de qué tan detallada quedó
+    # la nota), así que un % basado en $ dejaría fuera ventas reales solo
+    # porque falta ese dato -- mismo principio que el resto del código:
+    # nunca dejar que un dato faltante invente o esconda información.
+    # Cuando SÍ hay precio_unitario en todas las líneas de un producto,
+    # también se muestra su total en dinero, aparte, para no mezclar un
+    # número confiable con uno estimado.
+    resumen = {}
+    for p in pedidos:
+        for prod in (p.get("productos") or []):
+            if not _es_producto_real(prod.get("producto")):
+                continue
+            nombre = (prod.get("producto") or "Producto sin nombre").strip() or "Producto sin nombre"
+            try:
+                cantidad = float(prod.get("cantidad") or 0)
+            except (TypeError, ValueError):
+                cantidad = 0
+            entrada = resumen.setdefault(nombre, {"piezas": 0.0, "monto": 0.0, "con_precio": True})
+            entrada["piezas"] += cantidad
+            precio = prod.get("precio_unitario")
+            if precio not in (None, ""):
+                try:
+                    entrada["monto"] += cantidad * float(precio)
+                except (TypeError, ValueError):
+                    entrada["con_precio"] = False
+            else:
+                entrada["con_precio"] = False
+
+    total_piezas_mes = sum(e["piezas"] for e in resumen.values())
+    productos = []
+    for nombre, e in resumen.items():
+        pct = round((e["piezas"] / total_piezas_mes) * 100, 1) if total_piezas_mes else 0
+        productos.append({
+            "nombre": nombre,
+            "piezas": e["piezas"],
+            "porcentaje": pct,
+            "monto": round(e["monto"], 2) if e["con_precio"] else None,
+            "imagen": _imagen_producto(nombre),
+        })
+    productos.sort(key=lambda x: x["piezas"], reverse=True)
+
+    return render_template(
+        "ventas.html", productos=productos, titulo=titulo, total_piezas_mes=total_piezas_mes,
+        nav_anterior=nav_anterior, nav_siguiente=nav_siguiente, nav_actual=nav_actual, es_actual=es_actual,
+    )
+
+
+# ----------------------------------------------------------------------
+# Indicadores (24 ago 2026, pedido de Israel: "nueva sección -- venta
+# promedio por día, venta promedio por semana, venta mensual"). Mismo
+# criterio de privacidad que Finanzas -- ver exigir_login().
+# ----------------------------------------------------------------------
+@app.route("/indicadores")
+def indicadores():
+    hoy = _hoy()
+    ini_mes, fin_mes = _rango_mes(hoy)
+    pedidos_mes = database.listar_capturados_en_rango(ini_mes.isoformat(), fin_mes.isoformat())
+    venta_mensual = round(sum(p.get("total") or 0 for p in pedidos_mes), 2)
+
+    # 🔧 (24 ago 2026) Los promedios se calculan sobre los días QUE YA
+    # PASARON del mes actual (no sobre los 28-31 días del mes completo) --
+    # si no, a inicios de mes el promedio saldría artificialmente bajo,
+    # como si ya se supiera que no se va a vender nada el resto del mes.
+    dias_transcurridos = (hoy - ini_mes).days + 1
+    promedio_diario_exacto = (venta_mensual / dias_transcurridos) if dias_transcurridos else 0.0
+    venta_promedio_dia = round(promedio_diario_exacto, 2)
+    venta_promedio_semana = round(promedio_diario_exacto * 7, 2)
+
+    return render_template(
+        "indicadores.html",
+        venta_mensual=venta_mensual, venta_promedio_dia=venta_promedio_dia,
+        venta_promedio_semana=venta_promedio_semana, dias_transcurridos=dias_transcurridos,
+        titulo_mes=f"{MESES_ES[hoy.month].capitalize()} {hoy.year}",
     )
 
 

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block titulo %}Entrar — Producción Dalia{% endblock %}
+{% block contenido %}
+<div style="max-width:360px;margin:60px auto 0 auto;text-align:center;">
+  <img src="{{ url_for('static', filename='logo.png') }}" alt="Recuerditos Dalia" style="width:110px;height:110px;border-radius:50%;object-fit:cover;">
+  <h2 style="margin:10px 0 20px 0;">Producción Dalia</h2>
+  <form method="post" class="card" style="text-align:left;">
+    <label for="password">Contraseña</label>
+    <input type="password" id="password" name="password" autofocus required>
+    <button type="submit" class="primario" style="width:100%;margin-top:16px;">Entrar</button>
+  </form>
+</div>
+{% endblock %}

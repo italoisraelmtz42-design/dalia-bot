@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block titulo %}Ventas — Producción Dalia{% endblock %}
+{% block contenido %}
+<h2 style="margin-bottom:4px;">🛍️ Ventas — {{ titulo }}</h2>
+<p class="muted" style="margin-top:0;">Productos vendidos, del más al menos vendido. El % se calcula sobre piezas vendidas del mes.</p>
+
+<div class="card" style="padding:10px 12px;display:flex;align-items:center;justify-content:space-between;">
+  <a class="btn" href="{{ url_for('ventas', **nav_anterior) }}">← Mes anterior</a>
+  {% if not es_actual %}
+    <a class="link-suave" href="{{ url_for('ventas', **nav_actual) }}">Ir a este mes</a>
+  {% endif %}
+  <a class="btn" href="{{ url_for('ventas', **nav_siguiente) }}">Mes siguiente →</a>
+</div>
+
+<div class="card totales">
+  <div class="item">
+    <div class="muted">Productos distintos</div>
+    <div class="num">{{ productos|length }}</div>
+  </div>
+  <div class="item">
+    <div class="muted">Piezas vendidas</div>
+    <div class="num">{{ total_piezas_mes|int if total_piezas_mes == total_piezas_mes|int else total_piezas_mes }}</div>
+  </div>
+</div>
+
+{% if not productos %}
+  <div class="card muted">No hay ventas registradas en este período.</div>
+{% endif %}
+
+{% for p in productos %}
+<div class="card" style="display:flex;align-items:center;gap:12px;">
+  {% if p.imagen %}
+    <img src="{{ p.imagen }}" alt="{{ p.nombre }}" style="width:56px;height:56px;border-radius:10px;object-fit:cover;border:1px solid var(--borde);flex-shrink:0;">
+  {% else %}
+    <div style="width:56px;height:56px;border-radius:10px;background:var(--rosa-suave);display:flex;align-items:center;justify-content:center;font-size:1.4rem;flex-shrink:0;">🎀</div>
+  {% endif %}
+  <div style="flex:1;min-width:0;">
+    <h3 style="margin:0 0 2px 0;">{{ p.nombre }}</h3>
+    <div class="muted">{{ p.piezas|int if p.piezas == p.piezas|int else p.piezas }} pieza(s){% if p.monto is not none %} — ${{ p.monto|moneda }}{% endif %}</div>
+  </div>
+  <div style="text-align:right;flex-shrink:0;">
+    <div style="font-size:1.2rem;font-weight:700;color:var(--rosa-oscuro);">{{ p.porcentaje }}%</div>
+    <div class="muted" style="font-size:0.72rem;">del mes</div>
+  </div>
+</div>
+{% endfor %}
+
+<p class="muted" style="font-size:0.78rem;">
+  💡 ¿Le falta la foto a algún producto? Sube una imagen a <code>static/productos/</code> con el nombre del producto (ej. "osito-con-jaboncito.jpg") y aparece aquí sola.
+</p>
+{% endblock %}

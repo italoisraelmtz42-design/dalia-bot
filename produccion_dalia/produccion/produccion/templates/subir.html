@@ -13,7 +13,10 @@
   <p class="muted" style="margin-top:0;">Vas a subir esta tanda como <strong>{{ nombre_usuario }}</strong> (con quien iniciaste sesión). Esto no afecta a quién se le suma la comisión -- eso lo decide el folio escrito en cada nota, así que puedes subir notas de Diana o de Karo aunque no seas tú.</p>
 
   <label for="fotos">Foto(s) de la(s) nota(s)</label>
-  <input type="file" id="fotos" name="fotos" accept="image/*" capture="environment" multiple required>
+  <div id="zona-arrastrar" style="border:2px dashed var(--borde);border-radius:12px;padding:18px 12px;text-align:center;cursor:pointer;transition:border-color 0.15s,background 0.15s;">
+    <div id="zona-arrastrar-texto" class="muted">📥 Arrastra aquí la(s) foto(s), o toca para elegirlas</div>
+  </div>
+  <input type="file" id="fotos" name="fotos" accept="image/*" capture="environment" multiple required style="display:none;">
   <p class="muted" style="margin-top:8px;">
     Tip: puedes revisar el resultado de cualquier pedido después, entrando a
     su detalle y dándole "Editar" -- por si alguna se guardó sola con algún
@@ -21,4 +24,63 @@
   </p>
   <button type="submit" class="primario" style="width:100%;margin-top:16px;">Leer nota(s) con IA</button>
 </form>
+
+<script>
+  // 🔧 (24 ago 2026, pedido de Israel: "que se puedan subir archivos de
+  // notas arrastrando imagen") El <input type="file"> real queda oculto;
+  // esta zona lo activa con un clic (para elegir desde el explorador de
+  // archivos, como antes) o recibe las fotos arrastradas y se las asigna
+  // al input con un DataTransfer -- así el formulario se manda exactamente
+  // igual que si se hubieran elegido a mano, sin tocar el backend.
+  (function () {
+    var zona = document.getElementById('zona-arrastrar');
+    var texto = document.getElementById('zona-arrastrar-texto');
+    var input = document.getElementById('fotos');
+
+    function actualizarTexto() {
+      var n = input.files ? input.files.length : 0;
+      texto.textContent = n
+        ? '✅ ' + n + ' foto(s) lista(s) -- toca para cambiar'
+        : '📥 Arrastra aquí la(s) foto(s), o toca para elegirlas';
+    }
+
+    zona.addEventListener('click', function () { input.click(); });
+    input.addEventListener('change', actualizarTexto);
+
+    ['dragenter', 'dragover'].forEach(function (evento) {
+      zona.addEventListener(evento, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        zona.style.borderColor = 'var(--rosa)';
+        zona.style.background = 'var(--rosa-suave)';
+      });
+    });
+    ['dragleave', 'dragend'].forEach(function (evento) {
+      zona.addEventListener(evento, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        zona.style.borderColor = 'var(--borde)';
+        zona.style.background = '';
+      });
+    });
+    zona.addEventListener('drop', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      zona.style.borderColor = 'var(--borde)';
+      zona.style.background = '';
+      var soltados = e.dataTransfer && e.dataTransfer.files;
+      if (!soltados || !soltados.length) return;
+      var solo_imagenes = new DataTransfer();
+      Array.prototype.forEach.call(soltados, function (archivo) {
+        if (archivo.type && archivo.type.indexOf('image/') === 0) {
+          solo_imagenes.items.add(archivo);
+        }
+      });
+      if (solo_imagenes.files.length) {
+        input.files = solo_imagenes.files;
+        actualizarTexto();
+      }
+    });
+  })();
+</script>
 {% endblock %}

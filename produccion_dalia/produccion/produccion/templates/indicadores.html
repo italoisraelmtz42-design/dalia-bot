@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block titulo %}Indicadores — Producción Dalia{% endblock %}
+{% block contenido %}
+<h2 style="margin-bottom:4px;">📊 Indicadores</h2>
+<p class="muted" style="margin-top:0;">{{ titulo_mes }} — con {{ dias_transcurridos }} día(s) transcurrido(s) del mes</p>
+
+<div class="card">
+  <div class="muted">Venta promedio por día</div>
+  <div style="font-size:1.6rem;font-weight:700;">${{ venta_promedio_dia|moneda }}</div>
+</div>
+
+<div class="card">
+  <div class="muted">Venta promedio por semana</div>
+  <div style="font-size:1.6rem;font-weight:700;">${{ venta_promedio_semana|moneda }}</div>
+</div>
+
+<div class="card">
+  <div class="muted">Venta mensual (acumulada, {{ titulo_mes }})</div>
+  <div style="font-size:1.6rem;font-weight:700;">${{ venta_mensual|moneda }}</div>
+</div>
+
+<p class="muted" style="font-size:0.78rem;">
+  💡 Los promedios se calculan sobre los días que ya pasaron de este mes, no sobre el mes completo -- por eso van a moverse un poco día a día conforme avance el mes.
+</p>
+{% endblock %}

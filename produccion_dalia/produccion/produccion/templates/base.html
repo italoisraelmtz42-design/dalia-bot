@@ -61,10 +61,11 @@
   nav.principal {
     position: fixed; bottom: 0; left: 0; right: 0; background: white;
     border-top: 1px solid var(--borde); display: flex; z-index: 10;
+    overflow-x: auto;
   }
   nav.principal a {
-    flex: 1; text-align: center; padding: 10px 4px; text-decoration: none;
-    color: var(--gris); font-size: 0.78rem;
+    flex: 1 0 62px; text-align: center; padding: 10px 4px; text-decoration: none;
+    color: var(--gris); font-size: 0.78rem; white-space: nowrap;
   }
   nav.principal a.activo { color: var(--rosa); font-weight: 700; }
   nav.principal .icono { display: block; font-size: 1.25rem; margin-bottom: 2px; }
@@ -136,11 +137,17 @@
 {% if session.get('autenticado') %}
 <nav class="principal">
   <a href="{{ url_for('dashboard') }}" class="{{ 'activo' if request.endpoint == 'dashboard' else '' }}">
-    <span class="icono">🚚</span>Entregas
+    <span class="icono">🚚</span>Producción
   </a>
   {% if puede_ver_finanzas %}
   <a href="{{ url_for('finanzas') }}" class="{{ 'activo' if request.endpoint == 'finanzas' else '' }}">
     <span class="icono">💰</span>Finanzas
+  </a>
+  <a href="{{ url_for('ventas') }}" class="{{ 'activo' if request.endpoint == 'ventas' else '' }}">
+    <span class="icono">🛍️</span>Ventas
+  </a>
+  <a href="{{ url_for('indicadores') }}" class="{{ 'activo' if request.endpoint == 'indicadores' else '' }}">
+    <span class="icono">📊</span>Indicadores
   </a>
   {% endif %}
   {% if hay_comisiones_configuradas %}

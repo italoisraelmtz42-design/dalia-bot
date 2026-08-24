@@ -645,16 +645,91 @@ def comisiones():
 # del mes" + "añadir ventas, con la imagen de los productos + el %
 # porcentaje de ventas del mes"). Mismo criterio de privacidad que
 # Finanzas -- ver exigir_login().
-# ----------------------------------------------------------------------
-def _imagen_producto(nombre_producto):
-    """🔧 (24 ago 2026) Todavía no hay fotos individuales por producto en
-    el repo (solo el catálogo en PDF, catalogo/catalogo_2026.pdf) -- así
-    que se deja este 'gancho' lista para usarse sola en cuanto existan:
-    si algún día se sube una imagen a static/productos/<nombre-en-
-    minúsculas-con-guiones>.jpg (.jpeg/.png/.webp), aparece aquí sin
-    tocar código de nuevo. Mientras tanto regresa None y la plantilla
-    muestra un ícono genérico en su lugar."""
-    slug = re.sub(r"[^a-z0-9]+", "-", (nombre_producto or "").strip().lower()).strip("-")
+#
+# 🔧 (24 ago 2026, pedido de Israel, con las fotos de catalogo_2026.pdf)
+# Israel aclaró que agrupar por el nombre EXACTO que escribió la
+# vendedora (como se hacía antes) está mal para "osito con jaboncito":
+# cada nota lo describe distinto -- color de toalla, color/forma de
+# moño, con o sin jabón, jabón doble, inicial chica/grande -- y eso
+# fragmentaba lo que en realidad es UN solo producto en decenas de
+# renglones diferentes. Su instrucción textual: "un osito con jaboncito
+# (puede ser de cualquier color de toalla y de cualquier color o forma
+# de moño y jabón, o no llevar jabón)" cuenta como UNA sola cosa. Los
+# demás productos del catálogo si se diferencian entre sí (por nombre e
+# imagen), como pidió.
+#
+# CATALOGO_PRODUCTOS es una lista ORDENADA de reglas -- gana la primera
+# que haga match (mismo principio que PREFIJOS_FOLIO_VENDEDORA arriba:
+# el orden importa). Los animalitos/artículos específicos van primero;
+# el "osito de toalla" genérico queda AL FINAL como cajón de sastre,
+# para que cualquier variante de color/moño/jabón que no matcheó nada
+# más específico caiga ahí -- exactamente el comportamiento que pidió
+# Israel. "rosa" (la flor) sólo cuenta si el renglón no menciona
+# oso/osito, para no confundirla con "OSITO DE TOALLA ROSA" (rosa como
+# color, no como flor).
+def _normalizar_texto(txt):
+    txt = (txt or "").lower()
+    for a, b in (("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"), ("ú", "u"), ("ü", "u")):
+        txt = txt.replace(a, b)
+    return txt
+
+
+CATALOGO_PRODUCTOS = [
+    # (slug_imagen, nombre_canonico, precio_referencia, funcion_de_match)
+    ("osito-de-toalla-afelpada", "Osito de toalla afelpada", 18.00, lambda t: "afelpad" in t),
+    ("unicornios-de-toalla", "Unicornios de toalla", 14.00, lambda t: "unicornio" in t),
+    ("perrito-de-toalla", "Perrito de toalla", 13.00, lambda t: "perrit" in t or "perrito" in t or re.search(r"\bperro\b", t)),
+    ("leoncito-de-toalla", "Leoncito de toalla", 14.00, lambda t: "leon" in t),
+    ("jirafa-de-toalla", "Jirafa de toalla", 16.00, lambda t: "jirafa" in t),
+    ("elefantitos-de-toalla", "Elefantitos de toalla", 14.00, lambda t: "elefant" in t),
+    ("mariposa-de-toalla", "Mariposa de toalla", 14.50, lambda t: "mariposa" in t),
+    ("buho-de-toalla", "Búho de toalla", 14.00, lambda t: "buho" in t),
+    ("conejo-de-toalla", "Conejo de toalla", 13.50, lambda t: "conejo" in t),
+    ("caballo-de-toalla", "Caballo de toalla", 15.00, lambda t: "caballo" in t),
+    ("kit-osito-oracion-y-velita", "Kit Osito Oración y Velita", 21.00,
+        lambda t: "kit" in t and ("oracion" in t or "velita" in t)),
+    ("recuerdo-de-oracion-con-decenario", "Recuerdos de Oración con Decenario", 15.00,
+        lambda t: "decenario" in t),
+    ("oracion-con-velita", "Oración con Velita", 10.00,
+        lambda t: "oracion" in t and "velita" in t),
+    ("vela-de-toalla", "Vela de toalla", 12.00, lambda t: "vela" in t or "velita" in t),
+    ("destapador-corcholata", "Destapador Corcholata", 15.50,
+        lambda t: "destapador" in t or "corcholata" in t),
+    ("encendedores-personalizados", "Encendedores personalizados", 10.00, lambda t: "encendedor" in t),
+    ("abanico-tipo-madera", "Abanico tipo madera", 23.00, lambda t: "abanico" in t),
+    ("espejito-de-recuerdito", "Espejito de recuerdito", 14.00,
+        lambda t: "espejo" in t or "espejito" in t),
+    ("llavero-osito-peluche", "Llavero Osito Peluche", 18.00,
+        lambda t: "llavero" in t or "peluche" in t),
+    ("rosa-de-toalla", "Rosa de toalla", 15.00, lambda t: "rosa" in t and "oso" not in t),
+    # 🔧 Cajón de sastre: CUALQUIER variante de "osito"/"oso" de toalla
+    # (color, moño, con o sin jabón, inicial) que no haya matcheado nada
+    # más arriba cae aquí, como UN solo producto -- ver nota de arriba.
+    ("osito-de-toalla", "Osito de toalla", 12.00, lambda t: "oso" in t),
+]
+
+
+def _clasificar_producto(nombre_producto):
+    """Regresa (nombre_canonico, precio_referencia_catalogo, slug_imagen)
+    para un renglón de producto de una nota. Si no matchea ninguna regla
+    del catálogo, se deja tal cual lo escribió la vendedora -- no todo
+    lo que se vende viene del catálogo (ej. gel antibacterial, dominó),
+    y forzarlo a una categoría inventada estaría peor que dejarlo suelto."""
+    texto = _normalizar_texto(nombre_producto)
+    for slug, nombre_canonico, precio_ref, coincide in CATALOGO_PRODUCTOS:
+        if coincide(texto):
+            return nombre_canonico, precio_ref, slug
+    nombre_propio = (nombre_producto or "Producto sin nombre").strip() or "Producto sin nombre"
+    slug_propio = re.sub(r"[^a-z0-9]+", "-", _normalizar_texto(nombre_propio)).strip("-")
+    return nombre_propio, None, slug_propio
+
+
+def _imagen_producto(slug):
+    """🔧 (24 ago 2026) Busca static/productos/<slug>.(jpg/jpeg/png/webp).
+    Las fotos de los productos del catálogo ya vienen incluidas (se
+    sacaron de catalogo_2026.pdf); si algún producto nuevo no tiene
+    imagen todavía, regresa None y la plantilla muestra un ícono
+    genérico en su lugar -- sin romper nada."""
     if not slug:
         return None
     for ext in ("jpg", "jpeg", "png", "webp"):
@@ -695,17 +770,28 @@ def ventas():
     # Cuando SÍ hay precio_unitario en todas las líneas de un producto,
     # también se muestra su total en dinero, aparte, para no mezclar un
     # número confiable con uno estimado.
+    # 🔧 (24 ago 2026, corrección de Israel: "está mal... un osito con
+    # jaboncito puede ser de cualquier color de toalla y de cualquier
+    # color o forma de moño y jabón, o no llevar jabón" -- todas esas
+    # variantes cuentan como UN producto) Antes se agrupaba por el texto
+    # EXACTO de la nota, así que "Osito rosa con jabón" y "OSITO AZUL
+    # SIN JABON" salían como renglones distintos. Ahora se agrupa por el
+    # nombre CANÓNICO del catálogo (_clasificar_producto), que colapsa
+    # todas las variantes de un mismo producto en un solo renglón con su
+    # foto real del catálogo.
     resumen = {}
     for p in pedidos:
         for prod in (p.get("productos") or []):
             if not _es_producto_real(prod.get("producto")):
                 continue
-            nombre = (prod.get("producto") or "Producto sin nombre").strip() or "Producto sin nombre"
+            nombre_canonico, precio_ref, slug = _clasificar_producto(prod.get("producto"))
             try:
                 cantidad = float(prod.get("cantidad") or 0)
             except (TypeError, ValueError):
                 cantidad = 0
-            entrada = resumen.setdefault(nombre, {"piezas": 0.0, "monto": 0.0, "con_precio": True})
+            entrada = resumen.setdefault(
+                nombre_canonico, {"piezas": 0.0, "monto": 0.0, "con_precio": True, "slug": slug}
+            )
             entrada["piezas"] += cantidad
             precio = prod.get("precio_unitario")
             if precio not in (None, ""):
@@ -725,7 +811,7 @@ def ventas():
             "piezas": e["piezas"],
             "porcentaje": pct,
             "monto": round(e["monto"], 2) if e["con_precio"] else None,
-            "imagen": _imagen_producto(nombre),
+            "imagen": _imagen_producto(e["slug"]),
         })
     productos.sort(key=lambda x: x["piezas"], reverse=True)
 

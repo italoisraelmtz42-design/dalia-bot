@@ -45,6 +45,13 @@ def hoy_negocio():
     return ahora_negocio().date()
 
 
+MESES_ES = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
+    "noviembre": 11, "diciembre": 12,
+}
+
+
 def normalizar_fecha_iso(texto_fecha):
     """Convierte 'fecha_entrega' (que el humano escribe como DD/MM/AAAA,
     el formato que usa todo el negocio) a AAAA-MM-DD para poder filtrar y
@@ -76,6 +83,49 @@ def normalizar_fecha_iso(texto_fecha):
             return datetime.date(anio, mes, dia).isoformat()
         except ValueError:
             return None
+
+    # 🔧 (24 ago 2026, pedido de Israel: "si las notas en la fecha no
+    # tienen año... que el programa entienda que son del año en curso")
+    # Antes, si la nota no traía año (ej. "23 julio", "23/07"), esta
+    # función regresaba None -- inofensivo por sí solo (el pedido
+    # simplemente no aparecía en Hoy/Mañana/Semana/Mes hasta corregirse a
+    # mano, ver docstring arriba). El problema real que Israel reportó
+    # venía de otro lado: el prompt de la IA le pedía "deducir" el año
+    # sin darle la fecha de hoy como referencia, y a veces terminaba
+    # alucinando un año viejo sin sentido (2020, 2023) en vez de dejarlo
+    # en blanco -- y ESE año inventado sí pasaba esta función sin
+    # problema (es un DD/MM/AAAA válido, nada más que incorrecto). Ya se
+    # corrigió el prompt para que use el año actual como año por defecto
+    # (ver PROMPT_EXTRACCION en app.py). Este bloque de aquí es la red de
+    # seguridad complementaria -- mismo principio que el resto del
+    # código: nunca confiar en un solo lugar para que el dato salga bien.
+    # Si de todos modos llega texto sin año (la IA no siguió la
+    # instrucción, o alguien lo escribió a mano así en Editar), se
+    # completa aquí con el año de HOY -- ahora_negocio()/hoy_negocio(),
+    # NO datetime.now() directo, para no toparse otra vez con el bug de
+    # zona horaria ya corregido -- en vez de fallar en silencio.
+    anio_actual = hoy_negocio().year
+
+    # "23/07", "23-07", "23.07" (día/mes, sin año)
+    m = re.match(r"^(\d{1,2})[./-](\d{1,2})$", texto_fecha)
+    if m:
+        dia, mes = (int(x) for x in m.groups())
+        try:
+            return datetime.date(anio_actual, mes, dia).isoformat()
+        except ValueError:
+            return None
+
+    # "23 de julio", "23 julio" (nombre de mes en español, sin año)
+    m = re.match(r"^(\d{1,2})\s*(?:de\s+)?([a-zA-Z]+)$", texto_fecha)
+    if m:
+        dia = int(m.group(1))
+        mes = MESES_ES.get(m.group(2).lower())
+        if mes:
+            try:
+                return datetime.date(anio_actual, mes, dia).isoformat()
+            except ValueError:
+                return None
+
     return None
 
 
@@ -154,9 +204,16 @@ def init_db():
             cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN necesita_revision INTEGER NOT NULL DEFAULT 0")
         if "motivo_revision" not in columnas:
             cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN motivo_revision TEXT")
+        # 🔧 (24 ago 2026, pedido de Israel: comisiones de Dalia/Diana/Karo
+        # por folio, no por quién sube la nota) El folio es lo que la IA
+        # lee de la nota y lo que de verdad dice a quién le corresponde la
+        # comisión de esa venta -- ver vendedora_por_folio() en app.py.
+        if "folio" not in columnas:
+            cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN folio TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_fecha_entrega_iso ON pedidos_confirmados(fecha_entrega_iso)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_estatus_entrega ON pedidos_confirmados(estatus_entrega)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_necesita_revision ON pedidos_confirmados(necesita_revision)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_folio ON pedidos_confirmados(folio)")
 
         # 🔧 (23 ago 2026, pedido de Israel: control de materia prima)
         cur.execute("""
@@ -181,15 +238,15 @@ def guardar_pedido(data):
             INSERT INTO pedidos_confirmados
                 (fecha_captura, subido_por, cliente, telefono, municipio,
                  fecha_entrega, fecha_entrega_iso, tipo_entrega, direccion, productos_json,
-                 anticipo, total, notas, foto_archivo, necesita_revision, motivo_revision)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 anticipo, total, notas, foto_archivo, necesita_revision, motivo_revision, folio)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data.get("fecha_captura"), data.get("subido_por"), data.get("cliente"),
             data.get("telefono"), data.get("municipio"), fecha_entrega,
             normalizar_fecha_iso(fecha_entrega), data.get("tipo_entrega"), data.get("direccion"), productos_json,
             float(data.get("anticipo") or 0), float(data.get("total") or 0),
             data.get("notas"), data.get("foto_archivo"),
-            1 if data.get("necesita_revision") else 0, data.get("motivo_revision"),
+            1 if data.get("necesita_revision") else 0, data.get("motivo_revision"), data.get("folio"),
         ))
         return cur.lastrowid
 
@@ -205,14 +262,14 @@ def actualizar_pedido(pedido_id, data):
         cur.execute("""
             UPDATE pedidos_confirmados SET
                 cliente=?, telefono=?, municipio=?, fecha_entrega=?, fecha_entrega_iso=?, tipo_entrega=?,
-                direccion=?, productos_json=?, anticipo=?, total=?, notas=?,
+                direccion=?, productos_json=?, anticipo=?, total=?, notas=?, folio=?,
                 necesita_revision=0, motivo_revision=NULL
             WHERE id=?
         """, (
             data.get("cliente"), data.get("telefono"), data.get("municipio"),
             fecha_entrega, normalizar_fecha_iso(fecha_entrega), data.get("tipo_entrega"), data.get("direccion"),
             productos_json, float(data.get("anticipo") or 0), float(data.get("total") or 0),
-            data.get("notas"), pedido_id,
+            data.get("notas"), data.get("folio"), pedido_id,
         ))
 
 
@@ -231,6 +288,30 @@ def actualizar_estatus(pedido_id, campo, valor):
 def eliminar_pedido(pedido_id):
     with _cursor() as cur:
         cur.execute("DELETE FROM pedidos_confirmados WHERE id=?", (pedido_id,))
+
+
+def eliminar_pedidos(ids):
+    """Elimina varios pedidos a la vez (ver eliminar_pedido para uno solo).
+
+    ids: lista/iterable de valores que representen ids (pueden venir como
+    strings del formulario). Ignora silenciosamente cualquier valor que no
+    sea un entero válido -- así una casilla mal formada nunca tumba el borrado
+    de las demás.
+
+    Devuelve cuántos pedidos se borraron realmente.
+    """
+    ids_validos = []
+    for i in ids or []:
+        try:
+            ids_validos.append(int(str(i).strip()))
+        except (TypeError, ValueError):
+            continue
+    if not ids_validos:
+        return 0
+    with _cursor() as cur:
+        marcador = ",".join("?" * len(ids_validos))
+        cur.execute(f"DELETE FROM pedidos_confirmados WHERE id IN ({marcador})", ids_validos)
+        return cur.rowcount
 
 
 def obtener_pedido(pedido_id):
@@ -304,7 +385,15 @@ def listar_capturados_por_vendedor_en_rango(vendedor, fecha_captura_desde, fecha
     espacios de sobra). Ahora 'subido_por' se llena automáticamente con
     quien inició sesión (ver app.py) -- ya no es un campo de texto libre
     donde alguien pudo escribir "diana", "Diana " o con una falta -- así
-    que este filtro es confiable para calcular un pago real."""
+    que este filtro es confiable para calcular un pago real.
+
+    ⚠️ SUPERADA (24 ago 2026, pedido de Israel): esto asumía que quien SUBE
+    la nota es de quien es la venta -- pero Israel aclaró que no siempre es
+    así (cualquiera puede subir la nota de otra persona). La comisión ahora
+    se calcula por el FOLIO de la nota (ver vendedora_por_folio() en
+    app.py), no por 'subido_por'. Esta función ya NO se usa para
+    comisiones -- se deja aquí sin borrar por si sirve para otra cosa más
+    adelante (ej. saber quién sube más notas, sin relación a comisiones)."""
     with _cursor() as cur:
         cur.execute("""
             SELECT * FROM pedidos_confirmados

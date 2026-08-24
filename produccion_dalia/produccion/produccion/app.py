@@ -67,12 +67,52 @@ USUARIOS = {
     "dalia": os.getenv("PRODUCCION_PASSWORD_DALIA", ""),
     "diana": os.getenv("PRODUCCION_PASSWORD_DIANA", ""),
 }
-NOMBRES_DISPLAY = {"israel": "Israel", "dalia": "Dalia", "diana": "Diana"}
+NOMBRES_DISPLAY = {"israel": "Israel", "dalia": "Dalia", "diana": "Diana", "karo": "Karo"}
 
 # Quién gana comisión y cuánto por cada producto vendido (pieza, no por
-# pedido). Ahorita solo Diana -- si más adelante alguien más gana
-# comisión, nada más se agrega aquí.
-VENDEDORES_CON_COMISION = {"diana": 1.0}
+# pedido). 🔧 (24 ago 2026, pedido de Israel) Ahora las 3: Dalia, Diana y
+# Karo, $1.00 por pieza cada una. Karo NO tiene usuario/contraseña propio
+# (no entra a la webapp -- ver USUARIOS arriba), pero sí debe poder verse
+# su comisión acumulada: Israel la ve desde el selector de vendedoras en
+# /comisiones (ver la lógica de "otros_vendedores" más abajo).
+VENDEDORES_CON_COMISION = {"dalia": 1.0, "diana": 1.0, "karo": 1.0}
+
+# 🔧 (24 ago 2026, pedido de Israel: "quiero que algo revise a quién
+# pertenecen las comisiones de cada quién") Antes la comisión se le
+# atribuía a quien SUBÍA la nota (subido_por) -- pero Israel aclaró que
+# eso está mal: cualquiera de las 3 puede subir la nota de otra persona
+# (ej. Dalia sube una tanda que en realidad son ventas de Karo), así que
+# de quién es la comisión lo dice el FOLIO escrito en la propia nota, no
+# quién la sube a la app. Cada quien tiene su propio prefijo de folio
+# (talonario separado):
+#   - Folios que empiezan con "DE"          -> Dalia
+#   - Folios que empiezan con "D" (no "DE")  -> Diana
+#   - Folios que empiezan con "K"            -> Karo
+# IMPORTANTE: el orden de esta lista importa -- "DE" se revisa ANTES que
+# "D" porque "DE" también empieza con "D"; si "D" se revisara primero,
+# todos los folios de Dalia se le atribuirían por error a Diana.
+PREFIJOS_FOLIO_VENDEDORA = [
+    ("DE", "dalia"),
+    ("D", "diana"),
+    ("K", "karo"),
+]
+
+
+def vendedora_por_folio(folio):
+    """Regresa la clave de vendedora ('dalia'/'diana'/'karo') dueña de la
+    comisión de este folio, o None si el folio está vacío o no coincide
+    con ningún prefijo conocido. Un folio que regresa None NUNCA debe
+    atribuirse por default a quien subió la nota -- debe quedar marcado
+    con necesita_revision (ver _revisar_calidad) para que alguien lo
+    corrija a mano; total dinero real de por medio, mismo principio que
+    ya se usa en dalia-bot para nunca inventar un monto de anticipo."""
+    folio = (folio or "").strip().upper()
+    if not folio:
+        return None
+    for prefijo, vendedora in PREFIJOS_FOLIO_VENDEDORA:
+        if folio.startswith(prefijo):
+            return vendedora
+    return None
 
 _passwords_no_vacias = [p for p in USUARIOS.values() if p]
 if len(_passwords_no_vacias) != len(set(_passwords_no_vacias)):
@@ -454,7 +494,11 @@ def comisiones():
             vendedor = next(iter(VENDEDORES_CON_COMISION))
 
     monto_por_producto = VENDEDORES_CON_COMISION[vendedor]
-    periodo = request.args.get("periodo", "semana")
+    # 🔧 (24 ago 2026, pedido de Israel: "debe verse el acumulado de
+    # comisiones por mes") Antes el default al entrar era "Semana". Ahora
+    # es "Mes" -- se puede seguir cambiando a semana con el tab de arriba,
+    # pero lo que se ve de entrada ya es el acumulado del mes.
+    periodo = request.args.get("periodo", "mes")
     hoy = _hoy()
 
     # 🔧 (23 ago 2026, pedido de Israel: "si cambia de mes, ¿podemos ver
@@ -496,7 +540,19 @@ def comisiones():
         nav_siguiente = {"periodo": "semana", "inicio": (ini + datetime.timedelta(days=7)).isoformat()}
         nav_actual = {"periodo": "semana", "inicio": _rango_semana(hoy)[0].isoformat()}
 
-    pedidos = database.listar_capturados_por_vendedor_en_rango(vendedor, ini.isoformat(), fin.isoformat())
+    # 🔧 (24 ago 2026, pedido de Israel: "quiero que algo revise a quién
+    # pertenecen las comisiones de cada quién") Antes se filtraba en SQL
+    # por subido_por. Ahora se trae TODO lo capturado en el período (sin
+    # importar quién lo subió) y se separa aquí por el prefijo del folio
+    # -- ver vendedora_por_folio() arriba. Las notas sin folio reconocido
+    # (folio vacío o con un prefijo que no es de nadie) NO se le suman a
+    # ninguna comisión por default -- se cuentan aparte para que Israel
+    # las vea y las corrija (deberían haber quedado marcadas con
+    # necesita_revision desde que se subieron, ver _revisar_calidad).
+    todos_en_rango = database.listar_capturados_en_rango(ini.isoformat(), fin.isoformat())
+    pedidos = [p for p in todos_en_rango if vendedora_por_folio(p.get("folio")) == vendedor]
+    sin_folio_reconocido = sum(1 for p in todos_en_rango if vendedora_por_folio(p.get("folio")) is None)
+
     total_piezas = 0.0
     for p in pedidos:
         for prod in (p.get("productos") or []):
@@ -515,6 +571,7 @@ def comisiones():
         es_propia=(usuario == vendedor),
         otros_vendedores=[v for v in VENDEDORES_CON_COMISION if v != vendedor] if usuario not in VENDEDORES_CON_COMISION else [],
         nav_anterior=nav_anterior, nav_siguiente=nav_siguiente, nav_actual=nav_actual, es_actual=es_actual,
+        sin_folio_reconocido=sin_folio_reconocido,
     )
 
 
@@ -599,45 +656,64 @@ def inventario_eliminar(item_id):
 # ----------------------------------------------------------------------
 # Subir nota -> IA extrae datos -> humano confirma
 # ----------------------------------------------------------------------
-PROMPT_EXTRACCION = """Eres un asistente que lee notas de pedidos de una tienda mexicana de \
+# 🔧 (24 ago 2026, pedido de Israel: "si las notas en la fecha no tienen
+# año... que el programa entienda que son del año en curso") Antes este
+# prompt era un texto fijo que le pedía a la IA "deducir" el año sin
+# darle ninguna fecha de referencia -- sin saber qué día es hoy, a veces
+# terminaba alucinando un año viejo sin sentido (2020, 2023) en vez de
+# usar el año actual. Ahora es una función que arma el prompt cada vez
+# con la fecha de HOY (hora de negocio, no la del servidor en UTC) como
+# referencia explícita, y con el campo "folio" agregado -- necesario para
+# saber a quién le corresponde la comisión de esa venta (ver
+# vendedora_por_folio() arriba).
+def _prompt_extraccion():
+    hoy = database.hoy_negocio()
+    return f"""Eres un asistente que lee notas de pedidos de una tienda mexicana de \
 recuerdos para eventos (Recuerditos Dalia: ositos de toalla, jaboncitos, \
 abanicos, dominós, etc. para baby showers, XV años, bodas, etc.).
+
+Hoy es {hoy.strftime('%d/%m/%Y')}. Usa esta fecha como referencia para \
+completar años que falten -- NUNCA un año de tu entrenamiento ni uno \
+inventado (ver regla de "fecha_entrega" más abajo).
 
 Se te va a mostrar una foto de una nota de pedido YA CONFIRMADA con el \
 cliente (normalmente escrita a mano o en una nota de WhatsApp con el \
 resumen del pedido, colores, fecha de entrega y el anticipo pagado).
 
-Lee la nota con MUCHO cuidado -- revisa cada número dos veces antes de \
-contestar (cantidades, precios, anticipo, total). Estos datos alimentan \
-directamente lo que se fabrica y se cobra, así que un error aquí es un \
-error real en el negocio, no un detalle menor.
+Lee la nota con MUCHO cuidado -- revisa cada número y cada letra dos veces \
+antes de contestar (cantidades, precios, anticipo, total, folio). Estos \
+datos alimentan directamente lo que se fabrica, se cobra, y a quién se le \
+paga de comisión, así que un error aquí es un error real en el negocio, \
+no un detalle menor.
 
 Tu trabajo es leer la nota y devolver ÚNICAMENTE un JSON con esta forma \
 exacta (sin texto extra, sin explicaciones):
 
-{
+{{
+  "folio": "el folio o número de nota tal como está escrito (ej. D-142, DE-014, K-023), o null si no aparece",
   "cliente": "nombre del cliente o null si no aparece",
   "telefono": "teléfono o null",
   "municipio": "municipio/ciudad de entrega o null",
-  "fecha_entrega": "fecha en formato DD/MM/AAAA si se puede deducir el año, si no como aparece en la nota, o null",
+  "fecha_entrega": "fecha de entrega en formato DD/MM/AAAA. Si la nota indica día y mes pero NO el año, completa con el año actual ({hoy.year}) -- nunca otro año. Si de plano no hay fecha legible, entonces sí null.",
   "tipo_entrega": "uno de: domicilio, local, punto_de_entrega -- o null si no está claro",
   "direccion": "dirección exacta SOLO si aparece escrita en la nota, si no null",
   "productos": [
-    {"producto": "nombre del producto", "cantidad": numero, "colores": "descripción breve de colores/detalles", "precio_unitario": numero_o_null}
+    {{"producto": "nombre del producto", "cantidad": numero, "colores": "descripción breve de colores/detalles", "precio_unitario": numero_o_null}}
   ],
   "anticipo": numero_o_null,
   "total": numero_o_null,
   "notas": "cualquier detalle extra relevante (tarjetita, urgente, etc.) o null",
   "necesita_revision": true_o_false,
   "motivo_revision": "explicación breve y concreta de qué no quedó claro, o null si no necesita revisión"
-}
+}}
 
 Reglas importantes:
+- "folio" determina a quién le corresponde la comisión de esta venta -- léelo letra por letra, con mucho cuidado. Si no lo alcanzas a leer con certeza, ponlo null y NO adivines ni completes un folio a medias.
 - "productos" es SOLO para mercancía física que se fabrica y se entrega (ositos, jaboncitos, abanicos, dominós, etc.). El cobro de envío a domicilio y el cargo por pedido urgente NO son productos -- nunca los pongas como un renglón de "productos", aunque la nota los liste junto a los productos. Van reflejados nada más en el "total" y, si quieres anotarlos, en "notas" (ej. "incluye $100 de envío a domicilio", "es urgente").
 - Si un dato no aparece claramente en la nota, pon null (o lista vacía para productos) -- NO inventes ni adivines.
 - "cantidad" y los montos deben ser números (sin signo de $ ni comas), nunca texto.
-- Marca "necesita_revision": true si ocurre CUALQUIERA de estas cosas: falta el nombre del cliente, no hay ningún producto legible, algún producto no tiene cantidad clara, falta la fecha de entrega, la letra o la foto están borrosas en alguna parte importante, el total no cuadra aproximadamente con la suma de los productos (déjale margen por envío/redondeo), o simplemente no estás seguro de algo relevante.
-- Si TODOS los datos esenciales (cliente, al menos un producto con cantidad, fecha de entrega, y montos) se leyeron claros y consistentes, marca "necesita_revision": false.
+- Marca "necesita_revision": true si ocurre CUALQUIERA de estas cosas: falta el folio o no se alcanza a leer con certeza, falta el nombre del cliente, no hay ningún producto legible, algún producto no tiene cantidad clara, falta la fecha de entrega, la letra o la foto están borrosas en alguna parte importante, el total no cuadra aproximadamente con la suma de los productos (déjale margen por envío/redondeo), o simplemente no estás seguro de algo relevante.
+- Si TODOS los datos esenciales (folio, cliente, al menos un producto con cantidad, fecha de entrega, y montos) se leyeron claros y consistentes, marca "necesita_revision": false.
 - Ante la duda, marca necesita_revision: true -- es preferible que un humano la revise de más a que se guarde un dato incorrecto.
 """
 
@@ -723,7 +799,7 @@ def _extraer_datos_nota(imagen_bytes, imagen_mime):
     r = client.chat.completions.create(
         model=MODELO,
         messages=[
-            {"role": "system", "content": PROMPT_EXTRACCION},
+            {"role": "system", "content": _prompt_extraccion()},
             {
                 "role": "user",
                 "content": [
@@ -752,6 +828,17 @@ def _revisar_calidad(datos):
         return True, (datos.get("motivo_revision") or "La IA marcó que algo no quedó claro en la nota.")
 
     motivos = []
+    # 🔧 (24 ago 2026, pedido de Israel: comisiones por folio) Si el folio
+    # no se leyó o no coincide con ningún prefijo conocido, la nota se
+    # queda sin dueña de comisión -- nunca se le atribuye por default a
+    # quien la subió. Se marca para revisión, igual que cualquier otro
+    # dato esencial faltante.
+    folio = datos.get("folio")
+    if not folio or not str(folio).strip():
+        motivos.append("falta el folio (necesario para saber a quién le corresponde la comisión)")
+    elif not vendedora_por_folio(str(folio)):
+        motivos.append(f"el folio ('{folio}') no coincide con ningún prefijo conocido (DE=Dalia, D=Diana, K=Karo)")
+
     cliente = datos.get("cliente")
     if not cliente or not str(cliente).strip():
         motivos.append("falta el nombre del cliente")
@@ -817,6 +904,7 @@ def _guardar_pedido_desde_datos(datos, foto_bytes, subido_por=None, necesita_rev
     data = {
         "fecha_captura": database.ahora_negocio().isoformat(timespec="seconds"),
         "subido_por": subido_por,
+        "folio": _texto_o_none(datos.get("folio")),
         "cliente": _texto_o_none(datos.get("cliente")),
         "telefono": _texto_o_none(datos.get("telefono")),
         "municipio": _texto_o_none(datos.get("municipio")),
@@ -937,7 +1025,11 @@ def pedido_detalle(pedido_id):
     if not pedido:
         flash("Ese pedido ya no existe.")
         return redirect(url_for("dashboard"))
-    return render_template("pedido_detalle.html", p=pedido)
+    vendedora_folio = vendedora_por_folio(pedido.get("folio"))
+    return render_template(
+        "pedido_detalle.html", p=pedido,
+        nombre_vendedora_folio=NOMBRES_DISPLAY.get(vendedora_folio) if vendedora_folio else None,
+    )
 
 
 @app.route("/pedido/<int:pedido_id>/editar", methods=["GET", "POST"])
@@ -962,6 +1054,7 @@ def pedido_editar(pedido_id):
         anticipo = pedido.get("anticipo") or 0
         total = pedido.get("total") or 0
     data = {
+        "folio": (request.form.get("folio") or "").strip() or None,
         "cliente": (request.form.get("cliente") or "").strip() or None,
         "telefono": (request.form.get("telefono") or "").strip() or None,
         "municipio": (request.form.get("municipio") or "").strip() or None,
@@ -983,6 +1076,20 @@ def pedido_eliminar(pedido_id):
     database.eliminar_pedido(pedido_id)
     flash("Pedido eliminado.")
     return redirect(url_for("dashboard"))
+
+
+@app.route("/pedidos/eliminar_varios", methods=["POST"])
+def pedidos_eliminar_varios():
+    ids = request.form.getlist("pedido_id")
+    n = database.eliminar_pedidos(ids)
+    if n:
+        flash(f"{n} pedido(s) eliminado(s).")
+    else:
+        flash("No se eliminó ningún pedido (¿no seleccionaste ninguno?).")
+    volver = request.form.get("volver") or ""
+    if not volver.startswith("/"):
+        volver = url_for("dashboard")
+    return redirect(volver)
 
 
 @app.route("/fotos/<path:nombre_archivo>")

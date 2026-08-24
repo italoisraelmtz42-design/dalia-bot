@@ -479,6 +479,21 @@ def _es_producto_real(nombre_producto):
     return not any(palabra in nombre for palabra in PALABRAS_NO_PRODUCTO)
 
 
+def _total_piezas_y_comision(pedidos_de_vendedor, monto_por_producto):
+    """Suma las piezas 'reales' (ver _es_producto_real) de una lista de
+    pedidos ya filtrada a una sola vendedora, y calcula la comisión."""
+    total_piezas = 0.0
+    for p in pedidos_de_vendedor:
+        for prod in (p.get("productos") or []):
+            if not _es_producto_real(prod.get("producto")):
+                continue
+            try:
+                total_piezas += float(prod.get("cantidad") or 0)
+            except (TypeError, ValueError):
+                pass
+    return total_piezas, round(total_piezas * monto_por_producto, 2)
+
+
 @app.route("/comisiones")
 def comisiones():
     usuario = session.get("usuario")
@@ -553,16 +568,27 @@ def comisiones():
     pedidos = [p for p in todos_en_rango if vendedora_por_folio(p.get("folio")) == vendedor]
     sin_folio_reconocido = sum(1 for p in todos_en_rango if vendedora_por_folio(p.get("folio")) is None)
 
-    total_piezas = 0.0
-    for p in pedidos:
-        for prod in (p.get("productos") or []):
-            if not _es_producto_real(prod.get("producto")):
-                continue
-            try:
-                total_piezas += float(prod.get("cantidad") or 0)
-            except (TypeError, ValueError):
-                pass
-    total_comision = round(total_piezas * monto_por_producto, 2)
+    total_piezas, total_comision = _total_piezas_y_comision(pedidos, monto_por_producto)
+
+    # 🔧 (24 ago 2026, pedido de Israel: "debe aparecer, comisiones dalia,
+    # diana y karo") Quien puede ver comisiones de todas (Israel, o
+    # cualquiera que no sea ella misma una vendedora con comisión) ahora ve
+    # de un vistazo el total de las 3 -- ya no tiene que ir cambiando de
+    # una en una con el selector para comparar. Diana (o quien tenga su
+    # propia comisión) sigue viendo solo la suya, como ya era el caso --
+    # eso no cambió, es privacidad entre vendedoras.
+    resumen_vendedores = []
+    if usuario not in VENDEDORES_CON_COMISION:
+        for v, monto_v in VENDEDORES_CON_COMISION.items():
+            pedidos_v = [p for p in todos_en_rango if vendedora_por_folio(p.get("folio")) == v]
+            piezas_v, comision_v = _total_piezas_y_comision(pedidos_v, monto_v)
+            resumen_vendedores.append({
+                "vendedor": v,
+                "nombre": NOMBRES_DISPLAY.get(v, v.title()),
+                "piezas": piezas_v,
+                "comision": comision_v,
+                "activo": v == vendedor,
+            })
 
     return render_template(
         "comisiones.html", pedidos=pedidos, periodo=periodo, titulo_periodo=titulo_periodo,
@@ -570,6 +596,7 @@ def comisiones():
         monto_por_producto=monto_por_producto, total_piezas=total_piezas, total_comision=total_comision,
         es_propia=(usuario == vendedor),
         otros_vendedores=[v for v in VENDEDORES_CON_COMISION if v != vendedor] if usuario not in VENDEDORES_CON_COMISION else [],
+        resumen_vendedores=resumen_vendedores,
         nav_anterior=nav_anterior, nav_siguiente=nav_siguiente, nav_actual=nav_actual, es_actual=es_actual,
         sin_folio_reconocido=sin_folio_reconocido,
     )

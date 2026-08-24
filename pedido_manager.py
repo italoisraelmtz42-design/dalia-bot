@@ -32,6 +32,46 @@ def _folio() -> str:
     return f"PD-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
 
 
+def _resolver_monto_anticipo(borrador: Dict, telefono: str, contexto: str) -> tuple:
+    """Determina el monto del anticipo a guardar en `pagos`.
+
+    Antes este valor caía en un default silencioso de $50 cuando
+    `monto_anticipo` no se había capturado (p. ej. por una falla de BD
+    que perdió el dato antes de confirmar el pedido). Eso generó que se
+    registraran y notificaran anticipos de $50 cuando en realidad la
+    clienta había pagado otra cantidad (caso real: pago de $500
+    registrado como $50). Ahora, si el monto no está capturado, NO se
+    inventa un valor: se deja en 0 y se marca el comprobante con una
+    alerta visible para que Dalia/Diana lo verifiquen manualmente antes
+    de dar el pedido por confirmado.
+    """
+    monto_raw = borrador.get("monto_anticipo")
+    comprobante = borrador.get("comprobante")
+    if monto_raw is None or str(monto_raw).strip() == "":
+        logger_pedidos.error(
+            f"[ALERTA anticipo] monto_anticipo NO capturado en borrador "
+            f"(tel={telefono}, contexto={contexto}). Se registra monto=0 "
+            f"en vez de asumir un valor por defecto. Verificar manualmente "
+            f"con la clienta/comprobante bancario."
+        )
+        monto = 0.0
+        alerta = "⚠️ MONTO NO CAPTURADO AUTOMÁTICAMENTE - verificar manualmente con la clienta/banco"
+        comprobante = f"{alerta} | comprobante original: {comprobante}" if comprobante else alerta
+    else:
+        try:
+            monto = float(monto_raw)
+        except (TypeError, ValueError):
+            logger_pedidos.error(
+                f"[ALERTA anticipo] monto_anticipo con valor no numérico "
+                f"({monto_raw!r}) en borrador (tel={telefono}, contexto={contexto}). "
+                f"Se registra monto=0 en vez de asumir un valor por defecto."
+            )
+            monto = 0.0
+            alerta = f"⚠️ MONTO_ANTICIPO INVÁLIDO ({monto_raw!r}) - verificar manualmente"
+            comprobante = f"{alerta} | comprobante original: {comprobante}" if comprobante else alerta
+    return monto, comprobante
+
+
 def _row_to_item(row) -> ItemData:
     return ItemData(
         id=row["id"],
@@ -436,7 +476,9 @@ def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: Dict, 
             )
 
             # ---- pago anticipo ----
-            monto = float(borrador.get("monto_anticipo") or 50)
+            monto, comprobante = _resolver_monto_anticipo(
+                borrador, telefono, "crear_pedido_desde_borrador"
+            )
             conn.execute(
                 """INSERT INTO pagos
                    (pedido_id, tipo, monto, metodo, comprobante, confirmado)
@@ -446,7 +488,7 @@ def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: Dict, 
                     "anticipo",
                     monto,
                     borrador.get("metodo_pago") or "transferencia",
-                    borrador.get("comprobante"),
+                    comprobante,
                 ),
             )
 
@@ -507,7 +549,9 @@ def confirmar_anticipo_pedido_existente(pedido_id: int, telefono: str, borrador:
                     pedido_id,
                 ),
             )
-            monto = float(borrador.get("monto_anticipo") or 50)
+            monto, comprobante = _resolver_monto_anticipo(
+                borrador, telefono, "confirmar_anticipo_pedido_existente"
+            )
             conn.execute(
                 """INSERT INTO pagos
                    (pedido_id, tipo, monto, metodo, comprobante, confirmado)
@@ -517,7 +561,7 @@ def confirmar_anticipo_pedido_existente(pedido_id: int, telefono: str, borrador:
                     "anticipo",
                     monto,
                     borrador.get("metodo_pago") or "transferencia",
-                    borrador.get("comprobante"),
+                    comprobante,
                 ),
             )
             conn.execute(

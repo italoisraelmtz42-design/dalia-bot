@@ -674,6 +674,18 @@ def _normalizar_texto(txt):
     return txt
 
 
+# 🐻 (24 ago 2026) "oso" NO es substring de "osito"/"ositos" (o-s-i-t-o
+# no trae "o-s-o" seguido) -- un bug real que se coló al escribir el
+# cajón de sastre de abajo con `"oso" in t` a secas, y que en producción
+# dejaba "Osito de toalla con jabón" separado de "Osito de toalla" en
+# vez de colapsarlos como pidió Israel. _es_osito() cubre el diminutivo
+# ("osito"/"ositos", lo que casi siempre escriben las vendedoras) y
+# también "oso"/"osos" como palabra completa (para no atrapar "oso" como
+# parte de otra palabra que no tenga nada que ver).
+def _es_osito(t):
+    return "osito" in t or "ositos" in t or bool(re.search(r"\boso(s)?\b", t))
+
+
 CATALOGO_PRODUCTOS = [
     # (slug_imagen, nombre_canonico, precio_referencia, funcion_de_match)
     ("osito-de-toalla-afelpada", "Osito de toalla afelpada", 18.00, lambda t: "afelpad" in t),
@@ -701,11 +713,11 @@ CATALOGO_PRODUCTOS = [
         lambda t: "espejo" in t or "espejito" in t),
     ("llavero-osito-peluche", "Llavero Osito Peluche", 18.00,
         lambda t: "llavero" in t or "peluche" in t),
-    ("rosa-de-toalla", "Rosa de toalla", 15.00, lambda t: "rosa" in t and "oso" not in t),
+    ("rosa-de-toalla", "Rosa de toalla", 15.00, lambda t: "rosa" in t and not _es_osito(t)),
     # 🔧 Cajón de sastre: CUALQUIER variante de "osito"/"oso" de toalla
     # (color, moño, con o sin jabón, inicial) que no haya matcheado nada
     # más arriba cae aquí, como UN solo producto -- ver nota de arriba.
-    ("osito-de-toalla", "Osito de toalla", 12.00, lambda t: "oso" in t),
+    ("osito-de-toalla", "Osito de toalla", 12.00, lambda t: _es_osito(t)),
 ]
 
 

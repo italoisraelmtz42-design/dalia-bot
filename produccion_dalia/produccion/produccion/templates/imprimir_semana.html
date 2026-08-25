@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pedidos de la próxima semana — Producción Dalia</title>
+<title>{{ titulo }} — Producción Dalia</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -35,7 +35,7 @@
 </style>
 </head>
 <body>
-  <h1>🖨️ Pedidos a entregar la próxima semana</h1>
+  <h1>🖨️ {{ titulo }}</h1>
   <p class="sub">Del {{ ini.strftime('%d/%m/%Y') }} al {{ fin.strftime('%d/%m/%Y') }} — generado el {{ generado.strftime('%d/%m/%Y %H:%M') }}</p>
 
   <div class="barra-acciones">

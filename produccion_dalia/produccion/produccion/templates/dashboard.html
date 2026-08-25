@@ -25,7 +25,8 @@
   <a href="{{ url_for('dashboard', vista='calendario') }}" class="{{ 'activo' if vista=='calendario' else '' }}">📅 Calendario</a>
 </nav>
 
-<p style="margin:0 0 14px 0;">
+<p style="margin:0 0 14px 0;display:flex;gap:14px;flex-wrap:wrap;">
+  <a class="link-suave" href="{{ url_for('imprimir_semana_actual') }}" target="_blank">🖨️ Imprimir lista de esta semana</a>
   <a class="link-suave" href="{{ url_for('imprimir_semana_proxima') }}" target="_blank">🖨️ Imprimir lista de la próxima semana</a>
 </p>
 

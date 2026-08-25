@@ -864,17 +864,17 @@ def indicadores():
 
 
 # ----------------------------------------------------------------------
-# Lista imprimible de la semana siguiente (23 ago 2026, pedido de Israel:
-# poder imprimir el viernes/sábado todo lo que se entrega la próxima
-# semana, con un resumen de cuánto fabricar de cada producto)
+# Lista imprimible de una semana (23 ago 2026, pedido de Israel: poder
+# imprimir el viernes/sábado todo lo que se entrega la próxima semana,
+# con un resumen de cuánto fabricar de cada producto; 25 ago 2026,
+# pedido de Israel: "ahora quiero que se pueda imprimir la semana
+# actual de pedidos" -- misma lista, pero para lo que ya se debe estar
+# fabricando/entregando ESTA semana, no la que sigue). Las dos vistas
+# comparten toda la lógica -- solo cambia el rango de fechas y el
+# título -- así que se factorizó en un solo helper para no duplicar
+# nada (y que un futuro ajuste al reporte aplique a ambas por igual).
 # ----------------------------------------------------------------------
-@app.route("/imprimir/semana-proxima")
-def imprimir_semana_proxima():
-    hoy = _hoy()
-    ini_semana_actual, _ = _rango_semana(hoy)
-    ini = ini_semana_actual + datetime.timedelta(days=7)
-    fin = ini + datetime.timedelta(days=6)
-
+def _imprimir_semana(ini, fin, titulo):
     pedidos = database.listar_pedidos(fecha_entrega_desde=ini.isoformat(), fecha_entrega_hasta=fin.isoformat())
 
     resumen = {}
@@ -892,8 +892,22 @@ def imprimir_semana_proxima():
 
     return render_template(
         "imprimir_semana.html", pedidos=pedidos, resumen=resumen_ordenado,
-        ini=ini, fin=fin, generado=database.ahora_negocio(),
+        ini=ini, fin=fin, generado=database.ahora_negocio(), titulo=titulo,
     )
+
+
+@app.route("/imprimir/semana-actual")
+def imprimir_semana_actual():
+    ini, fin = _rango_semana(_hoy())
+    return _imprimir_semana(ini, fin, "Pedidos a entregar esta semana")
+
+
+@app.route("/imprimir/semana-proxima")
+def imprimir_semana_proxima():
+    ini_semana_actual, _ = _rango_semana(_hoy())
+    ini = ini_semana_actual + datetime.timedelta(days=7)
+    fin = ini + datetime.timedelta(days=6)
+    return _imprimir_semana(ini, fin, "Pedidos a entregar la próxima semana")
 
 
 # ----------------------------------------------------------------------

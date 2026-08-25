@@ -21,6 +21,7 @@ import json
 import os
 import re
 import uuid
+from urllib.parse import quote
 
 from flask import (
     Flask, flash, redirect, render_template, request, send_from_directory,
@@ -1306,6 +1307,17 @@ def _leer_productos_del_form(form):
 # ----------------------------------------------------------------------
 # Detalle / edición de un pedido
 # ----------------------------------------------------------------------
+def _regresar_seguro(valor):
+    """🔧 (25 ago 2026) Valida que el "regresar" que llega por query/form
+    sea una ruta interna (empieza con "/" y no con "//", que en un
+    navegador se interpreta como otro dominio) antes de usarla como
+    destino de un redirect -- así nadie puede mandar a alguien a un
+    sitio externo con un link armado a mano."""
+    if valor and valor.startswith("/") and not valor.startswith("//"):
+        return valor
+    return None
+
+
 @app.route("/pedido/<int:pedido_id>")
 def pedido_detalle(pedido_id):
     pedido = database.obtener_pedido(pedido_id)
@@ -1313,8 +1325,14 @@ def pedido_detalle(pedido_id):
         flash("Ese pedido ya no existe.")
         return redirect(url_for("dashboard"))
     vendedora_folio = vendedora_por_folio(pedido.get("folio"))
+    # 🔧 (25 ago 2026) "regresar" se valida AQUÍ (server-side) y no en el
+    # template -- si el template leyera request.args.get('regresar') tal
+    # cual, alguien podría armar a mano un link con
+    # ?regresar=https://sitio-malo.com y el botón "Volver" lo mandaría
+    # ahí derechito. Ya validado, se le pasa al template listo para usar.
+    regresar = _regresar_seguro(request.args.get("regresar"))
     return render_template(
-        "pedido_detalle.html", p=pedido,
+        "pedido_detalle.html", p=pedido, regresar=regresar,
         nombre_vendedora_folio=NOMBRES_DISPLAY.get(vendedora_folio) if vendedora_folio else None,
     )
 
@@ -1327,7 +1345,10 @@ def pedido_editar(pedido_id):
         return redirect(url_for("dashboard"))
 
     if request.method == "GET":
-        return render_template("pedido_editar.html", p=pedido, tipos_entrega=TIPOS_ENTREGA_VALIDOS)
+        regresar = _regresar_seguro(request.args.get("regresar"))
+        return render_template(
+            "pedido_editar.html", p=pedido, tipos_entrega=TIPOS_ENTREGA_VALIDOS, regresar=regresar,
+        )
 
     productos = _leer_productos_del_form(request.form)
     # 🔧 (23 ago 2026) A Diana no le corresponde tocar cifras de dinero --
@@ -1355,14 +1376,28 @@ def pedido_editar(pedido_id):
     }
     database.actualizar_pedido(pedido_id, data)
     flash("Pedido actualizado.")
-    return redirect(url_for("pedido_detalle", pedido_id=pedido_id))
+    destino = url_for("pedido_detalle", pedido_id=pedido_id)
+    regresar = _regresar_seguro(request.args.get("regresar"))
+    if regresar:
+        # 🔧 (25 ago 2026) OJO: url_for(..., regresar=regresar) NO sirve
+        # aquí -- no escapa el "?" que trae adentro el propio "regresar"
+        # (es una URL completa con su propia query, ej.
+        # "/dashboard?vista=mes"), así que el resultado queda con DOS "?"
+        # y el parámetro se corta a la mitad. Por eso se arma a mano con
+        # quote(), igual que en los templates con el filtro |urlencode.
+        destino += "?regresar=" + quote(regresar, safe="")
+    return redirect(destino)
 
 
 @app.route("/pedido/<int:pedido_id>/eliminar", methods=["POST"])
 def pedido_eliminar(pedido_id):
+    # 🔧 (25 ago 2026) Si al eliminar venías de una pestaña/mes/búsqueda
+    # específicos (guardado en el campo oculto "regresar" del formulario),
+    # regresa ahí -- si no, al dashboard normal.
+    destino = _regresar_seguro(request.form.get("regresar")) or url_for("dashboard")
     database.eliminar_pedido(pedido_id)
     flash("Pedido eliminado.")
-    return redirect(url_for("dashboard"))
+    return redirect(destino)
 
 
 @app.route("/pedidos/eliminar_varios", methods=["POST"])

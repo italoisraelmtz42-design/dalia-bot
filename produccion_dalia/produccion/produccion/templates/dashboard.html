@@ -158,7 +158,7 @@
       <button type="submit" class="verde">Marcar entregado</button>
     </form>
     {% endif %}
-    <a class="btn" href="{{ url_for('pedido_detalle', pedido_id=p.id) }}">Ver detalle</a>
+    <a class="btn" href="{{ url_for('pedido_detalle', pedido_id=p.id) }}?regresar={{ request.full_path|urlencode }}">Ver detalle</a>
   </div>
 </div>
 {% endfor %}

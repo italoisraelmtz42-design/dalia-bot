@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block titulo %}Editar pedido — Producción Dalia{% endblock %}
 {% block contenido %}
-<a class="link-suave" href="{{ url_for('pedido_detalle', pedido_id=p.id) }}">← Volver</a>
+{# "regresar" ya viene validado desde pedido_editar() en app.py -- ver
+   la misma nota en pedido_detalle.html sobre por qué no se usa
+   request.args directo aquí. #}
+<a class="link-suave" href="{{ url_for('pedido_detalle', pedido_id=p.id) }}{% if regresar %}?regresar={{ regresar|urlencode }}{% endif %}">← Volver</a>
 <h2>✏️ Editar pedido</h2>
 
 <form method="post">

@@ -1,7 +1,18 @@
 {% extends "base.html" %}
 {% block titulo %}{{ p.cliente or 'Pedido' }} — Producción Dalia{% endblock %}
 {% block contenido %}
-<a class="link-suave" href="{{ url_for('dashboard') }}">← Volver</a>
+{# 🔧 (25 ago 2026, reportado por Israel: "si estoy viendo la pestaña de
+   MES y veo una nota, cuando le doy a REGRESAR me manda hasta HOY, no
+   en donde me quedé") Antes "Volver" siempre mandaba al dashboard.html
+   por default (pestaña Hoy), sin importar desde dónde habías entrado.
+   Ahora, si se llegó aquí con ?regresar=... (dashboard/comisiones/
+   finanzas ya lo mandan con la URL exacta de donde venías, pestaña y
+   mes incluidos), se regresa ahí tal cual; si no (por ejemplo, entraste
+   directo a este link), cae al dashboard normal. "regresar" ya viene
+   validado desde la vista (pedido_detalle en app.py) -- por eso aquí se
+   usa tal cual y NO se lee request.args directo (evita que alguien arme
+   a mano un link con ?regresar=https://sitio-malo.com). #}
+<a class="link-suave" href="{{ regresar or url_for('dashboard') }}">← Volver</a>
 <h2 style="margin-bottom:2px;">{{ p.cliente or 'Cliente sin nombre' }}</h2>
 <p class="muted" style="margin-top:0;">Capturado el {{ p.fecha_captura[:16].replace('T', ' ') if p.fecha_captura else '' }}{% if p.subido_por %} por {{ p.subido_por }}{% endif %}</p>
 
@@ -60,8 +71,9 @@
     </span>
   </div>
   <div class="row-botones">
-    <a class="btn" href="{{ url_for('pedido_editar', pedido_id=p.id) }}">✏️ Editar</a>
+    <a class="btn" href="{{ url_for('pedido_editar', pedido_id=p.id) }}{% if regresar %}?regresar={{ regresar|urlencode }}{% endif %}">✏️ Editar</a>
     <form class="inline" method="post" action="{{ url_for('pedido_eliminar', pedido_id=p.id) }}" onsubmit="return confirm('¿Seguro que quieres eliminar este pedido? No se puede deshacer.');">
+      <input type="hidden" name="regresar" value="{{ regresar or '' }}">
       <button type="submit" class="rojo">🗑️ Eliminar</button>
     </form>
   </div>

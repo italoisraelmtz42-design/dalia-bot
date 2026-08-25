@@ -70,7 +70,7 @@
       {{ prod.cantidad }} x {{ prod.producto }}{% if not loop.last %}, {% endif %}
     {% endfor %}
   </div>
-  <a class="link-suave" href="{{ url_for('pedido_detalle', pedido_id=p.id) }}">Ver detalle →</a>
+  <a class="link-suave" href="{{ url_for('pedido_detalle', pedido_id=p.id) }}?regresar={{ request.full_path|urlencode }}">Ver detalle →</a>
 </div>
 {% endfor %}
 {% endblock %}

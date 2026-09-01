@@ -104,8 +104,8 @@
     <button type="button" class="btn" style="margin-top:10px;" onclick="agregarProducto()">+ Agregar otro producto</button>
   </div>
 
+  {% if puede_ver_finanzas %}
   <div class="card">
-    {% if puede_ver_finanzas %}
     <label for="anticipo">Anticipo pagado</label>
     <input type="number" step="0.01" id="anticipo" name="anticipo" value="0">
 
@@ -120,19 +120,19 @@
     <p class="muted" style="margin-top:2px;font-size:0.85rem;">
       Se suma solo: cantidad × precio de cada producto, más el envío si aplica -- no se escribe aquí directo.
     </p>
-    {% else %}
-    {# 🔧 (30 ago 2026) Ocultos pero NO quitados -- si se quitaran,
-       recalcularTotal() ya no tendría dónde dejar el total calculado.
-       El servidor de todos modos ignora lo que traigan estos dos campos
-       si quien captura no puede ver finanzas (ver capturar() en
-       app.py) -- viajan solo para que el script no truene. #}
-    <input type="hidden" id="anticipo" name="anticipo" value="0">
-    <input type="hidden" id="total" name="total" value="0">
-    {% endif %}
-
-    <label for="notas">Notas</label>
-    <textarea id="notas" name="notas" placeholder="Ej. incluye $100 de envío, tarjetita personalizada, urgente..."></textarea>
   </div>
+  {% else %}
+  {# 🔧 (30 ago 2026) Ocultos pero NO quitados -- si se quitaran,
+     recalcularTotal() ya no tendría dónde dejar el total calculado. El
+     servidor de todos modos ignora lo que traigan estos dos campos si
+     quien captura no puede ver finanzas (ver capturar() en app.py) --
+     viajan solo para que el script no truene. Van SIN envolver en una
+     "card" visual porque, para quien no ve finanzas, aquí no hay nada
+     que mostrar -- una card vacía se vería como un recuadro sin
+     contenido. #}
+  <input type="hidden" id="anticipo" name="anticipo" value="0">
+  <input type="hidden" id="total" name="total" value="0">
+  {% endif %}
 
   <div class="card">
     <label for="notas_importantes">⚠ Notas importantes para producción</label>
@@ -280,6 +280,7 @@
     if (select.value === '__otro__') {
       productoInput.value = '';
       productoInput.focus();
+      select.value = '';
       return;
     }
     productoInput.value = select.value;
@@ -289,6 +290,12 @@
       precioInput.value = parseFloat(precio).toFixed(2);
       precioInput.dispatchEvent(new Event('input', { bubbles: true }));
     }
+    // 🔧 (1 sep 2026, pedido de Israel: "se duplica lo escrito en la parte
+    // inmediata inferior") El <select> se regresa a su opción neutra justo
+    // después de aplicar la elección -- si se quedaba mostrando
+    // "Nombre — $Precio" arriba del campo de texto ya lleno con "Nombre",
+    // se leía como si el producto estuviera escrito dos veces.
+    select.value = '';
   }
 
   // La fila inicial (producto_0) se manda vacía desde el servidor -- se

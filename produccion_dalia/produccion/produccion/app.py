@@ -162,6 +162,60 @@ NOTA_TARJETITA_TEXTO = "(La tarjetita personalizada se imprime hasta que el clie
 # dirección de un domicilio.
 PUNTOS_ENTREGA_FIJOS = ["Metro Mitras", "MERCO Pueblo Nuevo", "Soriana Fresnos", "KFC Sendero Escobedo"]
 
+# 🔧 (1 sep 2026, pedido de Israel: "cuando quiera anotar un producto, que
+# se despliegue esa lista, ya con precios, y se carguen los precios en
+# automático") Catálogo de precios para el selector de /capturar -- cada
+# categoría es (nombre_categoria, [(nombre_producto, precio_base, nota_o_None), ...]).
+# "nota" son las variantes o descuentos por volumen que Israel compartió
+# (ej. "desde 50 pzas: $16.00", "cambio de moño: +$2.00") -- se muestran
+# junto al precio en el <select> nada más para que se vean, pero el
+# precio que se autocompleta SIEMPRE es el precio base (el de una sola
+# pieza, sin descuento); si aplica un descuento por volumen o un cambio,
+# se ajusta a mano en el campo de precio, igual que cualquier otro ajuste
+# manual -- no hay lógica de "si cantidad >= X, cambia el precio solo".
+# "Encendedor"/"Destapador" traían dos precios (con/sin bolsa) -- se
+# separaron en dos renglones del catálogo en vez de meter esa variante
+# como nota, porque ahí SÍ es un precio base distinto, no un descuento.
+CATALOGO_PRECIOS_CAPTURA = [
+    ("Ositos", [
+        ("Osito con jaboncito", 12.00, None),
+        ("Osito sencillo (sin jabón)", 12.00, None),
+        ("Osito doble pie", 14.00, None),
+        ("Osito inicial chica", 15.00, None),
+        ("Osito doble inicial chica", 19.00, None),
+        ("Osito inicial grande", 22.00, None),
+        ("Osito peluche llavero", 18.00, "desde 50 pzas: $16.00"),
+        ("Osito toalla afelpada", 18.00, "cambio de moño: +$2.00"),
+        ("Kit osito + oración + velita", 21.00, None),
+    ]),
+    ("Animales de toalla", [
+        ("Mariposa", 14.50, None),
+        ("Elefante", 14.00, None),
+        ("Unicornio", 14.00, None),
+        ("Jirafa", 16.00, None),
+        ("Caballo", 15.00, None),
+        ("Perrito", 13.00, None),
+        ("León", 14.00, None),
+        ("Conejo", 13.50, None),
+        ("Búho", 14.00, None),
+        ("Búho con birrete", 14.00, None),
+    ]),
+    ("Velas", [
+        ("Vela toalla chica", 12.00, None),
+        ("Vela toalla grande", 16.50, None),
+    ]),
+    ("Otros", [
+        ("Oración con decenario", 15.00, None),
+        ("Oración con velita", 10.00, None),
+        ("Abanico madera", 23.00, "desde 100 pzas: $21.00"),
+        ("Dominó", 35.00, "desde 50 pzas: $30.00"),
+        ("Encendedor (sin bolsa)", 10.00, None),
+        ("Encendedor (con bolsa)", 11.00, None),
+        ("Destapador (sin bolsa)", 15.50, None),
+        ("Destapador (con bolsa)", 16.50, None),
+    ]),
+]
+
 # 🔧 (29 ago 2026, pedido de Israel: "cuando el pedido es de Diana la nota
 # va en rosa, de Dalia en amarillo, de Karo en morado -- y el teléfono de
 # contacto también cambia según quién es") Mismo folio que ya decide la
@@ -1365,7 +1419,7 @@ def capturar():
         return render_template(
             "capturar.html", tipos_entrega=TIPOS_ENTREGA_VALIDOS,
             municipios_envio=PRECIOS_ENVIO_MUNICIPIO, precio_envio_dhl=PRECIO_ENVIO_DHL,
-            puntos_entrega=PUNTOS_ENTREGA_FIJOS,
+            puntos_entrega=PUNTOS_ENTREGA_FIJOS, catalogo_precios=CATALOGO_PRECIOS_CAPTURA,
         )
 
     productos = _leer_productos_del_form(request.form)

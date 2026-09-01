@@ -51,6 +51,15 @@
       {% for prod in p.productos %}
       <div class="producto-fila">
         <label>Producto</label>
+        {# 🔧 (1 sep 2026, pedido de Israel: "si quiero editar después la
+           nota, ya no me aparece en productos toda la lista") Mismo
+           selector de catálogo que ya está en capturar.html -- se llena
+           por JS (opcionesCatalogoHTML()) para no repetir el catálogo en
+           cada fila. Elegir algo de la lista llena el campo de texto de
+           abajo (el que de verdad se guarda); el select vuelve solo a su
+           placeholder después de elegir, para no dejar el nombre
+           duplicado (una vez en el select, otra vez en el campo). #}
+        <select class="selector-catalogo" onchange="aplicarCatalogo(this)"></select>
         <input type="text" name="producto_{{ loop.index0 }}" value="{{ prod.producto or '' }}">
         <label>Cantidad</label>
         <input type="number" name="cantidad_{{ loop.index0 }}" value="{{ prod.cantidad or '' }}">
@@ -77,15 +86,20 @@
     <label for="anticipo">Anticipo pagado</label>
     <input type="number" step="0.01" id="anticipo" name="anticipo" value="{{ p.anticipo or 0 }}">
 
-    <label for="total">Total del pedido</label>
-    <input type="number" step="0.01" id="total" name="total" value="{{ p.total or 0 }}">
+    {# 🔧 (1 sep 2026, pedido de Israel: "la suma después de elegir un
+       producto y poner las piezas no se realiza en automático") Mismo
+       cambio que ya se hizo en capturar.html -- el total ya no se
+       escribe a mano, se recalcula solo: cantidad × precio de cada
+       producto, más el envío que ya traía guardado el pedido (ese no se
+       toca aquí, ver la nota de actualizar_pedido() en database.py). #}
+    <label for="total">Total del pedido (se calcula solo)</label>
+    <input type="number" step="0.01" id="total" name="total" value="{{ p.total or 0 }}" readonly
+           style="background:#f0f0f0;color:#555;">
+    <p class="muted" style="margin-top:2px;font-size:0.85rem;">
+      Se suma solo: cantidad × precio de cada producto{% if p.envio_costo %}, más el envío (${{ '%.2f'|format(p.envio_costo) }}){% endif %} -- no se escribe aquí directo.
+    </p>
   </div>
   {% endif %}
-
-  <div class="card">
-    <label for="notas">Notas</label>
-    <textarea id="notas" name="notas">{{ p.notas or '' }}</textarea>
-  </div>
 
   <div class="card">
     <label for="notas_importantes">⚠ Notas importantes para producción</label>
@@ -98,6 +112,13 @@
 
 <script>
   const PUEDE_VER_FINANZAS = {{ 'true' if puede_ver_finanzas else 'false' }};
+  // 🔧 (1 sep 2026) Mismo catálogo que capturar.html -- ver la nota en
+  // CATALOGO_PRECIOS_CAPTURA en app.py.
+  const CATALOGO_PRECIOS = {{ catalogo_precios|tojson }};
+  // El envío ya quedó fijo desde que se creó el pedido (editar nunca lo
+  // recalcula, ver la nota junto a "Total del pedido" arriba) -- se suma
+  // tal cual, como un monto fijo, al recalcular el total.
+  const ENVIO_COSTO_FIJO = {{ p.envio_costo or 0 }};
 
   // 🔧 (1 sep 2026) Ver la misma nota en capturar.html -- convierte lo que
   // deja el calendario nativo (AAAA-MM-DD) al formato DD/MM/AAAA que usa
@@ -113,6 +134,87 @@
     destino.value = `${dia}/${mes}/${anio}`;
   }
 
+  // 🔧 (1 sep 2026, pedido de Israel) Ver la misma nota en capturar.html.
+  function opcionesCatalogoHTML() {
+    let html = '<option value="">-- Elegir del catálogo --</option>';
+    CATALOGO_PRECIOS.forEach(function (grupo) {
+      const categoria = grupo[0], items = grupo[1];
+      html += `<optgroup label="${categoria}">`;
+      items.forEach(function (item) {
+        const nombre = item[0], precio = item[1], nota = item[2];
+        const nombreEscapado = nombre.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        const etiqueta = nombre + ' — $' + precio.toFixed(2) + (nota ? ' (' + nota + ')' : '');
+        html += `<option value="${nombreEscapado}" data-precio="${precio}">${etiqueta}</option>`;
+      });
+      html += '</optgroup>';
+    });
+    html += '<option value="__otro__">✏️ Otro producto (escribir a mano)</option>';
+    return html;
+  }
+
+  // 🔧 (1 sep 2026, pedido de Israel: "al elegir un producto, se duplica
+  // lo escrito en la parte inmediata inferior") Después de aplicar la
+  // elección, el select regresa a su placeholder -- así el nombre del
+  // producto solo se ve UNA vez (en el campo de texto), no dos (ahí y
+  // en el select que se queda mostrando lo mismo).
+  function aplicarCatalogo(select) {
+    if (!select.value) return;
+    const fila = select.closest('.producto-fila');
+    const productoInput = fila.querySelector('input[name^="producto_"]');
+    if (select.value === '__otro__') {
+      productoInput.value = '';
+      productoInput.focus();
+      select.value = '';
+      return;
+    }
+    productoInput.value = select.value;
+    const precioInput = fila.querySelector('input[name^="precio_"]');
+    if (precioInput && precioInput.type !== 'hidden') {
+      const precio = select.selectedOptions[0].getAttribute('data-precio');
+      precioInput.value = parseFloat(precio).toFixed(2);
+      precioInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    select.value = '';
+  }
+
+  // 🔧 (1 sep 2026, pedido de Israel: "la suma después de elegir un
+  // producto y poner las piezas no se realiza en automático") El total
+  // se recalcula completo cada vez: la suma de cantidad×precio de cada
+  // fila de producto, más el envío fijo que ya traía el pedido.
+  function recalcularTotal() {
+    const totalInput = document.getElementById('total');
+    if (!totalInput) return;
+    let subtotalProductos = 0;
+    document.querySelectorAll('#productos-lista .producto-fila').forEach(function (fila) {
+      const cantidadInput = fila.querySelector('input[name^="cantidad_"]');
+      const precioInput = fila.querySelector('input[name^="precio_"]');
+      const cantidad = cantidadInput ? (parseFloat(cantidadInput.value) || 0) : 0;
+      const precio = precioInput ? (parseFloat(precioInput.value) || 0) : 0;
+      subtotalProductos += cantidad * precio;
+    });
+    totalInput.value = (subtotalProductos + ENVIO_COSTO_FIJO).toFixed(2);
+  }
+
+  // Delegado: cubre tanto las filas que ya traía el pedido como las que
+  // se agreguen después con agregarProducto().
+  const listaProductosEl = document.getElementById('productos-lista');
+  if (listaProductosEl) {
+    listaProductosEl.addEventListener('input', function (e) {
+      const nombre = e.target.name || '';
+      if (nombre.indexOf('cantidad_') === 0 || nombre.indexOf('precio_') === 0) {
+        recalcularTotal();
+      }
+    });
+  }
+
+  // Las filas que ya traía el pedido mandan su <select> vacío desde el
+  // servidor -- se llenan aquí, y también se calcula el total inicial
+  // (por si algo no cuadraba con lo que ya tenía guardado el pedido).
+  document.querySelectorAll('.selector-catalogo').forEach(function (s) {
+    s.innerHTML = opcionesCatalogoHTML();
+  });
+  recalcularTotal();
+
   let contadorProductos = document.querySelectorAll('.producto-fila').length;
   function agregarProducto() {
     const contenedor = document.getElementById('productos-lista');
@@ -124,6 +226,7 @@
       : `<input type="hidden" name="precio_${i}" value="">`;
     div.innerHTML = `
       <label>Producto</label>
+      <select class="selector-catalogo" onchange="aplicarCatalogo(this)">${opcionesCatalogoHTML()}</select>
       <input type="text" name="producto_${i}">
       <label>Cantidad</label>
       <input type="number" name="cantidad_${i}">

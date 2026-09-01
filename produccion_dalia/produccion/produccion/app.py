@@ -140,6 +140,56 @@ if len(_passwords_no_vacias) != len(set(_passwords_no_vacias)):
 MESES_ES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
             "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 DIAS_SEMANA_ES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+DIAS_SEMANA_LARGOS_ES = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+
+# 🔧 (29 ago 2026, pedido de Israel: "necesito una nota idéntica a la de
+# Excel, que se imprima en PDF y se le mande al cliente para que revise
+# sus datos") Texto fijo del pie de la nota -- igual para todos los
+# pedidos, no depende de cada uno. Si cambia el horario del local, el
+# teléfono de contacto, o el texto de las notas de la nota, se edita
+# aquí una sola vez y aplica a todas las notas nuevas que se impriman.
+HORARIO_LOCAL_NOTA = ["Lunes a viernes 3:30 - 6:30 PM", "Sábado 11:30 - 2:00 PM"]
+TELEFONO_CONTACTO_VENDEDOR_NOTA = "81 1072 5440"
+NOTA_JABONES_TEXTO = "SE RECOMIENDA NO DEJAR LOS JABONES A SOL DIRECTO O MUCHO CALOR (SE PUEDEN DERRETIR)"
+NOTA_HORARIO_DOMICILIO_TEXTO = "PEDIDOS A DOMICILIO SIN HORA EXACTA DE ENTREGA (ENTRE 13:00 Y 22:00 HRS)"
+NOTA_TARJETITA_TEXTO = "(La tarjetita personalizada se imprime hasta que el cliente confirme que esté correcta)"
+
+# 🔧 (29 ago 2026, pedido de Israel: "cuando se ponga la opción de punto de
+# entrega debe haber esas opciones para escoger" -- lugares fijos de
+# entrega, sin costo de envío asociado (a diferencia de domicilio/DHL).
+# Lo que se elija aquí se guarda en el mismo campo "direccion" de
+# siempre, y en la nota aparece como "LUGAR DE ENTREGA" -- igual que la
+# dirección de un domicilio.
+PUNTOS_ENTREGA_FIJOS = ["Metro Mitras", "MERCO Pueblo Nuevo", "Soriana Fresnos", "KFC Sendero Escobedo"]
+
+# 🔧 (29 ago 2026, pedido de Israel: "cuando el pedido es de Diana la nota
+# va en rosa, de Dalia en amarillo, de Karo en morado -- y el teléfono de
+# contacto también cambia según quién es") Mismo folio que ya decide la
+# comisión (ver vendedora_por_folio) ahora también decide cómo se ve la
+# nota impresa y qué teléfono trae. "banner_texto" es oscuro en el tema
+# amarillo (blanco no se lee bien sobre amarillo claro) y blanco en los
+# demás. "notas_imp_bg"/"notas_imp_texto" son el color del recuadro de
+# "NOTAS IMPORTANTES" -- a propósito NO es el mismo color que el tema de
+# la nota (para que resalte): amarillo para Diana/Karo, rosa para Dalia
+# (cuyo tema YA es amarillo). Un folio no reconocido (o vacío) cae en el
+# rosa de siempre.
+COLORES_NOTA_POR_VENDEDORA = {
+    "diana": {"borde": "#e8598b", "banner": "#ec6ea8", "banner_texto": "white",
+              "etiqueta_bg": "#fbdde9", "texto_fuerte": "#b8386a",
+              "notas_imp_bg": "#fff29e", "notas_imp_texto": "#7a5c00"},
+    "dalia": {"borde": "#d9a600", "banner": "#f5c518", "banner_texto": "#5c4600",
+              "etiqueta_bg": "#fdf1c4", "texto_fuerte": "#8a6a00",
+              "notas_imp_bg": "#fbdde9", "notas_imp_texto": "#b8386a"},
+    "karo": {"borde": "#7a52c9", "banner": "#9b7fe0", "banner_texto": "white",
+             "etiqueta_bg": "#ece3fb", "texto_fuerte": "#5433a3",
+             "notas_imp_bg": "#fff29e", "notas_imp_texto": "#7a5c00"},
+}
+COLOR_NOTA_DEFAULT = COLORES_NOTA_POR_VENDEDORA["diana"]
+
+TELEFONOS_VENDEDORA_NOTA = {
+    "dalia": "81 1997 9692",
+    "karo": "81 2341 9013",
+}
 
 FOTOS_DIR = os.getenv("FOTOS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fotos_notas"))
 os.makedirs(FOTOS_DIR, exist_ok=True)
@@ -147,7 +197,42 @@ os.makedirs(FOTOS_DIR, exist_ok=True)
 MODELO = "gpt-4.1-mini"
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=60.0, max_retries=2)
 
-TIPOS_ENTREGA_VALIDOS = ("domicilio", "local", "punto_de_entrega")
+TIPOS_ENTREGA_VALIDOS = ("domicilio", "punto_de_entrega", "dhl", "local")
+
+# 🔧 (29 ago 2026, pedido de Israel: "cuando se ponga domicilio debe haber
+# opciones de escoger el municipio y que en automático se cambie el
+# precio y se añada a la nota -- también DHL a precio fijo de $300")
+# Tabla única de precios de envío -- el costo SIEMPRE se recalcula aquí
+# en el servidor a partir de esta tabla (nunca se confía en un monto que
+# venga del formulario, mismo principio que ya se usa con el folio/
+# comisión). Lista en vez de dict para que el <select> del municipio
+# mantenga este orden exacto. Si cambia un precio, se edita aquí una
+# sola vez y aplica a todas las notas nuevas.
+PRECIOS_ENVIO_MUNICIPIO = [
+    ("Monterrey", 90), ("Apodaca", 90), ("San Nicolás", 90), ("Escobedo", 90), ("Guadalupe", 90),
+    ("Santa Catarina", 100),
+    ("San Pedro", 120), ("Juárez", 120),
+    ("Pesquería", 150),
+]
+PRECIOS_ENVIO_MUNICIPIO_DICT = dict(PRECIOS_ENVIO_MUNICIPIO)
+PRECIOS_ENVIO_MUNICIPIO_DICT_NORMALIZADO = {k.lower(): v for k, v in PRECIOS_ENVIO_MUNICIPIO}
+PRECIO_ENVIO_DHL = 300
+
+
+def _costo_envio(tipo_entrega, municipio):
+    """Costo de envío autoritativo -- SIEMPRE se calcula aquí a partir de
+    PRECIOS_ENVIO_MUNICIPIO / PRECIO_ENVIO_DHL, nunca se toma tal cual de
+    lo que haya mandado el formulario (por si el JS del navegador falló o
+    alguien mandó el formulario a mano). DHL es precio fijo sin importar
+    el municipio; domicilio depende del municipio elegido (comparación
+    sin importar mayúsculas -- por si viene de la lectura de la IA en vez
+    del selector); cualquier otro tipo de entrega no tiene costo de envío."""
+    if tipo_entrega == "dhl":
+        return float(PRECIO_ENVIO_DHL)
+    if tipo_entrega == "domicilio":
+        return float(PRECIOS_ENVIO_MUNICIPIO_DICT_NORMALIZADO.get((municipio or "").strip().lower(), 0))
+    return 0.0
+
 
 # Extracciones ya leídas por IA (o pendientes de leer) pero todavía sin
 # confirmar por un humano. Viven solo en memoria mientras alguien las
@@ -307,6 +392,20 @@ def dashboard():
 
     if vista == "calendario":
         return _vista_calendario(hoy)
+
+    # 🔧 (29 ago 2026, pedido de Israel: "quiero saber que se subió una
+    # nota hoy de un pedido que se entregará en noviembre") A diferencia
+    # de las demás pestañas (que filtran por FECHA DE ENTREGA), esta
+    # ordena por FECHA DE CAPTURA -- para ver el orden real en que van
+    # entrando las notas y notar si a alguien se le está acumulando
+    # trabajo sin subir, sin importar qué tan lejos entregue cada una.
+    if vista == "recientes":
+        pedidos = database.listar_pedidos_recientes(limite=60)
+        return render_template(
+            "dashboard.html", pedidos=pedidos, vista="recientes",
+            titulo="Últimas notas capturadas", hoy=hoy.isoformat(),
+            sin_fecha_reconocida=0,
+        )
 
     if vista == "hoy":
         desde = hasta = hoy.isoformat()
@@ -997,7 +1096,7 @@ exacta (sin texto extra, sin explicaciones):
   "telefono": "teléfono o null",
   "municipio": "municipio/ciudad de entrega o null",
   "fecha_entrega": "fecha de entrega en formato DD/MM/AAAA. Si la nota indica día y mes pero NO el año, completa con el año actual ({hoy.year}) -- nunca otro año. Si de plano no hay fecha legible, entonces sí null.",
-  "tipo_entrega": "uno de: domicilio, local, punto_de_entrega -- o null si no está claro",
+  "tipo_entrega": "uno de: domicilio, local, punto_de_entrega, dhl -- o null si no está claro",
   "direccion": "dirección exacta SOLO si aparece escrita en la nota, si no null",
   "productos": [
     {{"producto": "nombre del producto", "cantidad": numero, "colores": "descripción breve de colores/detalles", "precio_unitario": numero_o_null}}
@@ -1220,6 +1319,13 @@ def _guardar_pedido_desde_datos(datos, foto_bytes, subido_por=None, necesita_rev
         "necesita_revision": necesita_revision,
         "motivo_revision": _texto_o_none(motivo_revision),
     }
+    # 🔧 (29 ago 2026, pedido de Israel: "no lo implementes en las fotos,
+    # que las notas subidas por foto sigan funcionando como hasta hoy")
+    # El costo de envío automático (ver PRECIOS_ENVIO_MUNICIPIO /
+    # PRECIO_ENVIO_DHL / _costo_envio) es SOLO para /capturar -- las notas
+    # que vienen de foto+IA se quedan sin tocar, tal como funcionaban
+    # antes de esa función existir (envio_costo se queda en su default
+    # de 0 -- ver guardar_pedido en database.py).
     nombre_archivo = f"{uuid.uuid4().hex}.jpg"
     with open(os.path.join(FOTOS_DIR, nombre_archivo), "wb") as f:
         f.write(foto_bytes)
@@ -1237,6 +1343,89 @@ def _siguiente_del_lote(temp_id, lote_id):
         if candidato in EXTRACCIONES_PENDIENTES:
             return candidato
     return None
+
+
+@app.route("/capturar", methods=["GET", "POST"])
+def capturar():
+    """🔧 (29 ago 2026, pedido de Israel: "las notas se hacen en Excel y
+    luego se suben por foto -- ahora quiero que se hagan directo en la
+    app") Formulario para dar de alta una nota SIN foto ni IA de por
+    medio -- se teclea directo aquí mismo (folio, cliente, productos,
+    anticipo, total... los mismos datos que hoy lee la IA de la foto).
+
+    Convive con /subir (no lo reemplaza en el código -- Israel pidió
+    dejarlo funcionando unos días antes de decidir si se quita).
+
+    Reutiliza exactamente la misma validación que usa /confirmar
+    (_revisar_calidad): si falta el folio, no hay productos, falta la
+    fecha o el total, la nota se guarda IGUAL pero marcada con
+    necesita_revision -- mismo criterio para una nota manual que para
+    una leída por IA, nunca se pierde una captura por un dato incompleto."""
+    if request.method == "GET":
+        return render_template(
+            "capturar.html", tipos_entrega=TIPOS_ENTREGA_VALIDOS,
+            municipios_envio=PRECIOS_ENVIO_MUNICIPIO, precio_envio_dhl=PRECIO_ENVIO_DHL,
+            puntos_entrega=PUNTOS_ENTREGA_FIJOS,
+        )
+
+    productos = _leer_productos_del_form(request.form)
+    # 🔧 (30 ago 2026, pedido de Israel: "bloquea para Diana lo que ya
+    # tenía bloqueado -- editar la nota sí lo debe poder hacer") Mismo
+    # candado que ya existe en pedido_editar(): a Diana no le corresponde
+    # ver ni fijar cifras de dinero, pero SÍ debe poder capturar la nota
+    # (cliente, productos, colores, fecha...). No se bloquea la ruta
+    # completa (a diferencia de finanzas/ventas/indicadores) -- solo se
+    # ignoran los montos que venga a mandar en el formulario, igual que
+    # ya se hace con anticipo/total al editar un pedido existente.
+    if not _puede_ver_finanzas():
+        for p in productos:
+            p["precio_unitario"] = ""
+    anticipo = request.form.get("anticipo") if _puede_ver_finanzas() else 0
+    total = request.form.get("total") if _puede_ver_finanzas() else 0
+    datos = {
+        "folio": (request.form.get("folio") or "").strip() or None,
+        "cliente": (request.form.get("cliente") or "").strip() or None,
+        "telefono": (request.form.get("telefono") or "").strip() or None,
+        "municipio": (request.form.get("municipio") or "").strip() or None,
+        "fecha_entrega": (request.form.get("fecha_entrega") or "").strip() or None,
+        "tipo_entrega": (request.form.get("tipo_entrega") or "").strip() or None,
+        "direccion": (request.form.get("direccion") or "").strip() or None,
+        "productos": productos,
+        "anticipo": anticipo or 0,
+        "total": total or 0,
+        "notas": (request.form.get("notas") or "").strip() or None,
+    }
+    necesita_revision, motivo = _revisar_calidad(datos)
+
+    subido_por = NOMBRES_DISPLAY.get(session.get("usuario"), session.get("usuario"))
+    data = dict(datos)
+    data["fecha_captura"] = database.ahora_negocio().isoformat(timespec="seconds")
+    data["subido_por"] = subido_por
+    data["necesita_revision"] = necesita_revision
+    data["motivo_revision"] = motivo
+    data["foto_archivo"] = None
+    data["origen"] = "directo"
+    # 🔧 (29 ago 2026) "Notas importantes" es un campo APARTE de "notas" --
+    # notas es de uso general (ej. "incluye envío, pago en efectivo") y
+    # sale como renglón dentro de la tabla de productos; esto es
+    # específicamente para instrucciones de producción (ej. "los
+    # jaboncitos mitad amarillos, mitad verdes") y sale en su propio
+    # recuadro, hasta el final de la nota impresa.
+    data["notas_importantes"] = (request.form.get("notas_importantes") or "").strip() or None
+    # 🔧 (29 ago 2026) El costo de envío SIEMPRE se calcula aquí, con lo
+    # que de verdad quedó guardado (tipo_entrega + municipio) -- ver
+    # _costo_envio arriba. El navegador ya lo sumó al "Total" como
+    # ayuda visual mientras se capturaba, pero eso es solo comodidad;
+    # este es el monto que de verdad se guarda para la nota impresa.
+    data["envio_costo"] = _costo_envio(datos["tipo_entrega"], datos["municipio"])
+    pedido_id = database.guardar_pedido(data)
+
+    cliente_nombre = datos["cliente"] or "cliente sin nombre"
+    if necesita_revision:
+        flash(f"⚠️ Guardada CON ERROR (revisar y corregir): {cliente_nombre} -- {motivo}")
+    else:
+        flash(f"✅ Nota guardada: {cliente_nombre}")
+    return redirect(url_for("pedido_detalle", pedido_id=pedido_id))
 
 
 @app.route("/confirmar/<temp_id>")
@@ -1351,6 +1540,55 @@ def pedido_detalle(pedido_id):
     )
 
 
+def _dia_entrega_largo(fecha_entrega_iso):
+    """'2026-09-08' -> 'Martes 08 de Septiembre' (mismo formato que la
+    nota de Excel -- día de la semana, día con cero a la izquierda, mes
+    en letra, SIN año). None si la fecha no se pudo reconocer."""
+    if not fecha_entrega_iso:
+        return None
+    try:
+        fecha = datetime.date.fromisoformat(str(fecha_entrega_iso)[:10])
+    except ValueError:
+        return None
+    return f"{DIAS_SEMANA_LARGOS_ES[fecha.isoweekday()]} {fecha.day:02d} de {MESES_ES[fecha.month].capitalize()}"
+
+
+@app.route("/pedido/<int:pedido_id>/nota")
+def pedido_nota(pedido_id):
+    """🔧 (29 ago 2026, pedido de Israel: "necesito una nota idéntica a
+    la de Excel -- se imprime en PDF y se le manda al cliente para que
+    revise sus datos") Página imprimible de UN pedido, en el mismo
+    formato que ya usan (folio, datos del cliente, tabla de productos,
+    notas del negocio, anticipo/total). Se guarda como PDF con
+    Imprimir -> Guardar como PDF del navegador -- mismo mecanismo que
+    ya usan /imprimir/semana-actual y /imprimir/semana-proxima, sin
+    depender de ninguna librería extra de PDF en el servidor.
+
+    Solo lee datos -- si algo está mal, el botón "Editar antes de
+    imprimir" manda a /pedido/<id>/editar con "regresar" apuntando de
+    vuelta aquí mismo, para corregir y volver a imprimir sin perder el
+    lugar (ver _regresar_seguro arriba)."""
+    pedido = database.obtener_pedido(pedido_id)
+    if not pedido:
+        flash("Ese pedido ya no existe.")
+        return redirect(url_for("dashboard"))
+    # Igual que en /imprimir/semana-*: nunca se listan como "producto"
+    # los renglones de envío/urgencia que hayan quedado guardados por
+    # error -- esos van reflejados en "notas", no aquí.
+    productos = [p for p in (pedido.get("productos") or []) if _es_producto_real(p.get("producto"))]
+    vendedora_folio = vendedora_por_folio(pedido.get("folio"))
+    colores_nota = COLORES_NOTA_POR_VENDEDORA.get(vendedora_folio, COLOR_NOTA_DEFAULT)
+    telefono_vendedor = TELEFONOS_VENDEDORA_NOTA.get(vendedora_folio, TELEFONO_CONTACTO_VENDEDOR_NOTA)
+    return render_template(
+        "nota_cliente.html", p=pedido, productos=productos,
+        dia_entrega_largo=_dia_entrega_largo(pedido.get("fecha_entrega_iso")),
+        horario_local=HORARIO_LOCAL_NOTA, telefono_vendedor=telefono_vendedor,
+        colores=colores_nota,
+        nota_jabones=NOTA_JABONES_TEXTO, nota_horario_domicilio=NOTA_HORARIO_DOMICILIO_TEXTO,
+        nota_tarjetita=NOTA_TARJETITA_TEXTO,
+    )
+
+
 @app.route("/pedido/<int:pedido_id>/editar", methods=["GET", "POST"])
 def pedido_editar(pedido_id):
     pedido = database.obtener_pedido(pedido_id)
@@ -1387,6 +1625,9 @@ def pedido_editar(pedido_id):
         "anticipo": anticipo,
         "total": total,
         "notas": (request.form.get("notas") or "").strip() or None,
+        # 🔧 (29 ago 2026) Campo aparte de "notas" -- ver la nota en
+        # capturar() sobre por qué van separados.
+        "notas_importantes": (request.form.get("notas_importantes") or "").strip() or None,
     }
     database.actualizar_pedido(pedido_id, data)
     flash("Pedido actualizado.")

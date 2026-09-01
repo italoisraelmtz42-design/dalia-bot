@@ -210,10 +210,33 @@ def init_db():
         # comisión de esa venta -- ver vendedora_por_folio() en app.py.
         if "folio" not in columnas:
             cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN folio TEXT")
+        # 🔧 (29 ago 2026, pedido de Israel: captura directa de notas desde
+        # la app, sin pasar por foto+IA) Para distinguir de un vistazo cómo
+        # entró cada nota -- 'foto' (subida + leída por IA, como siempre) o
+        # 'directo' (alguien la tecleó directo en /capturar). Todo lo que
+        # ya existía se marca 'foto' porque así es como se guardó.
+        if "origen" not in columnas:
+            cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN origen TEXT NOT NULL DEFAULT 'foto'")
+        # 🔧 (29 ago 2026, pedido de Israel: precio de envío automático por
+        # municipio/DHL) El costo de envío se guarda aparte del total -- el
+        # servidor SIEMPRE lo recalcula a partir de la tabla de precios
+        # (ver PRECIOS_ENVIO_MUNICIPIO / PRECIO_ENVIO_DHL en app.py), nunca
+        # confía en un monto que venga del formulario. Sirve para mostrarlo
+        # como su propio renglón en la nota impresa.
+        if "envio_costo" not in columnas:
+            cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN envio_costo REAL NOT NULL DEFAULT 0")
+        # 🔧 (29 ago 2026, pedido de Israel: recuadro de "NOTAS IMPORTANTES"
+        # en la nota impresa, aparte del campo "notas" de siempre) Campo
+        # libre para instrucciones de producción (ej. "los jaboncitos
+        # mitad amarillos, mitad verdes") que se ve en su propio recuadro
+        # al final de la nota, en vez de mezclarse con las notas generales.
+        if "notas_importantes" not in columnas:
+            cur.execute("ALTER TABLE pedidos_confirmados ADD COLUMN notas_importantes TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_fecha_entrega_iso ON pedidos_confirmados(fecha_entrega_iso)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_estatus_entrega ON pedidos_confirmados(estatus_entrega)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_necesita_revision ON pedidos_confirmados(necesita_revision)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_folio ON pedidos_confirmados(folio)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_fecha_captura ON pedidos_confirmados(fecha_captura)")
 
         # 🔧 (23 ago 2026, pedido de Israel: control de materia prima)
         cur.execute("""
@@ -230,7 +253,11 @@ def init_db():
 
 def guardar_pedido(data):
     """data: dict con los campos del formulario de confirmación.
-    'productos' debe ser una lista de dicts -> se guarda como JSON."""
+    'productos' debe ser una lista de dicts -> se guarda como JSON.
+    'foto_archivo' puede venir None (🔧 29 ago 2026: notas capturadas
+    directo en /capturar, sin foto de por medio) -- 'origen' distingue
+    'foto' (default, como siempre) de 'directo'. 'envio_costo' ya viene
+    calculado por app.py (nunca se recalcula aquí)."""
     productos_json = json.dumps(data.get("productos") or [], ensure_ascii=False)
     fecha_entrega = data.get("fecha_entrega")
     with _cursor() as cur:
@@ -238,8 +265,9 @@ def guardar_pedido(data):
             INSERT INTO pedidos_confirmados
                 (fecha_captura, subido_por, cliente, telefono, municipio,
                  fecha_entrega, fecha_entrega_iso, tipo_entrega, direccion, productos_json,
-                 anticipo, total, notas, foto_archivo, necesita_revision, motivo_revision, folio)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 anticipo, total, notas, foto_archivo, necesita_revision, motivo_revision, folio, origen,
+                 envio_costo, notas_importantes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data.get("fecha_captura"), data.get("subido_por"), data.get("cliente"),
             data.get("telefono"), data.get("municipio"), fecha_entrega,
@@ -247,6 +275,7 @@ def guardar_pedido(data):
             float(data.get("anticipo") or 0), float(data.get("total") or 0),
             data.get("notas"), data.get("foto_archivo"),
             1 if data.get("necesita_revision") else 0, data.get("motivo_revision"), data.get("folio"),
+            data.get("origen") or "foto", float(data.get("envio_costo") or 0), data.get("notas_importantes"),
         ))
         return cur.lastrowid
 
@@ -255,21 +284,27 @@ def actualizar_pedido(pedido_id, data):
     """🔧 (23 ago 2026) Editar un pedido -- desde la app, ya con calma -- es
     justo la forma en que se corrige una nota marcada con error. Por eso,
     cada vez que se guarda una edición, se apaga la bandera de
-    necesita_revision: se asume que quien editó ya dejó los datos bien."""
+    necesita_revision: se asume que quien editó ya dejó los datos bien.
+
+    🔧 (29 ago 2026, pedido de Israel: "no lo implementes en las fotos --
+    que las notas subidas por foto sigan funcionando como hasta hoy")
+    A propósito NO toca 'envio_costo' -- ese campo solo lo calcula
+    /capturar al CREAR la nota (ver app.py); editar un pedido nunca lo
+    recalcula ni lo borra, se queda tal cual estaba."""
     productos_json = json.dumps(data.get("productos") or [], ensure_ascii=False)
     fecha_entrega = data.get("fecha_entrega")
     with _cursor() as cur:
         cur.execute("""
             UPDATE pedidos_confirmados SET
                 cliente=?, telefono=?, municipio=?, fecha_entrega=?, fecha_entrega_iso=?, tipo_entrega=?,
-                direccion=?, productos_json=?, anticipo=?, total=?, notas=?, folio=?,
+                direccion=?, productos_json=?, anticipo=?, total=?, notas=?, folio=?, notas_importantes=?,
                 necesita_revision=0, motivo_revision=NULL
             WHERE id=?
         """, (
             data.get("cliente"), data.get("telefono"), data.get("municipio"),
             fecha_entrega, normalizar_fecha_iso(fecha_entrega), data.get("tipo_entrega"), data.get("direccion"),
             productos_json, float(data.get("anticipo") or 0), float(data.get("total") or 0),
-            data.get("notas"), data.get("folio"), pedido_id,
+            data.get("notas"), data.get("folio"), data.get("notas_importantes"), pedido_id,
         ))
 
 
@@ -363,6 +398,22 @@ def buscar_pedidos_por_cliente(texto):
             WHERE lower(COALESCE(cliente, '')) LIKE ?
             ORDER BY fecha_captura DESC
         """, (f"%{texto.lower()}%",))
+        return [_fila_a_dict(r) for r in cur.fetchall()]
+
+
+def listar_pedidos_recientes(limite=60):
+    """🔧 (29 ago 2026, pedido de Israel: "quiero saber que se subió una
+    nota hoy de un pedido que se entregará en noviembre") A diferencia de
+    listar_pedidos() (que filtra/ordena por FECHA DE ENTREGA), esto
+    ordena por FECHA DE CAPTURA -- la nota más recién guardada primero,
+    sin importar qué tan lejos esté su fecha de entrega. Es lo que
+    alimenta la pestaña "Recientes" del dashboard, para notar rápido si
+    a alguien se le están acumulando notas sin capturar."""
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT * FROM pedidos_confirmados ORDER BY fecha_captura DESC, id DESC LIMIT ?",
+            (limite,),
+        )
         return [_fila_a_dict(r) for r in cur.fetchall()]
 
 

@@ -59,6 +59,20 @@
   <h3>Foto original</h3>
   <img class="foto-nota" src="{{ url_for('servir_foto', nombre_archivo=p.foto_archivo) }}" alt="Foto de la nota">
 </div>
+{% elif p.origen == 'directo' %}
+{# 🔧 (1 sep 2026, pedido de Israel: "quiero que cuando le dé a un pedido
+   'ver detalle' se pueda ver ya impresa la nota que se creó
+   directamente en el programa") Las notas subidas por foto muestran
+   arriba la foto original -- las capturadas en /capturar no tienen foto,
+   así que aquí se muestra en su lugar la nota ya generada (la misma que
+   abre "🖨️ Nota para el cliente"), incrustada, sin tener que salir de
+   esta pantalla ni abrir otra pestaña. #}
+<div class="card">
+  <h3>Nota</h3>
+  <iframe src="{{ url_for('pedido_nota', pedido_id=p.id) }}" title="Nota del pedido" loading="lazy"
+          style="width:100%;height:820px;max-width:600px;display:block;margin:0 auto;
+                 border:1px solid var(--borde);border-radius:10px;background:white;"></iframe>
+</div>
 {% endif %}
 
 <div class="card">

@@ -22,8 +22,16 @@
     <label for="municipio">Municipio</label>
     <input type="text" id="municipio" name="municipio" value="{{ p.municipio or '' }}">
 
-    <label for="fecha_entrega">Fecha de entrega</label>
-    <input type="text" id="fecha_entrega" name="fecha_entrega" placeholder="DD/MM/AAAA" value="{{ p.fecha_entrega or '' }}">
+    <label for="fecha_entrega_picker">Fecha de entrega</label>
+    <input type="date" id="fecha_entrega_picker" value="{{ p.fecha_entrega_iso or '' }}" onchange="sincronizarFechaEntrega()">
+    {# 🔧 (1 sep 2026, pedido de Israel: "no quiero que sea manual, quiero
+       que se abra un calendario") Mismo mecanismo que en capturar.html:
+       el calendario nativo maneja AAAA-MM-DD, pero lo que de verdad se
+       guarda como "fecha_entrega" sigue siendo DD/MM/AAAA -- por eso
+       viaja en este campo oculto. Se precarga con el texto que ya tenía
+       el pedido (no con lo que salga de fecha_entrega_iso) para no
+       cambiar nada si nadie toca el calendario. #}
+    <input type="hidden" id="fecha_entrega" name="fecha_entrega" value="{{ p.fecha_entrega or '' }}">
 
     <label for="tipo_entrega">Tipo de entrega</label>
     <select id="tipo_entrega" name="tipo_entrega">
@@ -90,6 +98,21 @@
 
 <script>
   const PUEDE_VER_FINANZAS = {{ 'true' if puede_ver_finanzas else 'false' }};
+
+  // 🔧 (1 sep 2026) Ver la misma nota en capturar.html -- convierte lo que
+  // deja el calendario nativo (AAAA-MM-DD) al formato DD/MM/AAAA que usa
+  // toda la app, antes de dejarlo en el campo oculto "fecha_entrega".
+  function sincronizarFechaEntrega() {
+    const picker = document.getElementById('fecha_entrega_picker');
+    const destino = document.getElementById('fecha_entrega');
+    if (!picker.value) {
+      destino.value = '';
+      return;
+    }
+    const [anio, mes, dia] = picker.value.split('-');
+    destino.value = `${dia}/${mes}/${anio}`;
+  }
+
   let contadorProductos = document.querySelectorAll('.producto-fila').length;
   function agregarProducto() {
     const contenedor = document.getElementById('productos-lista');

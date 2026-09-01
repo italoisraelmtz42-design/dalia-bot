@@ -1654,6 +1654,7 @@ def pedido_editar(pedido_id):
         regresar = _regresar_seguro(request.args.get("regresar"))
         return render_template(
             "pedido_editar.html", p=pedido, tipos_entrega=TIPOS_ENTREGA_VALIDOS, regresar=regresar,
+            catalogo_precios=CATALOGO_PRECIOS_CAPTURA,
         )
 
     productos = _leer_productos_del_form(request.form)

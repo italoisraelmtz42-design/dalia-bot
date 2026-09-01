@@ -322,6 +322,25 @@ def _puede_ver_finanzas():
     return session.get("usuario") != "diana"
 
 
+# 🔧 (1 sep 2026, pedido de Israel: "en las notas sí, ellas las hace. lo
+# que yo no quiero que vea es las finanzas y demas, habilita 100% para
+# diana y dalia poder ver todo en la sección nueva nota") Antes,
+# _puede_ver_finanzas() se usaba para dos cosas distintas a la vez: (1)
+# bloquear las secciones de reportes del NEGOCIO (Finanzas/Ventas/
+# Indicadores) y (2) ocultarle a Diana el precio/anticipo/total DENTRO de
+# una nota (al capturarla, editarla o verla). Israel aclaró que solo
+# quiere lo primero -- Diana y Dalia sí deben ver y poder poner esas
+# cifras cuando ellas mismas hacen o corrigen una nota. Por eso ahora son
+# dos candados separados: _puede_ver_finanzas() sigue igual (bloquea
+# Finanzas/Ventas/Indicadores, ver exigir_login), y este nuevo
+# _puede_ver_dinero_pedido() es el que se usa en capturar(), pedido_editar()
+# y sus templates (incluyendo "Ver detalle" de un pedido, por consistencia
+# -- no tendría sentido dejarla poner el precio al capturar y luego
+# ocultárselo al ver la nota ya guardada).
+def _puede_ver_dinero_pedido():
+    return True
+
+
 @app.before_request
 def exigir_login():
     rutas_publicas = {"login", "static"}
@@ -377,6 +396,7 @@ def _inyectar_contexto_usuario():
         "usuario_actual": usuario,
         "nombre_usuario": NOMBRES_DISPLAY.get(usuario, usuario or ""),
         "puede_ver_finanzas": _puede_ver_finanzas(),
+        "puede_ver_dinero_pedido": _puede_ver_dinero_pedido(),
         "tiene_comision": usuario in VENDEDORES_CON_COMISION,
         "hay_comisiones_configuradas": bool(VENDEDORES_CON_COMISION),
     }
@@ -1423,19 +1443,18 @@ def capturar():
         )
 
     productos = _leer_productos_del_form(request.form)
-    # 🔧 (30 ago 2026, pedido de Israel: "bloquea para Diana lo que ya
-    # tenía bloqueado -- editar la nota sí lo debe poder hacer") Mismo
-    # candado que ya existe en pedido_editar(): a Diana no le corresponde
-    # ver ni fijar cifras de dinero, pero SÍ debe poder capturar la nota
-    # (cliente, productos, colores, fecha...). No se bloquea la ruta
-    # completa (a diferencia de finanzas/ventas/indicadores) -- solo se
-    # ignoran los montos que venga a mandar en el formulario, igual que
-    # ya se hace con anticipo/total al editar un pedido existente.
-    if not _puede_ver_finanzas():
+    # 🔧 (1 sep 2026, pedido de Israel: "en las notas sí, ellas las hace...
+    # habilita 100% para diana y dalia poder ver todo en la sección nueva
+    # nota") Antes esto usaba _puede_ver_finanzas() y le borraba el precio
+    # a Diana -- ya no: quien captura la nota (Israel, Dalia o Diana) SÍ
+    # puede ver y fijar precio/anticipo/total aquí. Lo único que se le
+    # sigue ocultando a Diana es lo financiero del negocio en general
+    # (Finanzas/Ventas/Indicadores, bloqueado aparte en exigir_login).
+    if not _puede_ver_dinero_pedido():
         for p in productos:
             p["precio_unitario"] = ""
-    anticipo = request.form.get("anticipo") if _puede_ver_finanzas() else 0
-    total = request.form.get("total") if _puede_ver_finanzas() else 0
+    anticipo = request.form.get("anticipo") if _puede_ver_dinero_pedido() else 0
+    total = request.form.get("total") if _puede_ver_dinero_pedido() else 0
     datos = {
         "folio": (request.form.get("folio") or "").strip() or None,
         "cliente": (request.form.get("cliente") or "").strip() or None,
@@ -1658,11 +1677,15 @@ def pedido_editar(pedido_id):
         )
 
     productos = _leer_productos_del_form(request.form)
-    # 🔧 (23 ago 2026) A Diana no le corresponde tocar cifras de dinero --
-    # esto ya está oculto en pedido_editar.html, pero se refuerza aquí
-    # también por si alguien manda el formulario a mano sin pasar por la
-    # pantalla (siempre se guardan los valores que YA tenía el pedido).
-    if _puede_ver_finanzas():
+    # 🔧 (1 sep 2026, pedido de Israel: "habilita 100% para diana y dalia
+    # poder ver todo en la sección nueva nota" -- confirmó que esto
+    # también aplica a Editar pedido) Antes esto usaba _puede_ver_finanzas()
+    # y le conservaba a Diana el anticipo/total que ya traía el pedido sin
+    # dejarla tocarlo -- ya no: quien edita la nota (Israel, Dalia o
+    # Diana) SÍ puede ver y ajustar precio/anticipo/total aquí, igual que
+    # en Nueva nota. Lo único que se le sigue ocultando a Diana es lo
+    # financiero del negocio en general (Finanzas/Ventas/Indicadores).
+    if _puede_ver_dinero_pedido():
         anticipo = request.form.get("anticipo") or 0
         total = request.form.get("total") or 0
     else:

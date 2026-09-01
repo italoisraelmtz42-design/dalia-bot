@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block titulo %}Nueva nota — Producción Dalia{% endblock %}
+{% block contenido %}
+<h2>✍️ Capturar nota nueva</h2>
+<p class="muted">
+  Para cuando ya no traes la nota en papel/foto -- captúrala directo aquí
+  y se guarda de una vez, igual que si la hubieras subido y confirmado.
+</p>
+
+<form method="post">
+  <div class="card">
+    <label for="folio">Folio</label>
+    <input type="text" id="folio" name="folio" placeholder="Ej. D-142, DE-014, K-023">
+    <p class="muted" style="margin-top:2px;font-size:0.85rem;">De este folio depende a quién se le suma la comisión: empieza con "DE" = Dalia, "D" = Diana, "K" = Karo.</p>
+
+    <label for="cliente">Cliente</label>
+    <input type="text" id="cliente" name="cliente">
+
+    <label for="telefono">Teléfono</label>
+    <input type="tel" id="telefono" name="telefono">
+
+    <label for="fecha_entrega">Fecha de entrega</label>
+    <input type="text" id="fecha_entrega" name="fecha_entrega" placeholder="DD/MM/AAAA">
+
+    <label for="tipo_entrega">Tipo de entrega</label>
+    <div class="chips">
+      {% for t in tipos_entrega %}
+      <input type="radio" id="tipo_{{ t }}" name="tipo_entrega" value="{{ t }}" onchange="actualizarDireccion()">
+      <label for="tipo_{{ t }}">{{ 'DHL' if t == 'dhl' else (t.replace('_', ' ')|capitalize) }}</label>
+      {% endfor %}
+    </div>
+
+    <div id="bloque-direccion" style="display:none;">
+      <div id="bloque-municipio" style="display:none;">
+        <label for="municipio">Municipio (define el costo de envío)</label>
+        <select id="municipio" name="municipio" onchange="actualizarEnvio()">
+          <option value="">-- Selecciona --</option>
+          {% for nombre, precio in municipios_envio %}
+          <option value="{{ nombre }}">{{ nombre }} — ${{ precio }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div id="bloque-dhl-fijo" class="muted" style="display:none;margin-top:12px;">
+        Envío DHL: precio fijo de ${{ precio_envio_dhl }}.
+      </div>
+      <p class="muted" id="costo-envio-linea" style="margin:6px 0 0 0;display:none;">
+        Costo de envío: <strong id="costo-envio-mostrado">—</strong> (ya se sumó al Total de abajo)
+      </p>
+
+      <div id="bloque-direccion-texto">
+        <label for="direccion_texto">Dirección (calle, número, colonia y municipio -- tal como te la dio el cliente)</label>
+        <input type="text" id="direccion_texto" name="direccion" placeholder="Ej. Villa Albacete 423, Villa de San Carlos 2o Sector, Apodaca">
+      </div>
+      <div id="bloque-punto-fijo" style="display:none;">
+        <label for="direccion_punto">Punto de entrega</label>
+        <select id="direccion_punto" name="direccion" disabled>
+          <option value="">-- Selecciona --</option>
+          {% for punto in puntos_entrega %}
+          <option value="{{ punto }}">{{ punto }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-bottom:8px;">Productos</h3>
+    <div id="productos-lista">
+      <div class="producto-fila">
+        <label>Producto</label>
+        <input type="text" name="producto_0">
+        <label>Cantidad</label>
+        <input type="number" name="cantidad_0">
+        <label>Colores / detalles</label>
+        <input type="text" name="colores_0">
+        {% if puede_ver_finanzas %}
+        <label>Precio unitario</label>
+        <input type="number" step="0.01" name="precio_0">
+        {% else %}
+        <input type="hidden" name="precio_0" value="">
+        {% endif %}
+      </div>
+    </div>
+    <button type="button" class="btn" style="margin-top:10px;" onclick="agregarProducto()">+ Agregar otro producto</button>
+  </div>
+
+  <div class="card">
+    {% if puede_ver_finanzas %}
+    <label for="anticipo">Anticipo pagado</label>
+    <input type="number" step="0.01" id="anticipo" name="anticipo" value="0">
+
+    <label for="total">Total del pedido</label>
+    <input type="number" step="0.01" id="total" name="total" value="0">
+    {% else %}
+    {# 🔧 (30 ago 2026) Ocultos pero NO quitados -- si se quitaran, el
+       JS de actualizarEnvio() ya no tendría dónde reflejar el costo de
+       envío calculado. El servidor de todos modos ignora lo que traigan
+       estos dos campos si quien captura no puede ver finanzas (ver
+       capturar() en app.py) -- viajan solo para que el script no truene. #}
+    <input type="hidden" id="anticipo" name="anticipo" value="0">
+    <input type="hidden" id="total" name="total" value="0">
+    {% endif %}
+
+    <label for="notas">Notas</label>
+    <textarea id="notas" name="notas" placeholder="Ej. incluye $100 de envío, tarjetita personalizada, urgente..."></textarea>
+  </div>
+
+  <div class="card">
+    <label for="notas_importantes">⚠ Notas importantes para producción</label>
+    <textarea id="notas_importantes" name="notas_importantes" placeholder="Ej. los jaboncitos de pie deben ser la mitad amarillos y la otra mitad verdes"></textarea>
+    <p class="muted" style="margin-top:2px;font-size:0.85rem;">Esto sale en su propio recuadro, bien visible, hasta el final de la nota impresa.</p>
+  </div>
+
+  <button type="submit" class="primario" style="width:100%;padding:14px;">Guardar nota</button>
+</form>
+
+<script>
+  const PRECIOS_ENVIO_MUNICIPIO = {
+    {% for nombre, precio in municipios_envio %}"{{ nombre }}": {{ precio }}{% if not loop.last %},{% endif %}{% endfor %}
+  };
+  const PRECIO_ENVIO_DHL = {{ precio_envio_dhl }};
+  const PUEDE_VER_FINANZAS = {{ 'true' if puede_ver_finanzas else 'false' }};
+  let envioActual = 0;
+
+  function tipoEntregaSeleccionado() {
+    const seleccionado = document.querySelector('input[name="tipo_entrega"]:checked');
+    return seleccionado ? seleccionado.value : null;
+  }
+
+  function actualizarDireccion() {
+    const valor = tipoEntregaSeleccionado();
+    const relevante = valor === 'domicilio' || valor === 'dhl' || valor === 'punto_de_entrega';
+    document.getElementById('bloque-direccion').style.display = relevante ? 'block' : 'none';
+    document.getElementById('bloque-municipio').style.display = (valor === 'domicilio') ? 'block' : 'none';
+    document.getElementById('bloque-dhl-fijo').style.display = (valor === 'dhl') ? 'block' : 'none';
+
+    const esPunto = (valor === 'punto_de_entrega');
+    document.getElementById('bloque-direccion-texto').style.display = esPunto ? 'none' : 'block';
+    document.getElementById('bloque-punto-fijo').style.display = esPunto ? 'block' : 'none';
+    // Solo el campo visible debe mandarse -- el otro se deshabilita para
+    // que el formulario no mande dos valores distintos con el mismo
+    // nombre "direccion".
+    document.getElementById('direccion_texto').disabled = esPunto;
+    document.getElementById('direccion_punto').disabled = !esPunto;
+
+    actualizarEnvio();
+  }
+
+  function actualizarEnvio() {
+    const valor = tipoEntregaSeleccionado();
+    let nuevoEnvio = 0;
+    if (valor === 'dhl') {
+      nuevoEnvio = PRECIO_ENVIO_DHL;
+    } else if (valor === 'domicilio') {
+      const municipio = document.getElementById('municipio').value;
+      nuevoEnvio = PRECIOS_ENVIO_MUNICIPIO[municipio] || 0;
+    }
+    const lineaCosto = document.getElementById('costo-envio-linea');
+    document.getElementById('costo-envio-mostrado').textContent = nuevoEnvio ? ('$' + nuevoEnvio.toFixed(2)) : '—';
+    lineaCosto.style.display = nuevoEnvio ? 'block' : 'none';
+
+    const totalInput = document.getElementById('total');
+    const totalActual = parseFloat(totalInput.value) || 0;
+    const totalSinEnvioViejo = Math.max(totalActual - envioActual, 0);
+    totalInput.value = (totalSinEnvioViejo + nuevoEnvio).toFixed(2);
+    envioActual = nuevoEnvio;
+  }
+
+  let contadorProductos = document.querySelectorAll('.producto-fila').length;
+  function agregarProducto() {
+    const contenedor = document.getElementById('productos-lista');
+    const i = contadorProductos++;
+    const div = document.createElement('div');
+    div.className = 'producto-fila';
+    const campoPrecio = PUEDE_VER_FINANZAS
+      ? `<label>Precio unitario</label><input type="number" step="0.01" name="precio_${i}">`
+      : `<input type="hidden" name="precio_${i}" value="">`;
+    div.innerHTML = `
+      <label>Producto</label>
+      <input type="text" name="producto_${i}">
+      <label>Cantidad</label>
+      <input type="number" name="cantidad_${i}">
+      <label>Colores / detalles</label>
+      <input type="text" name="colores_${i}">
+      ${campoPrecio}
+    `;
+    contenedor.appendChild(div);
+  }
+</script>
+{% endblock %}

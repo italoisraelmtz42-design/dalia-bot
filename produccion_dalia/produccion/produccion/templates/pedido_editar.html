@@ -79,6 +79,12 @@
     <textarea id="notas" name="notas">{{ p.notas or '' }}</textarea>
   </div>
 
+  <div class="card">
+    <label for="notas_importantes">⚠ Notas importantes para producción</label>
+    <textarea id="notas_importantes" name="notas_importantes">{{ p.notas_importantes or '' }}</textarea>
+    <p class="muted" style="margin-top:2px;font-size:0.85rem;">Esto sale en su propio recuadro, bien visible, hasta el final de la nota impresa.</p>
+  </div>
+
   <button type="submit" class="primario" style="width:100%;padding:14px;">Guardar cambios</button>
 </form>
 

@@ -93,7 +93,7 @@
         <input type="number" name="cantidad_0">
         <label>Colores / detalles</label>
         <input type="text" name="colores_0">
-        {% if puede_ver_finanzas %}
+        {% if puede_ver_dinero_pedido %}
         <label>Precio unitario</label>
         <input type="number" step="0.01" name="precio_0">
         {% else %}
@@ -104,7 +104,7 @@
     <button type="button" class="btn" style="margin-top:10px;" onclick="agregarProducto()">+ Agregar otro producto</button>
   </div>
 
-  {% if puede_ver_finanzas %}
+  {% if puede_ver_dinero_pedido %}
   <div class="card">
     <label for="anticipo">Anticipo pagado</label>
     <input type="number" step="0.01" id="anticipo" name="anticipo" value="0">
@@ -148,7 +148,7 @@
     {% for nombre, precio in municipios_envio %}"{{ nombre }}": {{ precio }}{% if not loop.last %},{% endif %}{% endfor %}
   };
   const PRECIO_ENVIO_DHL = {{ precio_envio_dhl }};
-  const PUEDE_VER_FINANZAS = {{ 'true' if puede_ver_finanzas else 'false' }};
+  const PUEDE_VER_DINERO_PEDIDO = {{ 'true' if puede_ver_dinero_pedido else 'false' }};
   // 🔧 (1 sep 2026, pedido de Israel: selector de catálogo con precios)
   // [[categoria, [[nombre, precio, nota_o_null], ...]], ...] -- se arma
   // en Python (CATALOGO_PRECIOS_CAPTURA en app.py), aquí solo se usa
@@ -310,7 +310,7 @@
     const i = contadorProductos++;
     const div = document.createElement('div');
     div.className = 'producto-fila';
-    const campoPrecio = PUEDE_VER_FINANZAS
+    const campoPrecio = PUEDE_VER_DINERO_PEDIDO
       ? `<label>Precio unitario</label><input type="number" step="0.01" name="precio_${i}">`
       : `<input type="hidden" name="precio_${i}" value="">`;
     div.innerHTML = `

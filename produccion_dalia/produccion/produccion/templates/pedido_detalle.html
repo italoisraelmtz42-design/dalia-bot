@@ -71,6 +71,7 @@
     </span>
   </div>
   <div class="row-botones">
+    <a class="btn" href="{{ url_for('pedido_nota', pedido_id=p.id) }}" target="_blank">🖨️ Nota para el cliente</a>
     <a class="btn" href="{{ url_for('pedido_editar', pedido_id=p.id) }}{% if regresar %}?regresar={{ regresar|urlencode }}{% endif %}">✏️ Editar</a>
     <form class="inline" method="post" action="{{ url_for('pedido_eliminar', pedido_id=p.id) }}" onsubmit="return confirm('¿Seguro que quieres eliminar este pedido? No se puede deshacer.');">
       <input type="hidden" name="regresar" value="{{ regresar or '' }}">

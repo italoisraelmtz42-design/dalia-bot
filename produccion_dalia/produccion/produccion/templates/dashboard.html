@@ -21,6 +21,7 @@
   <a href="{{ url_for('dashboard', vista='semana') }}" class="{{ 'activo' if vista=='semana' else '' }}">Semana</a>
   <a href="{{ url_for('dashboard', vista='mes') }}" class="{{ 'activo' if vista=='mes' else '' }}">Mes</a>
   <a href="{{ url_for('dashboard', vista='atrasados') }}" class="{{ 'activo' if vista=='atrasados' else '' }}">⚠️ Atrasados</a>
+  <a href="{{ url_for('dashboard', vista='recientes') }}" class="{{ 'activo' if vista=='recientes' else '' }}">🆕 Recientes</a>
   <a href="{{ url_for('dashboard', vista='todos') }}" class="{{ 'activo' if vista=='todos' else '' }}">Todos</a>
   <a href="{{ url_for('dashboard', vista='calendario') }}" class="{{ 'activo' if vista=='calendario' else '' }}">📅 Calendario</a>
 </nav>
@@ -111,8 +112,17 @@
              class="chk-pedido" style="width:auto;margin-top:5px;">
       <h3 style="margin:0;">{{ p.cliente or 'Cliente sin nombre' }}</h3>
     </div>
-    <span class="muted" style="white-space:nowrap;">{{ p.fecha_entrega or 'sin fecha' }}</span>
+    <span class="muted" style="white-space:nowrap;">
+      {% if vista == 'recientes' %}Entrega: {% endif %}{{ p.fecha_entrega or 'sin fecha' }}
+    </span>
   </div>
+  {% if vista == 'recientes' %}
+  <div class="muted" style="margin-bottom:4px;">
+    {{ p.origen == 'directo' and '✍️ Nota capturada' or '📸 Foto subida' }}
+    el {{ p.fecha_captura[:16].replace('T', ' ') if p.fecha_captura else '—' }}
+    {% if p.subido_por %}por <strong>{{ p.subido_por }}</strong>{% endif %}
+  </div>
+  {% endif %}
   {% if p.necesita_revision %}
   <div style="margin-bottom:6px;">
     <span class="badge error" title="{{ p.motivo_revision or '' }}">⚠️ Revisar: {{ p.motivo_revision or 'la IA no quedó segura de algún dato' }}</span>

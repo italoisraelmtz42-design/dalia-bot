@@ -10,6 +10,9 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     color: #3a2e35; margin: 0; padding: 20px; background: #f3f3f3;
   }
+  @media (max-width: 420px) {
+    body { padding: 8px; }
+  }
   .barra-acciones { max-width: 560px; margin: 0 auto 14px auto; display: flex; gap: 8px; flex-wrap: wrap; }
   .barra-acciones a, .barra-acciones button {
     font-size: 0.88rem; padding: 8px 14px; border-radius: 8px; border: 1px solid #e8598b;
@@ -24,15 +27,40 @@
   .fila-info .etiqueta {
     background: {{ colores.etiqueta_bg }}; color: #3a2e35; font-weight: 700; font-size: 0.78rem;
     padding: 8px 10px; width: 42%; border-right: 1px solid #e5e0e2; display: flex; align-items: center;
+    min-width: 0; overflow-wrap: anywhere;
   }
-  .fila-info .valor { padding: 8px 10px; font-size: 0.86rem; flex: 1; display: flex; align-items: center; }
+  .fila-info .valor {
+    padding: 8px 10px; font-size: 0.86rem; flex: 1; display: flex; align-items: center;
+    min-width: 0; overflow-wrap: anywhere;
+  }
   .fila-info .valor.destacado { color: {{ colores.texto_fuerte }}; font-weight: 700; }
   .fila-info .valor.grande { font-size: 0.92rem; font-weight: 600; }
   .fila-info .valor.destacado.grande { font-size: 0.95rem; }
-  .bloque-superior { display: flex; }
-  .col-info { flex: 1; border-right: 3px solid {{ colores.borde }}; }
-  .col-logo { width: 130px; display: flex; align-items: center; justify-content: center; padding: 6px; }
+  .bloque-superior { display: flex; flex-wrap: wrap; }
+  .col-info { flex: 1; min-width: 0; border-right: 3px solid {{ colores.borde }}; }
+  .col-logo { width: 130px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 6px; }
   .col-logo img { width: 100%; height: auto; object-fit: contain; }
+  /* 🔧 (1 sep 2026, pedido de Israel: "que no se salgan los textos de la
+     vista para celular") En pantallas angostas (esta nota se ve tanto
+     sola como incrustada en un iframe dentro de "Ver detalle", donde el
+     ancho disponible es todavía más chico) el logo de 130px fijos dejaba
+     muy poco espacio a los datos del cliente -- eso, más textos largos
+     sin espacios (direcciones, nombres de producto), hacía que el texto
+     se saliera del recuadro en vez de ajustarse. min-width:0 en los
+     flex-items de arriba deja que el texto haga wrap en vez de forzar el
+     contenedor a ensancharse; esta media query además achica el logo (y
+     lo apila abajo si el espacio es muy reducido) para dejarle más
+     ancho a la información. */
+  @media (max-width: 420px) {
+    .col-logo { width: 90px; }
+    .fila-info .etiqueta { font-size: 0.72rem; padding: 7px 8px; }
+    .fila-info .valor { font-size: 0.8rem; padding: 7px 8px; }
+  }
+  @media (max-width: 320px) {
+    .bloque-superior { flex-direction: column; }
+    .col-info { border-right: none; border-bottom: 3px solid {{ colores.borde }}; }
+    .col-logo { width: 100%; height: 70px; }
+  }
   .banner {
     background: {{ colores.banner }}; color: {{ colores.banner_texto }}; font-weight: 700; text-align: center;
     padding: 8px 10px; font-size: 0.82rem; letter-spacing: 0.2px;
@@ -40,42 +68,42 @@
   table.productos { width: 100%; border-collapse: collapse; }
   table.productos th {
     background: {{ colores.etiqueta_bg }}; color: {{ colores.texto_fuerte }}; font-size: 0.74rem; padding: 6px 8px;
-    border: 1px solid #e5e0e2; text-align: center;
+    border: 1px solid #e5e0e2; text-align: center; overflow-wrap: anywhere;
   }
   table.productos td {
-    padding: 8px; border: 1px solid #e5e0e2; font-size: 0.84rem; vertical-align: top;
+    padding: 8px; border: 1px solid #e5e0e2; font-size: 0.84rem; vertical-align: top; overflow-wrap: anywhere;
   }
-  table.productos td.num { text-align: center; white-space: nowrap; }
-  table.productos td.money { text-align: right; white-space: nowrap; }
-  table.productos .detalle { color: #7a6f75; font-size: 0.78rem; }
+  table.productos td.num { text-align: center; white-space: normal; }
+  table.productos td.money { text-align: right; overflow-wrap: normal; word-break: keep-all; }
+  table.productos .detalle { color: #7a6f75; font-size: 0.78rem; overflow-wrap: anywhere; }
   .notas-fila td { color: #3a2e35; font-style: italic; }
   .bloque-notas-fijas { border-top: 3px solid {{ colores.borde }}; }
   .barra-nota-fija {
     background: {{ colores.banner }}; color: {{ colores.banner_texto }}; font-size: 0.72rem; font-weight: 600;
-    padding: 5px 10px;
+    padding: 5px 10px; overflow-wrap: anywhere;
   }
   .barra-nota-fija + .barra-nota-fija { border-top: 1px solid white; }
   .tarjetita {
-    color: #c14848; font-style: italic; font-size: 0.74rem; text-align: center; padding: 6px 10px;
+    color: #c14848; font-style: italic; font-size: 0.74rem; text-align: center; padding: 6px 10px; overflow-wrap: anywhere;
   }
-  .pie { display: flex; border-top: 3px solid {{ colores.borde }}; }
-  .pie .horario { flex: 1; padding: 8px 10px; font-size: 0.76rem; text-align: center; }
+  .pie { display: flex; flex-wrap: wrap; border-top: 3px solid {{ colores.borde }}; }
+  .pie .horario { flex: 1; min-width: 140px; padding: 8px 10px; font-size: 0.76rem; text-align: center; overflow-wrap: anywhere; }
   .pie .horario strong { display: block; font-size: 0.8rem; margin-bottom: 3px; }
-  .pie .totales { width: 42%; border-left: 3px solid {{ colores.borde }}; }
+  .pie .totales { width: 42%; min-width: 140px; border-left: 3px solid {{ colores.borde }}; }
   .pie .totales table { width: 100%; border-collapse: collapse; }
   .pie .totales th {
     background: {{ colores.etiqueta_bg }}; color: {{ colores.texto_fuerte }}; font-size: 0.72rem; padding: 4px 8px; text-align: left;
   }
-  .pie .totales td { padding: 4px 8px; text-align: right; font-size: 0.82rem; font-weight: 700; }
+  .pie .totales td { padding: 4px 8px; text-align: right; font-size: 0.82rem; font-weight: 700; overflow-wrap: anywhere; }
   .contacto {
     background: {{ colores.banner }}; color: {{ colores.banner_texto }}; text-align: center; font-weight: 700;
-    font-size: 0.82rem; padding: 8px 10px; border-top: 3px solid {{ colores.borde }};
+    font-size: 0.82rem; padding: 8px 10px; border-top: 3px solid {{ colores.borde }}; overflow-wrap: anywhere;
   }
   .notas-importantes {
     background: {{ colores.notas_imp_bg }}; color: {{ colores.notas_imp_texto }}; padding: 10px 12px;
   }
   .notas-importantes .titulo { font-weight: 700; font-size: 0.78rem; margin-bottom: 4px; }
-  .notas-importantes .texto { font-size: 0.82rem; }
+  .notas-importantes .texto { font-size: 0.82rem; overflow-wrap: anywhere; }
   @media print {
     body { background: white; padding: 0; }
     .barra-acciones { display: none; }

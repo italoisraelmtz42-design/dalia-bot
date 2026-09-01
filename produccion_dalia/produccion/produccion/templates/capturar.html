@@ -19,8 +19,17 @@
     <label for="telefono">Teléfono</label>
     <input type="tel" id="telefono" name="telefono">
 
-    <label for="fecha_entrega">Fecha de entrega</label>
-    <input type="text" id="fecha_entrega" name="fecha_entrega" placeholder="DD/MM/AAAA">
+    <label for="fecha_entrega_picker">Fecha de entrega</label>
+    <input type="date" id="fecha_entrega_picker" onchange="sincronizarFechaEntrega()">
+    {# 🔧 (1 sep 2026, pedido de Israel: "no quiero que sea manual, quiero
+       que se abra un calendario") El calendario nativo del navegador
+       maneja su valor en formato AAAA-MM-DD -- el resto de la app (y la
+       base de datos) espera DD/MM/AAAA, el mismo formato que ya usan
+       todas las notas leídas por foto+IA. Por eso el <input type="date">
+       NO se manda tal cual: al elegir un día, sincronizarFechaEntrega()
+       lo convierte y lo deja en este campo oculto, que es el que de
+       verdad viaja como "fecha_entrega". #}
+    <input type="hidden" id="fecha_entrega" name="fecha_entrega">
 
     <label for="tipo_entrega">Tipo de entrega</label>
     <div class="chips">
@@ -68,7 +77,18 @@
     <div id="productos-lista">
       <div class="producto-fila">
         <label>Producto</label>
-        <input type="text" name="producto_0">
+        {# 🔧 (1 sep 2026, pedido de Israel: "que se despliegue esa lista,
+           ya con precios, y se carguen los precios en automático. si
+           quiero anotar un producto que no aparece ahí, debe haber una
+           opción de 'otro producto' y poder editarlo a mano") El <select>
+           se llena por JS (opcionesCatalogoHTML(), ver abajo) a partir de
+           CATALOGO_PRECIOS -- así no hay que repetir el catálogo completo
+           aquí Y en agregarProducto(). Elegir un producto llena solo el
+           campo de texto de abajo (el que de verdad se guarda) y, si se
+           puede ver finanzas, el precio; elegir "Otro producto" limpia el
+           campo de texto para escribirlo a mano. #}
+        <select class="selector-catalogo" onchange="aplicarCatalogo(this)"></select>
+        <input type="text" name="producto_0" placeholder="Se llena solo al elegir del catálogo, o escríbelo si eliges &quot;Otro producto&quot;">
         <label>Cantidad</label>
         <input type="number" name="cantidad_0">
         <label>Colores / detalles</label>
@@ -89,14 +109,23 @@
     <label for="anticipo">Anticipo pagado</label>
     <input type="number" step="0.01" id="anticipo" name="anticipo" value="0">
 
-    <label for="total">Total del pedido</label>
-    <input type="number" step="0.01" id="total" name="total" value="0">
+    {# 🔧 (1 sep 2026, pedido de Israel: "la suma quiero que se haga en
+       automático, yo solo pongo precios y cantidades de los productos y
+       el anticipo recibido") "total" ya no se escribe a mano -- queda
+       readonly y recalcularTotal() lo llena solo: cantidad × precio de
+       cada producto, más el envío si aplica. #}
+    <label for="total">Total del pedido (se calcula solo)</label>
+    <input type="number" step="0.01" id="total" name="total" value="0" readonly
+           style="background:#f0f0f0;color:#555;">
+    <p class="muted" style="margin-top:2px;font-size:0.85rem;">
+      Se suma solo: cantidad × precio de cada producto, más el envío si aplica -- no se escribe aquí directo.
+    </p>
     {% else %}
-    {# 🔧 (30 ago 2026) Ocultos pero NO quitados -- si se quitaran, el
-       JS de actualizarEnvio() ya no tendría dónde reflejar el costo de
-       envío calculado. El servidor de todos modos ignora lo que traigan
-       estos dos campos si quien captura no puede ver finanzas (ver
-       capturar() en app.py) -- viajan solo para que el script no truene. #}
+    {# 🔧 (30 ago 2026) Ocultos pero NO quitados -- si se quitaran,
+       recalcularTotal() ya no tendría dónde dejar el total calculado.
+       El servidor de todos modos ignora lo que traigan estos dos campos
+       si quien captura no puede ver finanzas (ver capturar() en
+       app.py) -- viajan solo para que el script no truene. #}
     <input type="hidden" id="anticipo" name="anticipo" value="0">
     <input type="hidden" id="total" name="total" value="0">
     {% endif %}
@@ -120,6 +149,11 @@
   };
   const PRECIO_ENVIO_DHL = {{ precio_envio_dhl }};
   const PUEDE_VER_FINANZAS = {{ 'true' if puede_ver_finanzas else 'false' }};
+  // 🔧 (1 sep 2026, pedido de Israel: selector de catálogo con precios)
+  // [[categoria, [[nombre, precio, nota_o_null], ...]], ...] -- se arma
+  // en Python (CATALOGO_PRECIOS_CAPTURA en app.py), aquí solo se usa
+  // para construir el <select> de cada fila de producto.
+  const CATALOGO_PRECIOS = {{ catalogo_precios|tojson }};
   let envioActual = 0;
 
   function tipoEntregaSeleccionado() {
@@ -159,12 +193,109 @@
     document.getElementById('costo-envio-mostrado').textContent = nuevoEnvio ? ('$' + nuevoEnvio.toFixed(2)) : '—';
     lineaCosto.style.display = nuevoEnvio ? 'block' : 'none';
 
-    const totalInput = document.getElementById('total');
-    const totalActual = parseFloat(totalInput.value) || 0;
-    const totalSinEnvioViejo = Math.max(totalActual - envioActual, 0);
-    totalInput.value = (totalSinEnvioViejo + nuevoEnvio).toFixed(2);
     envioActual = nuevoEnvio;
+    recalcularTotal();
   }
+
+  // 🔧 (1 sep 2026, pedido de Israel: "la suma del total está incorrecta,
+  // solucionalo... quiero que se haga en automático, yo solo pongo los
+  // precios y cantidades de los productos y del anticipo recibido") El
+  // "Total del pedido" ya NO se escribe a mano ni se le va sumando/
+  // restando el envío a lo que haya quedado escrito (así era como se
+  // desincronizaba del total real de los productos) -- se RECALCULA
+  // completo cada vez: la suma de cantidad×precio de cada fila de
+  // producto, más el costo de envío vigente. Nunca depende de un valor
+  // anterior, así que no se puede quedar "atorado" en un número viejo.
+  function recalcularTotal() {
+    const totalInput = document.getElementById('total');
+    if (!totalInput) return;
+    let subtotalProductos = 0;
+    document.querySelectorAll('#productos-lista .producto-fila').forEach(function (fila) {
+      const cantidadInput = fila.querySelector('input[name^="cantidad_"]');
+      const precioInput = fila.querySelector('input[name^="precio_"]');
+      const cantidad = cantidadInput ? (parseFloat(cantidadInput.value) || 0) : 0;
+      const precio = precioInput ? (parseFloat(precioInput.value) || 0) : 0;
+      subtotalProductos += cantidad * precio;
+    });
+    totalInput.value = (subtotalProductos + envioActual).toFixed(2);
+  }
+
+  // Delegado: cubre tanto la fila inicial (producto_0) como las que se
+  // agreguen después con agregarProducto() -- no hace falta reengachar
+  // un listener por cada fila nueva.
+  document.getElementById('productos-lista').addEventListener('input', function (e) {
+    const nombre = e.target.name || '';
+    if (nombre.indexOf('cantidad_') === 0 || nombre.indexOf('precio_') === 0) {
+      recalcularTotal();
+    }
+  });
+
+  // 🔧 (1 sep 2026, pedido de Israel: "no quiero que sea manual, quiero
+  // que se abra un calendario por mes y desde ahí poder marcar la
+  // fecha") El <input type="date"> nativo abre justo ese calendario por
+  // mes; su valor viene en AAAA-MM-DD y aquí se convierte a DD/MM/AAAA
+  // (el formato que usa toda la app) antes de dejarlo en el campo oculto
+  // "fecha_entrega", que es el que de verdad se guarda.
+  function sincronizarFechaEntrega() {
+    const picker = document.getElementById('fecha_entrega_picker');
+    const destino = document.getElementById('fecha_entrega');
+    if (!picker.value) {
+      destino.value = '';
+      return;
+    }
+    const [anio, mes, dia] = picker.value.split('-');
+    destino.value = `${dia}/${mes}/${anio}`;
+  }
+
+  // 🔧 (1 sep 2026, pedido de Israel) Arma el contenido del <select> del
+  // catálogo -- una sola vez aquí, reusado tanto para la fila inicial
+  // (ver más abajo) como para cada fila que agregarProducto() vaya
+  // creando, para no repetir el catálogo completo en dos lados.
+  function opcionesCatalogoHTML() {
+    let html = '<option value="">-- Elegir del catálogo --</option>';
+    CATALOGO_PRECIOS.forEach(function (grupo) {
+      const categoria = grupo[0], items = grupo[1];
+      html += `<optgroup label="${categoria}">`;
+      items.forEach(function (item) {
+        const nombre = item[0], precio = item[1], nota = item[2];
+        const nombreEscapado = nombre.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        const etiqueta = nombre + ' — $' + precio.toFixed(2) + (nota ? ' (' + nota + ')' : '');
+        html += `<option value="${nombreEscapado}" data-precio="${precio}">${etiqueta}</option>`;
+      });
+      html += '</optgroup>';
+    });
+    html += '<option value="__otro__">✏️ Otro producto (escribir a mano)</option>';
+    return html;
+  }
+
+  // Elegir algo del catálogo llena solo el campo de texto del producto
+  // (el que de verdad se guarda) y, si se puede ver finanzas, el precio
+  // unitario -- disparando el mismo evento que ya usa recalcularTotal()
+  // para que el Total se actualice de inmediato. "Otro producto" limpia
+  // el campo de texto y le da foco, para escribirlo a mano.
+  function aplicarCatalogo(select) {
+    if (!select.value) return;
+    const fila = select.closest('.producto-fila');
+    const productoInput = fila.querySelector('input[name^="producto_"]');
+    if (select.value === '__otro__') {
+      productoInput.value = '';
+      productoInput.focus();
+      return;
+    }
+    productoInput.value = select.value;
+    const precioInput = fila.querySelector('input[name^="precio_"]');
+    if (precioInput && precioInput.type !== 'hidden') {
+      const precio = select.selectedOptions[0].getAttribute('data-precio');
+      precioInput.value = parseFloat(precio).toFixed(2);
+      precioInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+
+  // La fila inicial (producto_0) se manda vacía desde el servidor -- se
+  // llena aquí, junto con cualquier fila que ya exista al cargar.
+  document.querySelectorAll('.selector-catalogo').forEach(function (s) {
+    s.innerHTML = opcionesCatalogoHTML();
+  });
 
   let contadorProductos = document.querySelectorAll('.producto-fila').length;
   function agregarProducto() {
@@ -177,7 +308,8 @@
       : `<input type="hidden" name="precio_${i}" value="">`;
     div.innerHTML = `
       <label>Producto</label>
-      <input type="text" name="producto_${i}">
+      <select class="selector-catalogo" onchange="aplicarCatalogo(this)">${opcionesCatalogoHTML()}</select>
+      <input type="text" name="producto_${i}" placeholder="Se llena solo al elegir del catálogo, o escríbelo si eliges &quot;Otro producto&quot;">
       <label>Cantidad</label>
       <input type="number" name="cantidad_${i}">
       <label>Colores / detalles</label>

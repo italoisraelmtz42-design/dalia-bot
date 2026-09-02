@@ -2250,7 +2250,7 @@ def _cantidad_total_pedido(pedido):
     return float(pedido.get("cantidad") or 0)
 
 
-MINIMO_PIEZAS_PUNTO_DE_ENTREGA = 25
+MINIMO_PIEZAS_PUNTO_DE_ENTREGA = 60  # 🔧 (1 sep 2026) subido de 25 a 60 pzas, pedido explícito de Israel
 
 
 def _es_tipo_entrega_punto_de_entrega(valor):

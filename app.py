@@ -3301,7 +3301,7 @@ def enviar_whatsapp(numero, texto):
         return None
 
 
-def notificar_a_dalia(pedido_db, pedido_ram):
+def notificar_a_dalia(pedido_db, pedido_ram, canal="whatsapp"):
     """Le manda a Dalia (a su WhatsApp personal, no al del bot) un aviso
     cada vez que se confirma un anticipo, con el RESUMEN COMPLETO del
     pedido — no solo lo mínimo. Como Dalia no puede ver la conversación
@@ -3314,6 +3314,21 @@ def notificar_a_dalia(pedido_db, pedido_ram):
     también se le manda a ella este mismo mensaje (idéntico, mismo
     momento). Cada número se evalúa por separado: si falta uno de los
     dos, el otro igual recibe su aviso con normalidad.
+
+    🔧 (1 sep 2026, a pedido explícito de Israel) Si el pedido viene de
+    Messenger, "telefono_cliente" en realidad es el PSID (un número
+    largo de Facebook que no le dice nada a nadie) -- antes se mandaba
+    tal cual en la línea "Cliente:". Ahora, si el canal es "messenger",
+    se busca el nombre real ya cacheado en la tabla nombres_messenger
+    (lo resuelve resolver_nombre_messenger() desde que el cliente manda
+    su primer mensaje, así que para cuando llega a confirmar el anticipo
+    casi siempre ya está disponible) y se muestra el nombre junto con el
+    PSID entre paréntesis, para que Dalia pueda identificarlo fácil y,
+    si hace falta, seguir usando el PSID para buscarlo en el dashboard.
+    Si el nombre todavía no se resolvió (cliente nuevo, muy pocos
+    mensajes), se avisa explícitamente en vez de mostrar solo el PSID
+    en silencio. WhatsApp no cambia -- ahí telefono_cliente ya es un
+    número real y se sigue mostrando igual que antes.
 
     Usa como fuente principal el pedido YA GUARDADO en la base de datos
     (pedido_db, con sus items/entrega/pagos) porque es el registro más
@@ -3329,6 +3344,18 @@ def notificar_a_dalia(pedido_db, pedido_ram):
     folio = pedido_db.folio if pedido_db else "SIN FOLIO"
     telefono_cliente = pedido_db.telefono if pedido_db else "desconocido"
 
+    cliente_para_mostrar = telefono_cliente
+    if canal == "messenger" and telefono_cliente and telefono_cliente != "desconocido":
+        try:
+            nombre_fb = database.obtener_nombre_messenger_cache(telefono_cliente)
+        except Exception as e:
+            nombre_fb = None
+            print(f"⚠️ No se pudo consultar el nombre de Messenger para notificar_a_dalia: {repr(e)}")
+        if nombre_fb:
+            cliente_para_mostrar = f"{nombre_fb} (Messenger, PSID {telefono_cliente})"
+        else:
+            cliente_para_mostrar = f"Cliente de Messenger, nombre aún no resuelto (PSID {telefono_cliente})"
+
     items = (pedido_db.items if pedido_db and pedido_db.items else []) or []
     entrega = pedido_db.entrega if pedido_db else None
     pago = pedido_db.pagos[-1] if (pedido_db and pedido_db.pagos) else None
@@ -3338,7 +3365,7 @@ def notificar_a_dalia(pedido_db, pedido_ram):
 
     lineas = [
         f"🛒 Nuevo anticipo confirmado — Folio {folio}",
-        f"Cliente: {telefono_cliente}",
+        f"Cliente: {cliente_para_mostrar}",
         "",
     ]
 
@@ -4981,7 +5008,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             enviar_mensaje_canal(numero, mensaje_3, canal, pagina_id=pagina_id)
 
             print("📣 Notificando a Dalia...")
-            notificar_a_dalia(pedido_db, sesion["pedido"])
+            notificar_a_dalia(pedido_db, sesion["pedido"], canal=canal)
 
             print("🏁 Fin procesamiento (anticipo confirmado)")
             print("=" * 70)

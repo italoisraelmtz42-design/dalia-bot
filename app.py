@@ -997,6 +997,26 @@ def resolver_costo_envio(municipio: str) -> float | None:
     if not municipio:
         return None
     clave = normalizar_producto_clave(municipio)
+
+    # 🔧 (1 sep 2026, bug real + pedido explícito de Israel) "García" es
+    # un municipio real y aparte de "San Pedro Garza García" -- pero el
+    # match difuso de abajo (clave in k / k in clave) hacía que "garcia"
+    # a secas matcheara por accidente con la clave "san pedro garza
+    # garcia" (por ser substring literal de ella) y le cotizaba $120 de
+    # domicilio como si tuviera cobertura. García NO tiene cobertura de
+    # domicilio -- se trata como fuera de zona (DHL $300, pedido
+    # liquidado), decisión confirmada con Israel. Se detecta por palabra
+    # completa "garcia" SIN "pedro" en el texto (cubre "García",
+    # "García NL", "García, Nuevo León", etc.) para no afectar el match
+    # normal de "san pedro garza garcia" / "san pedro", que sí deben
+    # seguir cotizando con normalidad.
+    palabras_municipio = set(clave.replace(",", " ").split())
+    if "garcia" in palabras_municipio and "pedro" not in palabras_municipio:
+        print(f"⚠️ Municipio '{municipio}' identificado como García (no San Pedro "
+              f"Garza García) -- sin cobertura de domicilio, tratado como fuera de "
+              f"zona (${COSTO_ENVIO_FUERA_DE_ZONA} DHL).")
+        return None
+
     if clave in COSTOS_ENVIO_MUNICIPIO:
         return COSTOS_ENVIO_MUNICIPIO[clave]
     for k, v in COSTOS_ENVIO_MUNICIPIO.items():

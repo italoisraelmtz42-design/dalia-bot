@@ -1699,6 +1699,18 @@ nunca calcules fechas por tu cuenta):
   cercana). Usa siempre y únicamente el resultado de verificar_urgencia_fecha,
   nunca tu propia cuenta, ni siquiera como respaldo o doble-checking.
 
+- 🚨 NUEVA REGLA (3 sep 2026, decisión de negocio de Israel, ya NO es
+  opcional): NUNCA se ofrece ni se acepta entrega para EL MISMO DÍA, bajo
+  ninguna circunstancia -- ni siquiera pagando el cargo urgente de $50. Lo
+  más rápido posible que se puede entregar un pedido es MAÑANA (el día
+  siguiente a hoy). Si el cliente pide "para hoy" o "ahorita", dile con
+  amabilidad que ya no es posible entregar el mismo día y ofrécele mañana
+  como la opción más rápida. verificar_urgencia_fecha ya rechaza el mismo
+  día automáticamente -- confía en su respuesta, no le ofrezcas al cliente
+  el mismo día "para no perder la venta"; caso real que motivó esta regla:
+  el bot prometió y cobró urgente por una entrega el mismo día, y no
+  debió haber sido posible.
+
 - El tiempo normal de elaboración de un pedido es de 4 días hábiles.
 - La fecha de entrega para un pedido NORMAL (no urgente) hecho hoy es el
   {dia_semana_minima} {fecha_minima.strftime('%d/%m/%Y')}.
@@ -2353,6 +2365,7 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
         "cantidad_pendiente",
     }
     campos_modificados = []
+    _fecha_evento_previa = pedido.get("fecha_evento")
     for campo in campos_pedido:
         if campo in datos and datos[campo] not in (None, ""):
             pedido[campo] = datos[campo]
@@ -2362,6 +2375,24 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
         pedido["es_urgente"] = True
         if "es_urgente" not in campos_modificados:
             campos_modificados.append("es_urgente")
+
+    # 🔧 (3 sep 2026, pedido explícito de Israel, tras un caso real donde
+    # el bot prometió Y cobró urgente por una entrega para el MISMO día):
+    # ya no se acepta el mismo día como fecha de entrega bajo ninguna
+    # circunstancia, ni siquiera pagando el cargo urgente -- lo más
+    # rápido posible pasa a ser el día siguiente. Se revisa ANTES del
+    # cálculo de urgencia de abajo: si fecha_evento resultó ser hoy o ya
+    # pasó, se revierte al valor que tenía antes (nunca se acepta) y se
+    # deja una bandera para que el caller (ejecutar_tool_call) le explique
+    # esto al modelo con un mensaje BLOQUEADO, en vez de dejar que el
+    # pedido se quede con una fecha inválida.
+    if "fecha_evento" in campos_modificados:
+        _fecha_evento_parseada = parsear_fecha_pedido(pedido.get("fecha_evento"))
+        _hoy_real = datetime.now(ZONA_HORARIA_NEGOCIO).date()
+        if _fecha_evento_parseada is not None and _fecha_evento_parseada <= _hoy_real:
+            pedido["fecha_evento"] = _fecha_evento_previa
+            campos_modificados = [c for c in campos_modificados if c != "fecha_evento"]
+            pedido["_fecha_evento_rechazada_mismo_dia"] = True
 
     # 🔧 Urgencia determinística -- ver es_pedido_urgente() arriba. En
     # cuanto se sepa fecha_evento, Python decide si es urgente o no
@@ -2712,6 +2743,29 @@ _PATRON_CANTIDAD_EXPLICITA = re.compile(
 )
 
 
+# 🔧 (3 sep 2026, pedido explícito de Israel, ver verificar_urgencia_fecha
+# arriba): pedirle al modelo por texto que llame a verificar_urgencia_fecha
+# "en cuanto el cliente mencione una fecha" no fue suficiente -- caso real:
+# el cliente AFIRMÓ ("aunque sea urgente") en vez de preguntar, y el
+# modelo simplemente le siguió la corriente sin verificar nada. Igual que
+# ya se hace con los comprobantes de pago (ver tool_choice_este_turno más
+# abajo), este patrón detecta cualquier mención de fecha en el mensaje del
+# cliente -- números de fecha, "mañana", días de la semana, nombres de
+# mes -- y OBLIGA la llamada a verificar_urgencia_fecha esa misma vuelta,
+# sin depender de que el modelo se acuerde o esté de acuerdo con lo que
+# dijo el cliente.
+_PATRON_FECHA_EN_TEXTO = re.compile(
+    r"\b("
+    r"hoy|mañana|pasado\s+ma[ñn]ana|"
+    r"lunes|martes|mi[ée]rcoles|jueves|viernes|s[áa]bado|domingo|"
+    r"enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|"
+    r"octubre|noviembre|diciembre|"
+    r"\d{1,2}\s*[/\-]\s*\d{1,2}(?:\s*[/\-]\s*\d{2,4})?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 # 🔧 (19 ago 2026, bug real reportado por Israel) Caso real: la clienta
 # dijo "Oso color celeste" (sin mencionar jaboncito para nada) y el
 # modelo agregó al pedido "osito CON jaboncito" por su cuenta -- en
@@ -2777,6 +2831,22 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         ya_estaba_confirmado = pedido.get("anticipo_confirmado") is True
         tipo_entrega_previo = pedido.get("tipo_entrega")
         campos_modificados = aplicar_actualizacion_pedido(pedido, args)
+
+        # 🔧 (3 sep 2026, pedido explícito de Israel) ver la bandera
+        # _fecha_evento_rechazada_mismo_dia en aplicar_actualizacion_pedido:
+        # se revisa aquí, apenas se intenta poner una fecha_evento de hoy
+        # o pasada, para que nunca avance ni un turno más con eso.
+        if pedido.pop("_fecha_evento_rechazada_mismo_dia", False):
+            _manana = (datetime.now(ZONA_HORARIA_NEGOCIO).date() + timedelta(days=1)).strftime("%d/%m/%Y")
+            print("🚨 Se bloqueó fecha_evento: el cliente pidió entrega para hoy mismo o una fecha pasada")
+            return (
+                f"BLOQUEADO: ya NO se ofrece entrega el mismo día bajo ninguna "
+                f"circunstancia, ni siquiera pagando el cargo urgente de $50. Lo más "
+                f"rápido posible es MAÑANA ({_manana}). Explícale esto al cliente con "
+                f"amabilidad y pregúntale si esa fecha (u otra más adelante) le funciona.",
+                campos_modificados,
+                False,
+            )
 
         # 🔧 Mínimo de 25 piezas para punto de entrega (bug real, ver nota
         # junto a _es_tipo_entrega_punto_de_entrega arriba). Se revisa
@@ -2875,6 +2945,26 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                         campos_modificados,
                         False,
                     )
+            # 🔧 (3 sep 2026, pedido explícito de Israel: "referenciado a
+            # la fecha en que se haga el pago del anticipo"): si el
+            # cliente se tardó varios días entre cotizar la fecha de
+            # entrega y pagar, es_urgente pudo quedar desactualizado --
+            # se calculó contra el día en que se tocó fecha_evento, no
+            # contra HOY, el día real del pago. Se recalcula aquí, justo
+            # antes de confirmar, con la fecha de HOY -- así el cargo
+            # urgente (o su ausencia) siempre corresponde al día real en
+            # que se cobra, nunca al día en que se cotizó.
+            if pedido.get("fecha_evento"):
+                urgente_al_momento_de_pagar = es_pedido_urgente(pedido.get("fecha_evento"))
+                if urgente_al_momento_de_pagar is not None and pedido.get("es_urgente") != urgente_al_momento_de_pagar:
+                    pedido["es_urgente"] = urgente_al_momento_de_pagar
+                    pedido["urgente"] = urgente_al_momento_de_pagar
+                    if "es_urgente" not in campos_modificados:
+                        campos_modificados.append("es_urgente")
+                    print(f"📅 Urgencia recalculada AL MOMENTO DE PAGAR (referenciada al día del "
+                          f"anticipo, no al día en que se cotizó): fecha_evento="
+                          f"{pedido.get('fecha_evento')!r} -> es_urgente={urgente_al_momento_de_pagar}")
+
             _tot_check = pedido_manager.calcular_total(borrador=pedido)
             items_actuales = pedido.get("items") if isinstance(pedido.get("items"), list) else []
             # 🔧 CORREGIDO (bug real detectado en pruebas): el bloqueo de
@@ -3106,6 +3196,25 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
             )
 
         ahora = datetime.now(ZONA_HORARIA_NEGOCIO)
+        hoy_real = ahora.date()
+
+        # 🔧 (3 sep 2026, pedido explícito de Israel): ya no se ofrece
+        # entrega el mismo día bajo ninguna circunstancia, ni siquiera
+        # pagando el cargo urgente -- se revisa esto ANTES que la
+        # urgencia normal, porque "urgente" ya no incluye el día de hoy.
+        if fecha_candidata <= hoy_real:
+            manana = (hoy_real + timedelta(days=1)).strftime("%d/%m/%Y")
+            return (
+                f"📅 CÁLCULO REAL (hecho por el sistema, no lo recalcules tú): "
+                f"{fecha_candidata.strftime('%d/%m/%Y')} NO se puede ofrecer -- ya NO "
+                f"se entrega el mismo día bajo ninguna circunstancia, ni pagando el "
+                f"cargo urgente de $50. Dile al cliente que lo más rápido posible es "
+                f"MAÑANA ({manana}), y pregúntale si esa fecha (u otra más adelante) "
+                f"le funciona.",
+                [],
+                False,
+            )
+
         fecha_minima_real = sumar_dias_habiles(ahora.date(), 4)
         es_urgente_real = fecha_candidata < fecha_minima_real
 
@@ -3262,6 +3371,15 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
         tool_choice_este_turno = "auto"
         if imagen_base64 and indice_iteracion == 0:
             tool_choice_este_turno = {"type": "function", "function": {"name": "actualizar_pedido"}}
+        elif (
+            indice_iteracion == 0
+            and texto_cliente
+            and _PATRON_FECHA_EN_TEXTO.search(texto_cliente)
+        ):
+            # 🔧 (3 sep 2026) ver _PATRON_FECHA_EN_TEXTO arriba -- se
+            # obliga a verificar la fecha ANTES de que el modelo pueda
+            # decir nada sobre si es urgente o no.
+            tool_choice_este_turno = {"type": "function", "function": {"name": "verificar_urgencia_fecha"}}
 
         r = client.chat.completions.create(
             model=MODELO,

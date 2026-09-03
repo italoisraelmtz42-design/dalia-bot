@@ -1686,6 +1686,19 @@ REGLAS DE FECHAS Y PEDIDOS URGENTES (usa SIEMPRE la fecha de hoy que se te
 da más abajo, en la sección de estado del pedido, para todo cálculo;
 nunca calcules fechas por tu cuenta):
 
+- 🚨 OBLIGATORIO: en cuanto el cliente mencione CUALQUIER fecha candidata de
+  entrega -- aunque no sea definitiva, aunque solo esté preguntando ("¿me lo
+  dan para el 19 de sep?", "¿el sábado se podría?") -- llama a la función
+  verificar_urgencia_fecha con esa fecha ANTES de decirle si es urgente o
+  normal. NUNCA compares tú las fechas "a mano" ni cuentes los días de
+  memoria. 🚨 Error real ya cometido, nunca lo repitas: en conversaciones
+  reales el bot marcó como urgente una fecha casi 3 semanas en el futuro, y
+  en otra conversación marcó como urgente una fecha que estaba DESPUÉS de
+  otra que el mismo bot ya había dicho que era normal -- eso es imposible
+  (una fecha más lejana en el tiempo nunca puede ser más urgente que una más
+  cercana). Usa siempre y únicamente el resultado de verificar_urgencia_fecha,
+  nunca tu propia cuenta, ni siquiera como respaldo o doble-checking.
+
 - El tiempo normal de elaboración de un pedido es de 4 días hábiles.
 - La fecha de entrega para un pedido NORMAL (no urgente) hecho hoy es el
   {dia_semana_minima} {fecha_minima.strftime('%d/%m/%Y')}.
@@ -2196,6 +2209,43 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "verificar_urgencia_fecha",
+            "description": (
+                "🚨 OBLIGATORIA: llámala en cuanto el cliente mencione CUALQUIER "
+                "fecha candidata de entrega en la conversación -- aunque todavía "
+                "no sea definitiva, aunque el cliente solo esté preguntando "
+                "('¿me lo entregan para el 19 de sep?', '¿el sábado se podría?'), "
+                "y SIEMPRE antes de decirle si esa fecha es urgente o normal. "
+                "NUNCA decidas tú comparando los números de la fecha a mano -- "
+                "esta función hace la cuenta real contra la fecha de hoy y te da "
+                "la respuesta exacta que debes usar. Llámala de nuevo cada vez "
+                "que el cliente proponga una fecha distinta (ej. si primero "
+                "pregunta por el sábado y luego por el viernes, son dos "
+                "llamadas, una por cada fecha). No hace falta que la fecha ya "
+                "esté guardada en el pedido -- esto es solo para saber qué "
+                "contestarle en el momento, sin importar en qué punto vaya la "
+                "conversación."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fecha": {
+                        "type": "string",
+                        "description": (
+                            "Fecha candidata que mencionó el cliente, en formato "
+                            "DD/MM/YYYY (ej. 19/09/2026). Si el cliente no dijo el "
+                            "año, usa el año en curso, o el siguiente si esa fecha "
+                            "ya pasó este año."
+                        ),
+                    },
+                },
+                "required": ["fecha"],
+            },
+        },
+    },
 ]
 
 
@@ -2270,7 +2320,7 @@ def _cantidad_total_pedido(pedido):
     return float(pedido.get("cantidad") or 0)
 
 
-MINIMO_PIEZAS_PUNTO_DE_ENTREGA = 60  # 🔧 (1 sep 2026) subido de 25 a 60 pzas, pedido explícito de Israel
+MINIMO_PIEZAS_PUNTO_DE_ENTREGA = 80  # 🔧 (2 sep 2026) subido de 60 a 80 pzas, pedido explícito de Israel
 
 
 def _es_tipo_entrega_punto_de_entrega(valor):
@@ -3022,6 +3072,71 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         enviar_imagen_canal(numero, url_imagen, canal, caption=nombre_mostrar, pagina_id=pagina_id)
         imagenes_enviadas.add(clave)
         return "imagen enviada correctamente", [], False
+
+    if name == "verificar_urgencia_fecha":
+        # 🔧 (2 sep 2026, bug real detectado con 2 clientas distintas el
+        # mismo día -- Marisol y otra clienta): antes de que el cliente
+        # llegara a confirmar fecha_evento con actualizar_pedido, el
+        # modelo YA le estaba diciendo en conversación libre si una fecha
+        # era urgente o no, calculándolo "a mano" -- y se equivocó feo:
+        # marcó como urgente una fecha 19 días en el futuro, y también
+        # marcó como urgente una fecha que estaba DESPUÉS de otra que el
+        # mismo bot ya había dicho que era normal (imposible, una fecha
+        # más lejana nunca puede ser más urgente que una más cercana). El
+        # candado que ya existía (bloque "Urgencia determinística" más
+        # abajo, en actualizar_pedido) solo protege una vez que la fecha
+        # ya se guardó en el pedido -- esta función extiende la misma
+        # protección a CUALQUIER momento de la conversación, apenas se
+        # menciona una fecha candidata, sin esperar a que se confirme.
+        try:
+            args_obj = json.loads(args or "{}")
+        except json.JSONDecodeError:
+            args_obj = {}
+        fecha_texto = (args_obj.get("fecha") or "").strip()
+        fecha_candidata = parsear_fecha_pedido(fecha_texto)
+
+        if fecha_candidata is None:
+            return (
+                f"No se pudo interpretar la fecha '{fecha_texto}' -- pídele al "
+                "cliente el día exacto (ej. '¿el 19 de septiembre de este año?') "
+                "y vuelve a llamar a esta función en formato DD/MM/YYYY antes de "
+                "decirle si es urgente o no.",
+                [],
+                False,
+            )
+
+        ahora = datetime.now(ZONA_HORARIA_NEGOCIO)
+        fecha_minima_real = sumar_dias_habiles(ahora.date(), 4)
+        es_urgente_real = fecha_candidata < fecha_minima_real
+
+        dias_semana_es = [
+            "lunes", "martes", "miércoles", "jueves",
+            "viernes", "sábado", "domingo",
+        ]
+        dia_semana_real = dias_semana_es[fecha_candidata.weekday()]
+
+        if es_urgente_real:
+            mensaje_resultado = (
+                f"📅 CÁLCULO REAL (hecho por el sistema, no lo recalcules tú): "
+                f"{fecha_candidata.strftime('%d/%m/%Y')} ({dia_semana_real}) SÍ es "
+                f"un PEDIDO URGENTE (antes del {fecha_minima_real.strftime('%d/%m/%Y')}, "
+                "que es el límite mínimo para un pedido normal). Si el cliente "
+                "confirma esta fecha, aplica cargo extra de $50 MXN y SOLO se "
+                "puede entregar en el local (o en sábado dentro del horario "
+                "urgente reducido de 11:30am-2:00pm si esa fecha cae en sábado; "
+                "nunca en domingo)."
+            )
+        else:
+            mensaje_resultado = (
+                f"📅 CÁLCULO REAL (hecho por el sistema, no lo recalcules tú): "
+                f"{fecha_candidata.strftime('%d/%m/%Y')} ({dia_semana_real}) es un "
+                f"PEDIDO NORMAL, NO es urgente (el límite mínimo para ser urgente "
+                f"es antes del {fecha_minima_real.strftime('%d/%m/%Y')}, esta fecha "
+                "tiene tiempo de sobra). NO le digas al cliente que es urgente ni "
+                "le cobres el cargo extra de $50, aunque tú hayas pensado lo "
+                "contrario."
+            )
+        return mensaje_resultado, [], False
 
     return "función desconocida", [], False
 

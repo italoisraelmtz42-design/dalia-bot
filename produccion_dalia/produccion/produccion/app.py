@@ -16,6 +16,7 @@ bot que le vende a los clientes nunca se ve afectado.
 import base64
 import calendar as calendario_mod
 import datetime
+import hmac
 import io
 import json
 import os
@@ -24,8 +25,8 @@ import uuid
 from urllib.parse import quote
 
 from flask import (
-    Flask, flash, redirect, render_template, request, send_from_directory,
-    session, url_for,
+    Flask, flash, jsonify, redirect, render_template, request,
+    send_from_directory, session, url_for,
 )
 from openai import OpenAI
 
@@ -36,6 +37,15 @@ import database
 # ----------------------------------------------------------------------
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "cambia-esta-clave-en-produccion")
+
+# 🔧 (3 sep 2026, integración con dalia-bot) Llave compartida para que
+# SOLO el servidor del bot pueda crear notas automáticamente vía
+# /api/pedidos/bot (ver esa ruta más abajo) -- nadie más debe tener este
+# valor. Debe ser exactamente igual a la que se configure en el bot
+# (variable PRODUCCION_API_KEY allá). Si queda vacía, ese endpoint
+# rechaza todo (mismo criterio que DASHBOARD_PASSWORD en el bot: sin
+# llave configurada, queda bloqueado por completo, no abierto).
+BOT_API_KEY = os.getenv("BOT_API_KEY", "")
 
 
 # 🔧 (23 ago 2026, pedido de Israel: "quiero que los miles lleven
@@ -106,12 +116,21 @@ VENDEDORES_CON_COMISION = {"dalia": 1.0, "diana": 1.0, "karo": 1.0}
 #   - Folios que empiezan con "DE"          -> Dalia
 #   - Folios que empiezan con "D" (no "DE")  -> Diana
 #   - Folios que empiezan con "K"            -> Karo
+#   - Folios que empiezan con "PD" (del bot) -> Diana (🔧 3 sep 2026,
+#     pedido explícito de Israel: "todas las comisiones deben ser para
+#     Diana, de las ventas que haga el bot" -- dalia-bot genera sus
+#     folios con el formato "PD-AAAAMMDD-XXXXXX", ver folio en
+#     database.py del bot)
 # IMPORTANTE: el orden de esta lista importa -- "DE" se revisa ANTES que
 # "D" porque "DE" también empieza con "D"; si "D" se revisara primero,
-# todos los folios de Dalia se le atribuirían por error a Diana.
+# todos los folios de Dalia se le atribuirían por error a Diana. "PD" no
+# choca con ninguno de los otros tres (ninguno es prefijo de "PD"), así
+# que su posición en la lista no importa, pero se deja junto a "D" por
+# quedar también atribuido a Diana.
 PREFIJOS_FOLIO_VENDEDORA = [
     ("DE", "dalia"),
     ("D", "diana"),
+    ("PD", "diana"),
     ("K", "karo"),
 ]
 
@@ -343,7 +362,13 @@ def _puede_ver_dinero_pedido():
 
 @app.before_request
 def exigir_login():
-    rutas_publicas = {"login", "static"}
+    # 🔧 (3 sep 2026) "api_pedido_bot" se autentica con su propia llave
+    # (BOT_API_KEY / X-API-Key, ver esa ruta) -- nunca con sesión de
+    # usuario, porque quien llama ahí es el servidor del bot, no una
+    # persona en el navegador. Debe quedar excluido de este candado de
+    # login igual que "login" y "static", o siempre lo mandaría a
+    # /login antes de llegar a su propia verificación.
+    rutas_publicas = {"login", "static", "api_pedido_bot"}
     if request.endpoint in rutas_publicas:
         return None
     if not session.get("autenticado"):
@@ -1312,7 +1337,7 @@ def _revisar_calidad(datos):
     if not folio or not str(folio).strip():
         motivos.append("falta el folio (necesario para saber a quién le corresponde la comisión)")
     elif not vendedora_por_folio(str(folio)):
-        motivos.append(f"el folio ('{folio}') no coincide con ningún prefijo conocido (DE=Dalia, D=Diana, K=Karo)")
+        motivos.append(f"el folio ('{folio}') no coincide con ningún prefijo conocido (DE=Dalia, D=Diana, PD=Diana/bot, K=Karo)")
 
     cliente = datos.get("cliente")
     if not cliente or not str(cliente).strip():
@@ -1499,6 +1524,86 @@ def capturar():
     else:
         flash(f"✅ Nota guardada: {cliente_nombre}")
     return redirect(url_for("pedido_detalle", pedido_id=pedido_id))
+
+
+@app.route("/api/pedidos/bot", methods=["POST"])
+def api_pedido_bot():
+    """🔧 (3 sep 2026, integración con dalia-bot, pedido explícito de
+    Israel) Recibe automáticamente cada venta que el bot de WhatsApp/
+    Messenger confirma, sin que nadie tenga que capturarla a mano ni
+    pasar por foto+IA. Protegido con una llave compartida (BOT_API_KEY)
+    en el header X-API-Key -- nunca con sesión de usuario, porque quien
+    llama aquí es el servidor del bot, no una persona logueada en el
+    navegador.
+
+    Reutiliza EXACTAMENTE el mismo camino de guardado que /capturar
+    (_revisar_calidad + database.guardar_pedido) -- mismo criterio de
+    calidad para una nota que llega sola que para una que alguien
+    tecleó a mano, nunca se pierde una venta por un dato incompleto.
+    Se marca con origen="bot" (a diferencia de "foto"/"directo") para
+    distinguir de un vistazo cuáles llegaron solas.
+
+    Diseño a propósito tolerante: cualquier error de aquí para adentro
+    se atrapa y regresa un JSON con el motivo -- este endpoint nunca
+    debe tronar de forma que el bot no pueda distinguir un fallo real de
+    un éxito, y el bot (del otro lado) nunca debe dejar de avisarle a
+    Israel/la vendedora por WhatsApp solo porque esta llamada falló."""
+    if not BOT_API_KEY or not hmac.compare_digest(
+        BOT_API_KEY, request.headers.get("X-API-Key", "")
+    ):
+        return jsonify({"error": "no autorizado"}), 401
+
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        body = {}
+
+    productos_crudos = body.get("productos") or []
+    productos = []
+    for p in productos_crudos:
+        if not isinstance(p, dict):
+            continue
+        productos.append({
+            "producto": (p.get("producto") or "").strip(),
+            "cantidad": p.get("cantidad") or "",
+            "colores": (p.get("colores") or "").strip(),
+            "precio_unitario": p.get("precio_unitario") or "",
+        })
+
+    datos = {
+        "folio": (body.get("folio") or "").strip() or None,
+        "cliente": (body.get("cliente") or "").strip() or None,
+        "telefono": (body.get("telefono") or "").strip() or None,
+        "municipio": (body.get("municipio") or "").strip() or None,
+        "fecha_entrega": (body.get("fecha_entrega") or "").strip() or None,
+        "tipo_entrega": (body.get("tipo_entrega") or "").strip() or None,
+        "direccion": (body.get("direccion") or "").strip() or None,
+        "productos": productos,
+        "anticipo": body.get("anticipo") or 0,
+        "total": body.get("total") or 0,
+        "notas": (body.get("notas") or "").strip() or None,
+    }
+    necesita_revision, motivo = _revisar_calidad(datos)
+
+    data = dict(datos)
+    data["fecha_captura"] = database.ahora_negocio().isoformat(timespec="seconds")
+    data["subido_por"] = "Bot (automático)"
+    data["necesita_revision"] = necesita_revision
+    data["motivo_revision"] = motivo
+    data["foto_archivo"] = None
+    data["origen"] = "bot"
+    data["notas_importantes"] = (body.get("notas_importantes") or "").strip() or None
+    data["envio_costo"] = _costo_envio(datos["tipo_entrega"], datos["municipio"])
+
+    try:
+        pedido_id = database.guardar_pedido(data)
+    except Exception as e:
+        print(f"⚠️ Error guardando pedido recibido del bot: {repr(e)}")
+        return jsonify({"error": "no se pudo guardar"}), 500
+
+    print(f"🤖 Pedido recibido del bot: folio={datos['folio']!r}, id={pedido_id}, "
+          f"necesita_revision={necesita_revision}")
+    return jsonify({"status": "ok", "pedido_id": pedido_id}), 200
 
 
 @app.route("/confirmar/<temp_id>")

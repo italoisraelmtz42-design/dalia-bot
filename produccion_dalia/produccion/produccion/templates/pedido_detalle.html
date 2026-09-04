@@ -59,7 +59,7 @@
   <h3>Foto original</h3>
   <img class="foto-nota" src="{{ url_for('servir_foto', nombre_archivo=p.foto_archivo) }}" alt="Foto de la nota">
 </div>
-{% elif p.origen == 'directo' %}
+{% elif p.origen in ('directo', 'bot') %}
 {# 🔧 (1 sep 2026, pedido de Israel: "quiero que cuando le dé a un pedido
    'ver detalle' se pueda ver ya impresa la nota que se creó
    directamente en el programa") Las notas subidas por foto muestran

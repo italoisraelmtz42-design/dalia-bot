@@ -8,9 +8,10 @@ import json
 import uuid
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Optional, Dict, Any, List
 
-from database import get_db_connection
+from database import get_db_connection, siguiente_consecutivo_folio_bot
 from constantes import (
     EstadoPedido, ModoAtencion, OrigenEvento,
     ItemData, PagoData, EntregaData, PedidoData,
@@ -18,6 +19,11 @@ from constantes import (
 )
 
 logger = logging.getLogger("pedido_manager")
+
+# Mismo timezone de negocio que usa app.py (ver ZONA_HORARIA_NEGOCIO
+# allá) -- se redefine aquí en vez de importarlo de app.py para evitar
+# un import circular (app.py sí importa este módulo).
+ZONA_HORARIA_NEGOCIO = ZoneInfo("America/Monterrey")
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +35,24 @@ def _now() -> str:
 
 
 def _folio() -> str:
-    return f"PD-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+    """🔧 (4 sep 2026, pedido explícito de Israel) Nuevo formato:
+    "B-DD/MM-HH:MM-XXXX" -- la "B" es de "Bot", para que en Producción
+    Dalia sus ventas se puedan separar de las de Dalia/Diana/Karo (ver
+    PREFIJOS_FOLIO_VENDEDORA allá: las comisiones de estos folios son
+    todas para Diana, pero contabilizadas aparte). DD/MM y HH:MM son el
+    día/mes/hora REALES de Monterrey en el momento en que se genera este
+    folio -- y ese momento es, sin excepción, el de la confirmación del
+    anticipo: la fila oficial en la tabla `pedidos` (donde vive el
+    folio) solo se crea hasta que `anticipo_confirmado` es True (ver
+    sincronizar_pedido() en crm.py), nunca antes. Así que el folio
+    siempre refleja cuándo se pagó, no cuándo el cliente empezó a
+    platicar. XXXX es un consecutivo global que NUNCA se reinicia
+    (decisión explícita de Israel), guardado en su propia tabla
+    (contador_folio_bot, ver siguiente_consecutivo_folio_bot() en
+    database.py) para que sobreviva reinicios del proceso."""
+    ahora = datetime.now(ZONA_HORARIA_NEGOCIO)
+    consecutivo = siguiente_consecutivo_folio_bot()
+    return f"B-{ahora.strftime('%d/%m')}-{ahora.strftime('%H:%M')}-{consecutivo:04d}"
 
 
 def _resolver_monto_anticipo(borrador: Dict, telefono: str, contexto: str) -> tuple:

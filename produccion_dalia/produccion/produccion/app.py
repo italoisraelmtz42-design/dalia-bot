@@ -95,7 +95,7 @@ USUARIOS = {
     "dalia": os.getenv("PRODUCCION_PASSWORD_DALIA", ""),
     "diana": os.getenv("PRODUCCION_PASSWORD_DIANA", ""),
 }
-NOMBRES_DISPLAY = {"israel": "Israel", "dalia": "Dalia", "diana": "Diana", "karo": "Karo"}
+NOMBRES_DISPLAY = {"israel": "Israel", "dalia": "Dalia", "diana": "Diana", "karo": "Karo", "bot": "BOT"}
 
 # Quién gana comisión y cuánto por cada producto vendido (pieza, no por
 # pedido). 🔧 (24 ago 2026, pedido de Israel) Ahora las 3: Dalia, Diana y
@@ -104,6 +104,19 @@ NOMBRES_DISPLAY = {"israel": "Israel", "dalia": "Dalia", "diana": "Diana", "karo
 # su comisión acumulada: Israel la ve desde el selector de vendedoras en
 # /comisiones (ver la lógica de "otros_vendedores" más abajo).
 VENDEDORES_CON_COMISION = {"dalia": 1.0, "diana": 1.0, "karo": 1.0}
+
+# 🔧 (4 sep 2026, pedido explícito de Israel) "BOT" como un apartado
+# propio dentro de Comisiones, para ver aparte (fecha de subida
+# incluida) las notas que sube solo el bot, sin mezclarlas con lo que
+# Diana captura a mano. El dinero de esa comisión sigue siendo de Diana
+# (por eso usa exactamente su misma tarifa, tomada de VENDEDORES_CON_COMISION["diana"]
+# en vez de un número aparte -- si algún día cambia la tarifa de Diana,
+# la del bot cambia sola con ella) -- Israel la paga por separado usando
+# este total. Reutiliza TAL CUAL toda la lógica ya existente de
+# Comisiones (selector, período, resumen comparativo) tratando "bot"
+# como una vendedora más -- ver PREFIJOS_FOLIO_VENDEDORA arriba, donde
+# los folios "B-..." del bot se categorizan como "bot", no como "diana".
+VENDEDORES_CON_COMISION["bot"] = VENDEDORES_CON_COMISION["diana"]
 
 # 🔧 (24 ago 2026, pedido de Israel: "quiero que algo revise a quién
 # pertenecen las comisiones de cada quién") Antes la comisión se le
@@ -115,22 +128,23 @@ VENDEDORES_CON_COMISION = {"dalia": 1.0, "diana": 1.0, "karo": 1.0}
 # (talonario separado):
 #   - Folios que empiezan con "DE"          -> Dalia
 #   - Folios que empiezan con "D" (no "DE")  -> Diana
+#   - Folios que empiezan con "B" (del bot)  -> "bot" (🔧 4 sep 2026,
+#     pedido explícito de Israel) -- SU PROPIO apartado en Comisiones,
+#     NO se mezcla con "diana" aunque el dinero termine siendo de ella
+#     (usa la misma tarifa que Diana, ver VENDEDORES_CON_COMISION["bot"]
+#     arriba) -- así Israel puede ver/pagar aparte lo que genera el bot.
+#     dalia-bot genera sus folios con el formato "B-DD/MM-HH:MM-XXXX",
+#     ver _folio() en pedido_manager.py del bot.
 #   - Folios que empiezan con "K"            -> Karo
-#   - Folios que empiezan con "PD" (del bot) -> Diana (🔧 3 sep 2026,
-#     pedido explícito de Israel: "todas las comisiones deben ser para
-#     Diana, de las ventas que haga el bot" -- dalia-bot genera sus
-#     folios con el formato "PD-AAAAMMDD-XXXXXX", ver folio en
-#     database.py del bot)
 # IMPORTANTE: el orden de esta lista importa -- "DE" se revisa ANTES que
 # "D" porque "DE" también empieza con "D"; si "D" se revisara primero,
-# todos los folios de Dalia se le atribuirían por error a Diana. "PD" no
-# choca con ninguno de los otros tres (ninguno es prefijo de "PD"), así
-# que su posición en la lista no importa, pero se deja junto a "D" por
-# quedar también atribuido a Diana.
+# todos los folios de Dalia se le atribuirían por error a Diana. "B" no
+# choca con ninguno de los otros tres (ninguno es prefijo de "B" ni "B"
+# es prefijo de ellos), así que su posición en la lista no importa.
 PREFIJOS_FOLIO_VENDEDORA = [
     ("DE", "dalia"),
     ("D", "diana"),
-    ("PD", "diana"),
+    ("B", "bot"),
     ("K", "karo"),
 ]
 
@@ -1337,7 +1351,7 @@ def _revisar_calidad(datos):
     if not folio or not str(folio).strip():
         motivos.append("falta el folio (necesario para saber a quién le corresponde la comisión)")
     elif not vendedora_por_folio(str(folio)):
-        motivos.append(f"el folio ('{folio}') no coincide con ningún prefijo conocido (DE=Dalia, D=Diana, PD=Diana/bot, K=Karo)")
+        motivos.append(f"el folio ('{folio}') no coincide con ningún prefijo conocido (DE=Dalia, D=Diana, B=BOT/Diana, K=Karo)")
 
     cliente = datos.get("cliente")
     if not cliente or not str(cliente).strip():

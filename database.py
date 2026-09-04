@@ -374,6 +374,18 @@ def init_order_tables():
                 fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
 
+            # 🔧 (4 sep 2026, pedido explícito de Israel) Consecutivo
+            # global para el folio de ventas del bot (formato
+            # B-DD/MM-HH:MM-XXXX, ver _folio() en pedido_manager.py) --
+            # nunca se reinicia (decisión explícita de Israel: "sigue
+            # subiendo para siempre"). Una sola fila (id=1) que se
+            # incrementa de forma atómica cada vez que se genera un
+            # folio nuevo.
+            cursor.execute("""CREATE TABLE IF NOT EXISTS contador_folio_bot (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                valor INTEGER NOT NULL DEFAULT 0
+            )""")
+
             # 🔧 Migración segura: agrega la columna "canal" (whatsapp /
             # messenger) a historial_chat y pedidos, si todavía no
             # existe. SQLite no soporta "ALTER TABLE ... ADD COLUMN IF
@@ -406,6 +418,24 @@ def init_order_tables():
     except Exception as e:
         logger_db.error(f"[DB] ❌ Error al crear las tablas: {e}")
         raise
+
+def siguiente_consecutivo_folio_bot() -> int:
+    """Incrementa y regresa el consecutivo global del folio de ventas
+    del bot (ver tabla contador_folio_bot arriba, y _folio() en
+    pedido_manager.py). Nunca se reinicia. Atómico: usa la misma
+    conexión con reintentos/timeout que el resto de la base de datos --
+    con 1 solo worker de gunicorn, la única concurrencia real es entre
+    hilos del mismo proceso, y SQLite ya serializa eso solo con
+    busy_timeout."""
+    with get_db_connection() as conn:
+        conn.execute(
+            "INSERT INTO contador_folio_bot (id, valor) VALUES (1, 0) "
+            "ON CONFLICT(id) DO NOTHING"
+        )
+        conn.execute("UPDATE contador_folio_bot SET valor = valor + 1 WHERE id = 1")
+        fila = conn.execute("SELECT valor FROM contador_folio_bot WHERE id = 1").fetchone()
+        return fila["valor"]
+
 
 def init_db():
     try:

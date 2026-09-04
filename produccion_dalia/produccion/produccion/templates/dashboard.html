@@ -105,12 +105,13 @@
 {% endif %}
 
 {% for p in pedidos %}
-<div class="card">
+<div class="card{{ ' origen-bot' if p.origen == 'bot' else '' }}">
   <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;">
     <div style="display:flex;align-items:start;gap:8px;">
       <input type="checkbox" name="pedido_id" value="{{ p.id }}" form="form-eliminar-varios"
              class="chk-pedido" style="width:auto;margin-top:5px;">
       <h3 style="margin:0;">{{ p.cliente or 'Cliente sin nombre' }}</h3>
+      {% if p.origen == 'bot' %}<span class="badge bot">🤖 BOT</span>{% endif %}
     </div>
     <span class="muted" style="white-space:nowrap;">
       {% if vista == 'recientes' %}Entrega: {% endif %}{{ p.fecha_entrega or 'sin fecha' }}
@@ -118,7 +119,9 @@
   </div>
   {% if vista == 'recientes' %}
   <div class="muted" style="margin-bottom:4px;">
-    {{ p.origen == 'directo' and '✍️ Nota capturada' or '📸 Foto subida' }}
+    {% if p.origen == 'bot' %}🤖 Nota automática (bot)
+    {% elif p.origen == 'directo' %}✍️ Nota capturada
+    {% else %}📸 Foto subida{% endif %}
     el {{ p.fecha_captura[:16].replace('T', ' ') if p.fecha_captura else '—' }}
     {% if p.subido_por %}por <strong>{{ p.subido_por }}</strong>{% endif %}
   </div>

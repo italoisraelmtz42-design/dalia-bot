@@ -48,7 +48,7 @@
 
 {% if sin_folio_reconocido %}
 <div class="flash" style="background:var(--rojo-suave);border-color:#f0c6c6;color:var(--rojo);">
-  ⚠️ Hay {{ sin_folio_reconocido }} nota{{ 's' if sin_folio_reconocido != 1 else '' }} en este período sin folio reconocido (vacío o con un prefijo que no es de Dalia/Diana/Karo) -- no se le sumaron a nadie. Revísalas desde <a href="{{ url_for('dashboard', vista='todos') }}">"Todos"</a> en Producción (deberían aparecer marcadas con ⚠️) y corrígeles el folio.
+  ⚠️ Hay {{ sin_folio_reconocido }} nota{{ 's' if sin_folio_reconocido != 1 else '' }} en este período sin folio reconocido (vacío o con un prefijo que no es de Dalia/Diana/Karo/BOT) -- no se le sumaron a nadie. Revísalas desde <a href="{{ url_for('dashboard', vista='todos') }}">"Todos"</a> en Producción (deberían aparecer marcadas con ⚠️) y corrígeles el folio.
 </div>
 {% endif %}
 
@@ -57,10 +57,10 @@
 {% endif %}
 
 {% for p in pedidos %}
-<div class="card">
+<div class="card{{ ' origen-bot' if p.origen == 'bot' else '' }}">
   <div style="display:flex;justify-content:space-between;">
     <h3>{{ p.cliente or 'Cliente sin nombre' }}</h3>
-    <span class="muted">{{ p.fecha_captura[:10] if p.fecha_captura else '' }}</span>
+    <span class="muted">{{ p.fecha_captura[:16].replace('T', ' ') if p.fecha_captura else '' }}</span>
   </div>
   <div class="muted">
     Folio: {{ p.folio or '—' }}

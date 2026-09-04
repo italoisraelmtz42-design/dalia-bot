@@ -268,6 +268,16 @@ MAX_TURNOS_HISTORIAL = 20
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://dalia-bot.onrender.com")
 
+# 🔧 (3 sep 2026, integración con Producción Dalia, pedido explícito de
+# Israel) Cuando ambas están configuradas, cada anticipo confirmado se
+# manda también, ya estructurado, a la webapp de Producción -- para que
+# la nota de producción aparezca sola, sin capturarla a mano. Si falta
+# cualquiera de las dos, la integración simplemente no hace nada (no
+# rompe el resto del bot). PRODUCCION_API_KEY debe ser IDÉNTICA a
+# BOT_API_KEY del lado de Producción Dalia.
+PRODUCCION_DALIA_URL = os.getenv("PRODUCCION_DALIA_URL", "").rstrip("/")
+PRODUCCION_API_KEY = os.getenv("PRODUCCION_API_KEY", "")
+
 # ===========================
 # CATÁLOGO DE FOTOS DE PRODUCTO
 # ===========================
@@ -3659,14 +3669,17 @@ def notificar_a_dalia(pedido_db, pedido_ram, canal="whatsapp"):
         lineas.append("⚠ PEDIDO URGENTE (+$50)")
 
     # Total determinístico
+    total_valor = None
     try:
         tot = pedido_manager.calcular_total(pedido_id=pedido_db.id if pedido_db else None, borrador=pedido_ram)
-        lineas.append(f"TOTAL DE LA VENTA: ${tot['total']:.2f} MXN")
+        total_valor = tot['total']
+        lineas.append(f"TOTAL DE LA VENTA: ${total_valor:.2f} MXN")
     except Exception:
         subtotal = sum(float(it.subtotal or 0) for it in items)
         extra = 50 if (pedido_db and pedido_db.es_urgente) else 0
         envio = float(entrega.costo_envio) if (entrega and entrega.costo_envio) else 0
-        lineas.append(f"TOTAL DE LA VENTA: ${subtotal + extra + envio:.2f} MXN")
+        total_valor = subtotal + extra + envio
+        lineas.append(f"TOTAL DE LA VENTA: ${total_valor:.2f} MXN")
 
     if pago:
         lineas.append(f"Anticipo recibido: ${pago.monto:.2f} ({pago.metodo or 'transferencia'})")
@@ -3678,6 +3691,103 @@ def notificar_a_dalia(pedido_db, pedido_ram, canal="whatsapp"):
         enviar_whatsapp(DALIA_WHATSAPP_NUMERO, mensaje)
     if VENDEDORA_WHATSAPP_NUMERO:
         enviar_whatsapp(VENDEDORA_WHATSAPP_NUMERO, mensaje)
+
+    # 🔧 (3 sep 2026) Ver notificar_produccion_dalia() más abajo. Se
+    # llama HASTA AQUÍ, después de que los WhatsApp de arriba ya se
+    # mandaron -- así, pase lo que pase con Producción Dalia, Dalia y la
+    # vendedora ya se enteraron de la venta de todos modos.
+    notificar_produccion_dalia(
+        folio=folio, cliente=cliente_para_mostrar, telefono=telefono_cliente,
+        items=items, entrega=entrega, pago=pago, total=total_valor,
+        es_urgente=bool(pedido_db and pedido_db.es_urgente), pedido_ram=pedido_ram,
+    )
+
+
+def _tipo_entrega_para_produccion(tipo_entrega_bot, fuera_de_zona):
+    """Traduce el tipo_entrega del bot al que espera Producción Dalia
+    (TIPOS_ENTREGA_VALIDOS = domicilio/punto_de_entrega/dhl/local). El
+    bot nunca guarda "dhl" como tal -- lo maneja como domicilio +
+    _envio_fuera_de_zona=True -- así que se traduce aquí."""
+    if fuera_de_zona:
+        return "dhl"
+    if not tipo_entrega_bot:
+        return None
+    if _es_tipo_entrega_punto_de_entrega(tipo_entrega_bot):
+        return "punto_de_entrega"
+    if normalizar_producto_clave(str(tipo_entrega_bot)) == "local":
+        return "local"
+    return "domicilio"
+
+
+def notificar_produccion_dalia(folio, cliente, telefono, items, entrega, pago, total, es_urgente, pedido_ram):
+    """🔧 (3 sep 2026, pedido explícito de Israel) En cuanto se confirma
+    un anticipo, además del aviso de WhatsApp de siempre, se manda la
+    misma información -- ya estructurada -- a Producción Dalia, para que
+    la nota de producción aparezca sola ahí, sin que nadie la tenga que
+    capturar a mano ni pasar por foto+IA.
+
+    Diseñada a propósito para NUNCA afectar el resto del flujo: si
+    PRODUCCION_DALIA_URL o PRODUCCION_API_KEY no están configuradas, o
+    si la llamada falla por cualquier motivo (Producción caída, tarda,
+    error de red), esto no truena -- solo se registra en el log. Se
+    llama siempre DESPUÉS de mandar los WhatsApp a Dalia/la vendedora,
+    así que esa parte (la más importante) nunca depende de que esto
+    funcione."""
+    if not PRODUCCION_DALIA_URL or not PRODUCCION_API_KEY:
+        return
+    try:
+        productos_payload = []
+        if items:
+            for it in items:
+                colores = ", ".join(filter(None, [
+                    f"toalla {it.color_toalla}" if it.color_toalla else None,
+                    f"moño {it.color_moño}" if it.color_moño else None,
+                    (f"jabón {it.tipo_jaboncito}" + (f" {it.color_jaboncito}" if it.color_jaboncito else ""))
+                    if it.tipo_jaboncito else None,
+                    f"nombre: {it.nombre_bebe}" if it.nombre_bebe else None,
+                ]))
+                productos_payload.append({
+                    "producto": it.producto,
+                    "cantidad": it.cantidad,
+                    "colores": colores,
+                    "precio_unitario": it.precio_unitario,
+                })
+        elif pedido_ram.get("producto"):
+            productos_payload.append({
+                "producto": pedido_ram.get("producto"),
+                "cantidad": pedido_ram.get("cantidad") or "",
+                "colores": "",
+                "precio_unitario": "",
+            })
+
+        payload = {
+            "folio": folio,
+            "cliente": cliente,
+            "telefono": telefono,
+            "municipio": entrega.municipio if entrega else pedido_ram.get("municipio"),
+            "fecha_entrega": entrega.fecha_entrega if entrega else pedido_ram.get("fecha_evento"),
+            "tipo_entrega": _tipo_entrega_para_produccion(
+                entrega.tipo_entrega if entrega else pedido_ram.get("tipo_entrega"),
+                pedido_ram.get("_envio_fuera_de_zona"),
+            ),
+            "direccion": entrega.direccion if entrega else pedido_ram.get("direccion"),
+            "productos": productos_payload,
+            "anticipo": pago.monto if pago else 0,
+            "total": total or 0,
+            "notas": "PEDIDO URGENTE (+$50)" if es_urgente else None,
+        }
+        r = requests.post(
+            f"{PRODUCCION_DALIA_URL}/api/pedidos/bot",
+            json=payload,
+            headers={"X-API-Key": PRODUCCION_API_KEY},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            print(f"🏭 Nota enviada a Producción Dalia para folio {folio}")
+        else:
+            print(f"⚠️ Producción Dalia respondió {r.status_code} para folio {folio}: {r.text[:300]}")
+    except Exception as e:
+        print(f"⚠️ No se pudo notificar a Producción Dalia (no afecta el resto del flujo): {repr(e)}")
 
 
 def enviar_whatsapp_imagen(numero, image_url, caption=""):

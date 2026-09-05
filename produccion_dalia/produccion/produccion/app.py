@@ -824,7 +824,14 @@ def comisiones():
     # las vea y las corrija (deberían haber quedado marcadas con
     # necesita_revision desde que se subieron, ver _revisar_calidad).
     todos_en_rango = database.listar_capturados_en_rango(ini.isoformat(), fin.isoformat())
-    pedidos = [p for p in todos_en_rango if vendedora_por_folio(p.get("folio")) == vendedor]
+    # 🔧 (4 sep 2026, pedido explícito de Israel: "necesito ver siempre
+    # la última nota realizada en la parte superior, así igual con todos
+    # los vendedores") listar_capturados_en_rango() trae todo en orden
+    # ascendente (la más vieja primero) porque esa misma función también
+    # la usan Finanzas e Indicadores, donde ese orden sí importa -- aquí
+    # se invierte nada más para esta lista de Comisiones, sin tocar la
+    # función compartida.
+    pedidos = [p for p in reversed(todos_en_rango) if vendedora_por_folio(p.get("folio")) == vendedor]
     sin_folio_reconocido = sum(1 for p in todos_en_rango if vendedora_por_folio(p.get("folio")) is None)
 
     total_piezas, total_comision = _total_piezas_y_comision(pedidos, monto_por_producto)
@@ -1131,48 +1138,13 @@ def imprimir_semana_proxima():
 
 
 # ----------------------------------------------------------------------
-# Inventario de materia prima (23 ago 2026, pedido de Israel)
+# 🔧 (4 sep 2026, pedido explícito de Israel: "quita la sección de
+# INVENTARIO, esa no la estamos utilizando") Sección de inventario de
+# materia prima (23 ago 2026) retirada -- las rutas /inventario y el
+# link del menú ya no existen. No se tocó la tabla materia_prima en la
+# base de datos (los datos viejos, si había, se quedan ahí sin usarse;
+# no se está borrando información, solo la pantalla).
 # ----------------------------------------------------------------------
-@app.route("/inventario")
-def inventario():
-    items = database.listar_materia_prima()
-    return render_template("inventario.html", items=items)
-
-
-@app.route("/inventario/nuevo", methods=["POST"])
-def inventario_nuevo():
-    nombre = (request.form.get("nombre") or "").strip()
-    if not nombre:
-        flash("Ponle un nombre al material.")
-        return redirect(url_for("inventario"))
-    cantidad = request.form.get("cantidad") or 0
-    unidad = (request.form.get("unidad") or "").strip() or "pza"
-    database.crear_materia_prima(nombre, cantidad, unidad)
-    flash(f"'{nombre}' agregado al inventario.")
-    return redirect(url_for("inventario"))
-
-
-@app.route("/inventario/<int:item_id>/editar", methods=["POST"])
-def inventario_editar(item_id):
-    item = database.obtener_materia_prima(item_id)
-    if not item:
-        flash("Ese material ya no existe.")
-        return redirect(url_for("inventario"))
-    nombre = (request.form.get("nombre") or "").strip() or item["nombre"]
-    cantidad = request.form.get("cantidad")
-    if cantidad is None or cantidad == "":
-        cantidad = item["cantidad"]
-    unidad = (request.form.get("unidad") or "").strip() or item["unidad"]
-    database.actualizar_materia_prima(item_id, nombre, cantidad, unidad)
-    flash(f"'{nombre}' actualizado.")
-    return redirect(url_for("inventario"))
-
-
-@app.route("/inventario/<int:item_id>/eliminar", methods=["POST"])
-def inventario_eliminar(item_id):
-    database.eliminar_materia_prima(item_id)
-    flash("Material eliminado del inventario.")
-    return redirect(url_for("inventario"))
 
 
 # ----------------------------------------------------------------------

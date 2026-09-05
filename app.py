@@ -834,6 +834,19 @@ COLORES_VALIDOS = {
     "rojo", "dorado",
 }
 
+# 🔧 (4 sep 2026, pedido explícito de Israel tras un error real con
+# "blanco") Versión LIMPIA de la lista de arriba, solo para mostrarle al
+# cliente (COLORES_VALIDOS trae variantes normalizadas duplicadas sin
+# espacios/acentos, útiles para comparar pero feas para mostrar). Estos
+# colores NUNCA cambian ni se agotan -- no son inventario, son las
+# opciones de tela/listón/jabón que siempre se manejan.
+COLORES_OFICIALES_DISPLAY = [
+    "Turquesa", "Azul Rey", "Celeste", "Blanco", "Hueso", "Fiusha",
+    "Rosa Palo", "Rosa Pastel", "Café Claro", "Amarillo",
+]
+COLORES_MONO_EXTRA_DISPLAY = ["Rojo", "Dorado"]
+COLOR_PELUCHE_EXTRA_DISPLAY = "Morado"
+
 # 🔧 CORREGIDO (gap real detectado en auditoría): antes había un solo set
 # "COLORES_ESPECIALES" compartido entre osito de peluche Y osito toalla
 # afelpada -- pero según sus archivos de producto, cada uno tiene colores
@@ -1775,6 +1788,24 @@ nunca calcules fechas por tu cuenta):
   actualizar_pedido de un turno anterior) -- si ya está ahí, NO lo vuelvas
   a preguntar, solo continúa la conversación con normalidad.
 
+REGLAS DE COLORES (los colores oficiales NUNCA cambian ni se agotan --
+no son inventario, así que jamás digas que uno "no está disponible" o
+"se acabó" sin haber verificado primero):
+
+- 🚨 OBLIGATORIO: en cuanto el cliente mencione CUALQUIER color para
+  toalla, moño/listón o jaboncito -- aunque sea un nombre vago como
+  "rosa" o "azul" -- llama a la función verificar_color con ese color
+  ANTES de decirle si está disponible o no. NUNCA respondas de memoria,
+  aunque estés seguro de la lista.
+- 🚨 Error real ya cometido, nunca lo repitas: en una conversación real,
+  el bot le dijo a una clienta -- DOS VECES -- que el color "blanco" no
+  estaba disponible, ni para la toalla ni para el jaboncito, cuando
+  SIEMPRE ha sido un color oficial disponible para ambos. Peor aún, en su
+  segunda respuesta se contradijo a sí mismo: dijo que "blanco" no podía
+  ser el color del jaboncito, y en la misma oración lo listó como uno de
+  los colores oficiales disponibles. Usa siempre y únicamente el
+  resultado de verificar_color, nunca tu propia cuenta.
+
 REGLA GENERAL -- NO PIDAS PERMISO PARA COSAS OBVIAS, HAZLO DIRECTO:
 🚫 Nunca termines un mensaje preguntando si quiere que le des algo que
 CLARAMENTE ya quiere -- dáselo directo, en el mismo mensaje. Ejemplos
@@ -2265,6 +2296,44 @@ TOOLS = [
                     },
                 },
                 "required": ["fecha"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "verificar_color",
+            "description": (
+                "🚨 OBLIGATORIA: llama a esta función en cuanto el cliente "
+                "mencione CUALQUIER color para toalla, moño/listón o jaboncito -- "
+                "SIEMPRE antes de decirle si ese color está disponible o no. "
+                "NUNCA respondas de memoria si un color existe, aunque estés "
+                "seguro -- esta función te da la respuesta real. 🚨 Error real ya "
+                "cometido, nunca lo repitas: el modelo le dijo DOS VECES a una "
+                "clienta que el color 'blanco' no estaba disponible, ni para "
+                "toalla ni para jaboncito, cuando SIEMPRE ha sido un color "
+                "oficial disponible para ambos -- los colores oficiales NUNCA "
+                "cambian ni se agotan, así que nunca inventes que uno no está "
+                "disponible sin haber llamado primero a esta función."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "color": {
+                        "type": "string",
+                        "description": "El color que mencionó el cliente, tal cual lo dijo (ej. 'blanco', 'rosa', 'azul rey').",
+                    },
+                    "producto": {
+                        "type": "string",
+                        "description": (
+                            "Nombre del producto del que se está hablando (ej. "
+                            "'osito con jaboncito', 'osito de peluche', 'osito "
+                            "toalla afelpada'). Opcional, pero inclúyelo si "
+                            "aplica -- algunos productos tienen colores extra."
+                        ),
+                    },
+                },
+                "required": ["color"],
             },
         },
     },
@@ -2776,6 +2845,23 @@ _PATRON_FECHA_EN_TEXTO = re.compile(
 )
 
 
+# 🔧 (4 sep 2026, bug real reportado por Israel: el modelo le dijo a una
+# clienta -- dos veces -- que "blanco" no estaba disponible para toalla
+# ni jaboncito, cuando siempre ha sido un color oficial. Igual que con
+# las fechas, no basta con pedírselo por texto: se OBLIGA la llamada a
+# verificar_color en cuanto el cliente mencione cualquier color, incluso
+# nombres vagos como "rosa" o "azul" que necesitan aclararse contra la
+# lista real (rosa palo vs. rosa pastel, azul rey, etc.).
+_PATRON_COLOR_EN_TEXTO = re.compile(
+    r"\b("
+    r"turquesa|azul\s*rey|celeste|blanco|hueso|fiusha|fucsia|"
+    r"rosa\s*palo|rosa\s*pastel|caf[ée]\s*claro|amarillo|rojo|dorado|morado|"
+    r"rosa|azul|caf[ée]"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 # 🔧 (19 ago 2026, bug real reportado por Israel) Caso real: la clienta
 # dijo "Oso color celeste" (sin mencionar jaboncito para nada) y el
 # modelo agregó al pedido "osito CON jaboncito" por su cuenta -- en
@@ -3257,6 +3343,59 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
             )
         return mensaje_resultado, [], False
 
+    if name == "verificar_color":
+        # 🔧 (4 sep 2026, bug real detectado con una clienta: el modelo le
+        # dijo DOS VECES que "blanco" no estaba disponible para toalla y
+        # para jaboncito, cuando SIEMPRE ha sido un color oficial válido
+        # para ambos -- incluso se contradijo a sí mismo listando "Blanco"
+        # como color oficial en la misma respuesta donde lo rechazaba. No
+        # hay ningún candado de código ni de negocio detrás de esto, es el
+        # modelo "recordando mal" una lista fija que nunca cambia. Esta
+        # función existe para que nunca más tenga que "recordarla":
+        # siempre se la damos ya calculada.
+        try:
+            args_obj = json.loads(args or "{}")
+        except json.JSONDecodeError:
+            args_obj = {}
+        color_texto = (args_obj.get("color") or "").strip()
+        producto_texto = (args_obj.get("producto") or "").strip()
+
+        if not color_texto:
+            return (
+                "No se especificó ningún color para verificar -- pídele al "
+                "cliente que te diga el color exacto y vuelve a llamar a esta "
+                "función.",
+                [],
+                False,
+            )
+
+        es_valido = color_es_valido(color_texto, producto_texto)
+        lista_general = ", ".join(COLORES_OFICIALES_DISPLAY)
+
+        if es_valido:
+            mensaje_resultado = (
+                f"🎨 VERIFICACIÓN REAL (hecha por el sistema, no lo recalcules "
+                f"tú): '{color_texto}' SÍ es un color disponible -- confírmaselo "
+                f"al cliente sin ninguna duda. Los colores oficiales NUNCA "
+                f"cambian ni se agotan, así que nunca le digas que este color "
+                f"'no está disponible' o 'se acabó'."
+            )
+        else:
+            extra = ""
+            if "peluche" in producto_texto.lower():
+                extra = (
+                    f" Para este producto también aplica "
+                    f"{COLOR_PELUCHE_EXTRA_DISPLAY} como color extra."
+                )
+            mensaje_resultado = (
+                f"🎨 VERIFICACIÓN REAL (hecha por el sistema, no lo recalcules "
+                f"tú): '{color_texto}' NO es un color oficial. Dile al cliente "
+                f"que ese color no lo manejamos, y ofrécele la lista real: "
+                f"{lista_general} (para moño/listón también "
+                f"{' y '.join(COLORES_MONO_EXTRA_DISPLAY)}).{extra}"
+            )
+        return mensaje_resultado, [], False
+
     return "función desconocida", [], False
 
 
@@ -3390,6 +3529,19 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
             # obliga a verificar la fecha ANTES de que el modelo pueda
             # decir nada sobre si es urgente o no.
             tool_choice_este_turno = {"type": "function", "function": {"name": "verificar_urgencia_fecha"}}
+        elif (
+            indice_iteracion == 0
+            and texto_cliente
+            and _PATRON_COLOR_EN_TEXTO.search(texto_cliente)
+        ):
+            # 🔧 (4 sep 2026) ver _PATRON_COLOR_EN_TEXTO arriba -- se
+            # obliga a verificar el color ANTES de que el modelo pueda
+            # decir si está disponible o no (bug real: dijo que "blanco"
+            # no estaba disponible cuando siempre lo ha estado). Si en el
+            # mismo mensaje también hay una fecha, la fecha tiene
+            # prioridad esta vuelta -- el color se verifica en cuanto
+            # vuelva a mencionarse solo, en la siguiente vuelta.
+            tool_choice_este_turno = {"type": "function", "function": {"name": "verificar_color"}}
 
         r = client.chat.completions.create(
             model=MODELO,

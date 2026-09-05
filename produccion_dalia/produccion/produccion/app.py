@@ -270,6 +270,14 @@ COLORES_NOTA_POR_VENDEDORA = {
     "karo": {"borde": "#7a52c9", "banner": "#9b7fe0", "banner_texto": "white",
              "etiqueta_bg": "#ece3fb", "texto_fuerte": "#5433a3",
              "notas_imp_bg": "#fff29e", "notas_imp_texto": "#7a5c00"},
+    # 🔧 (4 sep 2026, pedido explícito de Israel: "quiero que la nota
+    # imprimible también tenga algún indicador azul/BOT") Mismo azul que
+    # ya se usa en el tablero/Comisiones para las notas del bot (ver
+    # --azul en base.html). El dinero es de Diana, pero la nota debe
+    # distinguirse a simple vista de las que ella captura a mano.
+    "bot": {"borde": "#2a5db0", "banner": "#4c7fd6", "banner_texto": "white",
+            "etiqueta_bg": "#d9e6fb", "texto_fuerte": "#1e4a94",
+            "notas_imp_bg": "#fff29e", "notas_imp_texto": "#7a5c00"},
 }
 COLOR_NOTA_DEFAULT = COLORES_NOTA_POR_VENDEDORA["diana"]
 
@@ -1775,7 +1783,7 @@ def pedido_nota(pedido_id):
         "nota_cliente.html", p=pedido, productos=productos,
         dia_entrega_largo=_dia_entrega_largo(pedido.get("fecha_entrega_iso")),
         horario_local=HORARIO_LOCAL_NOTA, telefono_vendedor=telefono_vendedor,
-        colores=colores_nota,
+        colores=colores_nota, es_bot=(vendedora_folio == "bot"),
         nota_jabones=NOTA_JABONES_TEXTO, nota_horario_domicilio=NOTA_HORARIO_DOMICILIO_TEXTO,
         nota_tarjetita=NOTA_TARJETITA_TEXTO,
     )

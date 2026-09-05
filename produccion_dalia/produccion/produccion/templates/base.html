@@ -174,9 +174,6 @@
     <span class="icono">💵</span>Comisiones
   </a>
   {% endif %}
-  <a href="{{ url_for('inventario') }}" class="{{ 'activo' if request.endpoint == 'inventario' else '' }}">
-    <span class="icono">📦</span>Inventario
-  </a>
   <a href="{{ url_for('subir') }}" class="{{ 'activo' if request.endpoint in ('subir', 'confirmar') else '' }}">
     <span class="icono">📸</span>Subir
   </a>

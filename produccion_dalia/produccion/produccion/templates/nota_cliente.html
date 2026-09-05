@@ -125,6 +125,11 @@
       <div class="fila-info">
         <div class="etiqueta">NO. PEDIDO:</div>
         <div class="valor destacado grande">{{ p.folio or '—' }}</div>
+        {% if es_bot %}
+        <span style="background:{{ colores.banner }};color:{{ colores.banner_texto }};
+                     font-size:0.72rem;font-weight:700;padding:2px 9px;border-radius:10px;
+                     margin-left:8px;white-space:nowrap;">🤖 BOT</span>
+        {% endif %}
       </div>
       <div class="fila-info">
         <div class="etiqueta">NOMBRE CLIENTE:</div>

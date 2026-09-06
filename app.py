@@ -1757,7 +1757,35 @@ nunca calcules fechas por tu cuenta):
   cercana). Usa siempre y únicamente el resultado de verificar_urgencia_fecha,
   nunca tu propia cuenta, ni siquiera como respaldo o doble-checking.
 
-- 🚨 NUEVA REGLA (3 sep 2026, decisión de negocio de Israel, ya NO es
+- 🚨 NO CONFUNDAS "cuándo va a pagar el anticipo" con "cuándo necesita la
+  entrega" -- son dos cosas TOTALMENTE distintas. fecha_evento es
+  EXCLUSIVAMENTE la fecha en que el cliente quiere recibir su pedido /
+  cuándo es su evento -- nunca la fecha en que dice que va a mandar el
+  anticipo, transferir, o "llegar" de un viaje. 🚨 Error real ya
+  cometido, nunca lo repitas: una clienta dijo "te estaré enviando el
+  anticipo hasta mañana porque ahorita ando fuera, llego mañana" -- eso
+  es sobre CUÁNDO VA A PAGAR, no sobre cuándo quiere su pedido. El bot
+  tomó "mañana" como si fuera la fecha de entrega, calculó que era
+  urgente y le cobró cargo extra por algo que la clienta nunca pidió --
+  ella tuvo que aclarar "yo los necesito para octubre, no te había dicho
+  fecha". Si no está claro si una fecha que menciona el cliente es la de
+  entrega o se refiere a otra cosa (pago, un viaje, etc.), pregunta
+  explícitamente "¿esa fecha es para cuándo quieres recibir tu pedido?"
+  antes de guardarla como fecha_evento.
+
+- 🚨 NUNCA INVENTES EL DÍA si el cliente solo te dio el mes (o una fecha
+  incompleta). Si dice "para octubre" o "en septiembre" sin decir qué
+  día, PREGÚNTALE el día exacto -- nunca completes tú el día con un
+  número que se te ocurra o que hayas usado antes en la conversación
+  para otra fecha. 🚨 Error real ya cometido, nunca lo repitas: en la
+  misma conversación de arriba, después de calcular por error que la
+  entrega era "el 7 de septiembre", la clienta corrigió diciendo que la
+  necesitaba "para octubre" -- sin dar ningún día -- y el bot guardó la
+  fecha como "07/10/2026", reutilizando el día "7" que él mismo había
+  inventado antes para el mes equivocado. Un mes sin día NUNCA es una
+  fecha completa -- no llames a actualizar_pedido con fecha_evento hasta
+  tener el día exacto.
+
   opcional): NUNCA se ofrece ni se acepta entrega para EL MISMO DÍA, bajo
   ninguna circunstancia -- ni siquiera pagando el cargo urgente de $50. Lo
   más rápido posible que se puede entregar un pedido es MAÑANA (el día
@@ -1840,6 +1868,24 @@ no son inventario, así que jamás digas que uno "no está disponible" o
   ser el color del jaboncito, y en la misma oración lo listó como uno de
   los colores oficiales disponibles. Usa siempre y únicamente el
   resultado de verificar_color, nunca tu propia cuenta.
+- 🚨 CUANDO EL CLIENTE DA UN SOLO COLOR SIN DECIR PARA QUÉ PARTE ES (ej.
+  "20 café claro", "los quiero en rosa"): NUNCA asumas a qué parte
+  corresponde (toalla, moño o jaboncito) -- pregúntaselo. Y NUNCA
+  inventes "blanco" (ni ningún otro color) para la toalla ni para
+  ninguna otra parte que el cliente no haya mencionado -- si no lo dijo,
+  no está definido todavía, pregúntalo, no lo rellenes tú. 🚨 Error real
+  ya cometido, nunca lo repitas: en una conversación real (Nelly
+  Kastro), el cliente dijo un solo color por lote (ej. "café claro",
+  "celeste") sin especificar para qué parte -- el bot lo asignó
+  incorrectamente al MOÑO en vez de preguntar, e inventó "toalla blanca"
+  sin que el cliente lo pidiera jamás. Cuando el cliente por fin
+  preguntó "¿cuál toalla blanca?" el bot no reconoció el error y siguió
+  repitiéndolo -- el cliente se hartó ("¿esta jugando?") y se perdió la
+  venta, un humano tuvo que intervenir. El color que el cliente menciona
+  sin aclarar casi siempre se refiere al color PRINCIPAL/más visible
+  (normalmente la toalla) -- pero en vez de asumir eso también,
+  simplemente pregunta: "¿ese color es para la toalla, el moño o el
+  jaboncito?" antes de guardarlo.
 
 REGLA GENERAL -- NO PIDAS PERMISO PARA COSAS OBVIAS, HAZLO DIRECTO:
 🚫 Nunca termines un mensaje preguntando si quiere que le des algo que
@@ -2435,14 +2481,25 @@ TOOLS = [
                 "toalla ni para jaboncito, cuando SIEMPRE ha sido un color "
                 "oficial disponible para ambos -- los colores oficiales NUNCA "
                 "cambian ni se agotan, así que nunca inventes que uno no está "
-                "disponible sin haber llamado primero a esta función."
+                "disponible sin haber llamado primero a esta función. "
+                "🚨 IMPORTANTE: si el cliente menciona varios colores en el "
+                "mismo mensaje (ej. 'toalla celeste, moño blanco, jaboncito "
+                "blanco'), verifícalos TODOS en esta MISMA llamada usando la "
+                "lista 'colores' -- nunca hagas una llamada separada por cada "
+                "color, se te acaban las vueltas disponibles antes de poder "
+                "guardar los datos y contestarle al cliente."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "color": {
                         "type": "string",
-                        "description": "El color que mencionó el cliente, tal cual lo dijo (ej. 'blanco', 'rosa', 'azul rey').",
+                        "description": "Un solo color -- úsalo solo si el cliente mencionó nada más uno. Si mencionó varios, usa 'colores' en vez de este.",
+                    },
+                    "colores": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Lista de todos los colores que el cliente mencionó en este mensaje (ej. ['celeste', 'blanco'] si dijo toalla celeste y moño blanco). Úsala siempre que sea más de un color -- una sola llamada verifica todos.",
                     },
                     "producto": {
                         "type": "string",
@@ -2454,7 +2511,6 @@ TOOLS = [
                         ),
                     },
                 },
-                "required": ["color"],
             },
         },
     },
@@ -2881,7 +2937,22 @@ def actualizar_item_pedido(pedido, argumentos_json):
         return []
     if "items" not in pedido or not isinstance(pedido.get("items"), list):
         pedido["items"] = []
-    existing = _buscar_item(pedido, producto, datos)
+    # 🔧 (6 sep 2026, bug real y grave detectado con Nelly Kastro: al
+    # corregir un color mal asignado ("no es toalla blanca, es café
+    # claro"), el sistema creó un LOTE NUEVO en vez de corregir el
+    # existente -- porque actualizar_item_pedido usaba la MISMA
+    # comparación estricta de variante que agregar_item_pedido (ver
+    # _item_coincide_variante, agregada el 5 sep para el caso de Katia
+    # Domínguez). Esa comparación estricta es correcta para
+    # agregar_item (agregar SIEMPRE debe poder crear un lote aparte si
+    # el color no coincide, para no perder un lote real distinto) --
+    # pero actualizar_item existe justo para CORREGIR el lote ya
+    # existente, así que aquí debe seguir emparejando solo por NOMBRE
+    # de producto, sin exigir que el color coincida -- si el color no
+    # coincidía, es PORQUE se está corrigiendo, no porque sea un lote
+    # distinto. Resultado real del bug: 20 piezas de más y $240 de más
+    # en el total, sin que nadie pidiera esas piezas extra.
+    existing = _buscar_item(pedido, producto)
     if not existing:
         # si no existe, comportarse como agregar
         return agregar_item_pedido(pedido, argumentos_json)
@@ -3636,14 +3707,28 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         # modelo "recordando mal" una lista fija que nunca cambia. Esta
         # función existe para que nunca más tenga que "recordarla":
         # siempre se la damos ya calculada.
+        #
+        # 🔧 (6 sep 2026, bug real distinto: con un mensaje que traía 2-3
+        # colores a la vez, el modelo llamaba esta función una vez POR
+        # COLOR, agotaba el límite de vueltas del turno solo verificando,
+        # y nunca llegaba a guardar los datos ni a contestarle a la
+        # clienta -- cayó en el mensaje de relleno "Disculpa, dame un
+        # segundo y te confirmo". Ahora acepta una LISTA de colores
+        # ("colores") además del campo viejo ("color", para mensajes de
+        # un solo color) y los verifica TODOS en una sola llamada.
         try:
             args_obj = json.loads(args or "{}")
         except json.JSONDecodeError:
             args_obj = {}
-        color_texto = (args_obj.get("color") or "").strip()
+
+        colores_texto = []
+        if args_obj.get("colores"):
+            colores_texto.extend([str(c).strip() for c in args_obj["colores"] if str(c).strip()])
+        if args_obj.get("color") and str(args_obj["color"]).strip() not in colores_texto:
+            colores_texto.append(str(args_obj["color"]).strip())
         producto_texto = (args_obj.get("producto") or "").strip()
 
-        if not color_texto:
+        if not colores_texto:
             return (
                 "No se especificó ningún color para verificar -- pídele al "
                 "cliente que te diga el color exacto y vuelve a llamar a esta "
@@ -3652,31 +3737,32 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                 False,
             )
 
-        es_valido = color_es_valido(color_texto, producto_texto)
         lista_general = ", ".join(COLORES_OFICIALES_DISPLAY)
-
-        if es_valido:
-            mensaje_resultado = (
-                f"🎨 VERIFICACIÓN REAL (hecha por el sistema, no lo recalcules "
-                f"tú): '{color_texto}' SÍ es un color disponible -- confírmaselo "
-                f"al cliente sin ninguna duda. Los colores oficiales NUNCA "
-                f"cambian ni se agotan, así que nunca le digas que este color "
-                f"'no está disponible' o 'se acabó'."
-            )
-        else:
-            extra = ""
-            if "peluche" in producto_texto.lower():
-                extra = (
-                    f" Para este producto también aplica "
-                    f"{COLOR_PELUCHE_EXTRA_DISPLAY} como color extra."
+        lineas_resultado = []
+        for color_texto in colores_texto:
+            es_valido = color_es_valido(color_texto, producto_texto)
+            if es_valido:
+                lineas_resultado.append(
+                    f"✅ '{color_texto}' SÍ es un color disponible -- confírmaselo al "
+                    f"cliente sin ninguna duda."
                 )
-            mensaje_resultado = (
-                f"🎨 VERIFICACIÓN REAL (hecha por el sistema, no lo recalcules "
-                f"tú): '{color_texto}' NO es un color oficial. Dile al cliente "
-                f"que ese color no lo manejamos, y ofrécele la lista real: "
-                f"{lista_general} (para moño/listón también "
-                f"{' y '.join(COLORES_MONO_EXTRA_DISPLAY)}).{extra}"
-            )
+            else:
+                extra = ""
+                if "peluche" in producto_texto.lower():
+                    extra = f" (para este producto también aplica {COLOR_PELUCHE_EXTRA_DISPLAY} como color extra)"
+                lineas_resultado.append(
+                    f"❌ '{color_texto}' NO es un color oficial{extra} -- dile al cliente "
+                    f"que ese color no lo manejamos y ofrécele la lista real."
+                )
+
+        mensaje_resultado = (
+            "🎨 VERIFICACIÓN REAL (hecha por el sistema, no la recalcules tú):\n"
+            + "\n".join(lineas_resultado)
+            + f"\n\nLista oficial completa: {lista_general} (para moño/listón "
+            + f"también {' y '.join(COLORES_MONO_EXTRA_DISPLAY)}). Los colores "
+            + "oficiales NUNCA cambian ni se agotan -- nunca digas que uno "
+            + "'no está disponible' o 'se acabó' sin haber verificado aquí primero."
+        )
         return mensaje_resultado, [], False
 
     if name == "armar_resumen_final":
@@ -3938,7 +4024,20 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
         sesion["messages"] = mensajes_completos[1:]
         historial = sesion["messages"]
 
-    MAX_ITERACIONES_HERRAMIENTAS = 4
+    # 🔧 (6 sep 2026, bug real detectado: el bot mandó el mensaje de
+    # relleno "Disculpa, dame un segundo y te confirmo" a una clienta en
+    # vez de confirmarle su pedido) Antes era 4 -- con los candados
+    # nuevos de este mismo día (verificar_color, verificar_urgencia_fecha,
+    # armar_resumen_final), un solo mensaje del cliente con 2-3 colores
+    # ("toalla celeste, moño blanco, pie blanco") puede necesitar varias
+    # llamadas a herramientas antes de poder guardar todo y responder --
+    # con el límite viejo de 4, se agotaban las vueltas SOLO verificando,
+    # sin que quedara ninguna para guardar los datos y contestar, y caía
+    # en este mensaje de relleno que no confirma nada de verdad. Subido a
+    # 7 para dar margen real. Ver también verificar_color, que ahora
+    # acepta varios colores en una sola llamada para necesitar menos
+    # vueltas en el primer lugar.
+    MAX_ITERACIONES_HERRAMIENTAS = 7
     campos_modificados_total = []
     for indice_iteracion in range(MAX_ITERACIONES_HERRAMIENTAS):
         # 🔧 CORREGIDO: se detectó en producción que, aunque el prompt le
@@ -4080,7 +4179,39 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
 
         return texto
 
-    texto = "Disculpa, dame un segundo y te confirmo 🙂"
+    # 🔧 (6 sep 2026, bug real y grave: Linda Armendariz Rangel -- el bot
+    # se quedó sin vueltas disponibles (todas gastadas en herramientas,
+    # ver MAX_ITERACIONES_HERRAMIENTAS arriba) justo después de que la
+    # clienta ya había confirmado todo su pedido con pelos y señales. En
+    # vez de contestarle, caía aquí directo a un mensaje de relleno que
+    # promete "te confirmo en un segundo" -- una promesa vacía, porque
+    # nada vuelve a llamar al modelo hasta que la clienta escriba de
+    # nuevo. Si ella no volvía a escribir (lo más probable, ya había dado
+    # toda la información), la venta se perdía en silencio.
+    #
+    # Ahora, antes de caer en el mensaje de relleno, se hace UN ÚLTIMO
+    # intento con tool_choice="none" -- esto OBLIGA al modelo a contestar
+    # con texto, sin permitirle llamar ninguna herramienta más. Para este
+    # punto ya se guardó/verificó todo lo que se alcanzó a procesar en
+    # las vueltas anteriores (los resultados de esas herramientas ya
+    # están en mensajes_completos), así que el modelo tiene de sobra para
+    # armar una respuesta real en vez de una promesa vacía.
+    try:
+        r_final = client.chat.completions.create(
+            model=MODELO,
+            messages=mensajes_completos,
+            tools=TOOLS,
+            tool_choice="none",
+            temperature=0.4,
+            top_p=0.9,
+            max_tokens=600,
+        )
+        texto = r_final.choices[0].message.content or "Disculpa, dame un segundo y te confirmo 🙂"
+        print("🆘 Se agotaron las vueltas de herramientas -- se forzó una respuesta final con tool_choice='none' en vez de mandar solo el mensaje de relleno")
+    except Exception as e:
+        print(f"⚠️ Falló el intento final forzado tras agotar las vueltas: {repr(e)}")
+        texto = "Disculpa, dame un segundo y te confirmo 🙂"
+
     historial.append({"role": "assistant", "content": texto})
     _liberar_imagen_del_historial(historial, imagen_base64, texto_cliente)
     return texto

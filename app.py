@@ -125,6 +125,9 @@ DALIA_WHATSAPP_NUMERO = os.getenv("DALIA_WHATSAPP_NUMERO", "")
 # configurado, simplemente no se le manda nada a ella (no rompe nada del
 # resto del bot).
 VENDEDORA_WHATSAPP_NUMERO = os.getenv("VENDEDORA_WHATSAPP_NUMERO", "")
+# 🔧 (5 sep 2026, Fase 2, pedido explícito de Israel: "incluir también
+# a Israel" en el aviso de anticipo confirmado).
+ISRAEL_WHATSAPP_NUMERO = os.getenv("ISRAEL_WHATSAPP_NUMERO", "")
 
 # Números autorizados para usar el código de reactivación/reset (🧸☠️🧸).
 # Lista separada por comas en .env, ej: "5218112345678,5218187654321".
@@ -359,6 +362,32 @@ def encontrar_catalogo_pdf():
 NOMBRE_CATALOGO_PDF = encontrar_catalogo_pdf()
 URL_CATALOGO_PDF = (
     f"{PUBLIC_BASE_URL}/catalogo/{url_quote(NOMBRE_CATALOGO_PDF)}" if NOMBRE_CATALOGO_PDF else None
+)
+
+
+# 🔧 (5 sep 2026, Fase 2) Catálogo de diseños de tarjetita -- carpeta
+# separada del catálogo general de productos, porque es un PDF distinto
+# (los diseños de tarjetita numerados). Israel debe subir ese PDF a
+# /catalogo/ con "tarjetita" en el nombre (ej. "catalogo_tarjetitas.pdf")
+# para que esto lo encuentre solo -- si no existe todavía, no truena,
+# simplemente no hay link que mandar (ver instrucción del prompt: si no
+# hay catálogo, se le pide al cliente describir lo que quiere en vez de
+# mandarle un link roto).
+def encontrar_catalogo_tarjetitas_pdf():
+    if not CARPETA_CATALOGO.exists():
+        return None
+    candidatos = sorted(CARPETA_CATALOGO.glob("*tarjetita*.pdf")) or sorted(CARPETA_CATALOGO.glob("*Tarjetita*.pdf"))
+    if not candidatos:
+        print(f"⚠️ No hay PDF de catálogo de tarjetitas en {CARPETA_CATALOGO} (busca 'tarjetita' en el nombre) -- Fase 2 seguirá funcionando, pero sin ese link")
+        return None
+    print(f"✅ Catálogo de tarjetitas encontrado: {candidatos[0].name}")
+    return candidatos[0].name
+
+
+NOMBRE_CATALOGO_TARJETITAS_PDF = encontrar_catalogo_tarjetitas_pdf()
+URL_CATALOGO_TARJETITAS_PDF = (
+    f"{PUBLIC_BASE_URL}/catalogo/{url_quote(NOMBRE_CATALOGO_TARJETITAS_PDF)}"
+    if NOMBRE_CATALOGO_TARJETITAS_PDF else None
 )
 
 
@@ -1487,9 +1516,15 @@ explícitamente.
 """
 
 
-def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None):
+def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None, telefono=None):
     if conocimiento is None:
         conocimiento = KNOWLEDGE
+
+    # 🔧 (5 sep 2026, Fase 2) Con FASE_2_ACTIVA desactivada (el default),
+    # obtener_fase() siempre regresa "venta" -- este bloque completo
+    # nunca hace nada distinto a como ya funcionaba. Ver la sección
+    # FASE 2 al final de este prompt, agregada solo si fase=="post_pago".
+    fase_actual = pedido_manager.obtener_fase(telefono) if telefono else "venta"
 
     resumen = pedido_manager.generar_resumen(pedido_id=pedido_id, borrador=pedido)
 
@@ -1603,7 +1638,7 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None):
     fecha_minima = sumar_dias_habiles(ahora.date(), 4)
     dia_semana_minima = dias[fecha_minima.weekday()]
 
-    return f"""
+    prompt = f"""
 Eres DALIA, asesora de ventas de Recuerditos Dalia.
 
 Toda la información oficial está en la Base de Conocimiento.
@@ -1987,6 +2022,22 @@ resumen con total, revisa ese bloque de faltantes: si tiene algo, pregunta
 eso primero (uno o dos datos a la vez) y NO ofrezcas el resumen todavía,
 aunque el cliente ya haya dicho algo como "ya con eso" o "así está bien".
 
+🚨 OBLIGATORIO -- ver armar_resumen_final: en cuanto sientas que ya no
+falta nada (el bloque de arriba ya no aparece), NUNCA preguntes tú mismo
+algo como "¿quieres que te arme el resumen?" -- llama a la función
+armar_resumen_final de inmediato. Ella decide si de verdad no falta nada
+y te da el resumen YA ARMADO con el total exacto, listo para mandar. 🚨
+Error real ya cometido, nunca lo repitas: en una conversación real (Ana
+Armendariz, 25 ositos con jaboncito) el bot se quedó preguntando
+"¿quieres que te arme el resumen?" CUATRO veces seguidas sin nunca
+mandarlo -- la clienta contestó que sí DOS veces y el bot igual volvió a
+preguntar en vez de darle el resumen, hasta que ella se hartó y dejó de
+contestar. Se perdió la venta por completo. En cuanto el cliente
+responda afirmativo a cualquier variante de esa pregunta (o en cuanto tú
+mismo sientas que ya terminaste de reunir los datos), llama a
+armar_resumen_final -- nunca vuelvas a preguntar "¿quieres que te arme
+el resumen?" una segunda vez.
+
 IMPORTANTE — PRECIO: en el momento en que le informes al cliente el precio
 por pieza o el total del pedido (usando el precio de la Base de Conocimiento),
 el sistema asigna el precio solo; tú llama agregar_item o actualizar_item sin precio_unitario.
@@ -2081,6 +2132,76 @@ ESTADO ACTUAL DEL PEDIDO DE ESTE CLIENTE (desde base de datos):
 
 {resumen}
 """
+
+    # 🔧 (5 sep 2026, Fase 2, pedido explícito de Israel) Con
+    # FASE_2_ACTIVA desactivada (default), fase_actual siempre es
+    # "venta" y este bloque NUNCA se agrega -- el prompt queda idéntico
+    # al de siempre, letra por letra. Encendida, en cuanto un pedido
+    # pasa a "post_pago" (justo al confirmar el anticipo), se agrega
+    # esta sección aparte con las reglas del checklist posterior al
+    # anticipo -- las reglas de venta de arriba (colores, fechas,
+    # urgencia, etc.) ya no aplican en este punto porque el pedido en sí
+    # ya quedó cerrado; lo único que falta es reunir datos para producción.
+    if fase_actual == "post_pago":
+        prompt += """
+
+===========================================================
+FASE 2 -- CHECKLIST POSTERIOR AL ANTICIPO (estás aquí ahora)
+===========================================================
+El pedido y el pago YA quedaron confirmados -- deja de vender, deja de
+tocar colores/cantidades/fechas del pedido (eso ya cerró). Tu único
+trabajo ahora es reunir los datos que faltan para pasar el pedido a
+producción, y despedirte. NO uses ninguna herramienta de venta
+(actualizar_pedido, agregar_item, verificar_color, verificar_urgencia_fecha,
+etc.) mientras estés en esta fase.
+
+Los mensajes de "gracias por tu anticipo" y el checklist de datos
+solicitados YA SE LE MANDARON al cliente automáticamente antes de que
+veas este mensaje -- no los repitas ni los vuelvas a mandar tú.
+
+QUÉ HACER:
+1. Conforme el cliente te vaya dando cada dato (nombre, teléfono de
+   contacto, tipo de evento, dirección o punto de entrega según
+   aplique, diseño y texto de tarjetita), llama a
+   capturar_datos_post_pago con lo que te haya dado -- puedes llamarla
+   varias veces, no esperes a tener todo junto.
+2. Sobre la dirección/lugar de entrega -- depende del tipo de entrega
+   de ESTE pedido:
+   - Si es a domicilio o DHL: pide la dirección completa.
+   - Si es recolección en LOCAL: no pidas dirección -- solo confirma
+     que ya se le compartió la ubicación del local (si no se le ha
+     compartido, mándasela tú y luego confirma con
+     capturar_datos_post_pago(ubicacion_local_confirmada=true)).
+   - Si es PUNTO DE ENTREGA: pregunta cuál punto de entrega eligió (de
+     los que ya se le mencionaron durante la venta) y a qué hora.
+3. Sobre la tarjetita: si el cliente elige un diseño del catálogo que
+   ya se le mandó, captura el número de diseño y el texto exacto. Si
+   dice que quiere mandar su propio diseño, pídele que lo mande en PDF
+   listo para imprimir, con medidas 4.3cm x 6.7cm -- tú SOLO recibes y
+   guardas ese archivo, nunca lo revises, edites ni opines sobre si
+   está bien armado. Marca disenio_propio_confirmado=true en cuanto
+   confirme que mandará su propio diseño.
+4. 🚨 Si el cliente pide AYUDA o apoyo del equipo para editar/diseñar/dar
+   formato a su tarjetita (nunca se lo ofrezcas tú primero, solo
+   reacciona si él lo pide), llama a cliente_requiere_ayuda_diseno de
+   inmediato y manda EXACTAMENTE el mensaje que te regrese esa función,
+   sin agregar nada más -- esto cierra la conversación por ti.
+5. Cuando ya tengas TODOS los datos que aplican para este pedido,
+   arma un resumen final completo (fecha y lugar de entrega, producto,
+   cantidad, colores, tarjetita, etc.) y pregúntale al cliente si todo
+   está correcto. Espera su confirmación EXPLÍCITA -- nunca asumas.
+6. Solo hasta que el cliente confirme ese resumen como correcto, llama
+   a finalizar_fase_2_pedido. Si todavía falta algo, la función te lo va
+   a decir -- síguelo preguntando. Cuando te deje pasar, manda
+   EXACTAMENTE el mensaje que te regrese, sin agregar ni quitar nada.
+
+Pregunta los datos de a poco (uno o dos a la vez), nunca los seis de
+golpe en un solo mensaje -- aunque ya se le haya mandado la lista
+completa en el mensaje automático, tú síguelos uno por uno conforme
+platiques con el cliente.
+"""
+
+    return prompt
 
 
 # ===========================
@@ -2337,7 +2458,105 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "armar_resumen_final",
+            "description": (
+                "🚨 OBLIGATORIA: llama esta función en cuanto sientas que ya "
+                "tienes todos los datos del pedido y estés a punto de "
+                "preguntarle al cliente algo como '¿quieres que te arme el "
+                "resumen?' o similar. NUNCA hagas esa pregunta tú mismo, y "
+                "NUNCA redactes ni calcules el resumen o el total de "
+                "memoria -- esta función revisa de forma determinística si "
+                "de verdad no falta nada y te da el resumen YA ARMADO con "
+                "el total exacto (o te dice puntualmente qué falta) para "
+                "que lo mandes tal cual. 🚨 Error real ya cometido, nunca lo "
+                "repitas: en una conversación real, el bot se quedó "
+                "preguntando '¿quieres que te arme el resumen?' una y otra "
+                "vez sin nunca mandarlo -- aunque la clienta ya había dicho "
+                "que sí dos veces -- y la clienta se hartó y dejó de "
+                "contestar, se perdió la venta. En cuanto creas que ya "
+                "terminaste de reunir los datos, llama a esta función en "
+                "vez de preguntar."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    # 🔧 (5 sep 2026, Fase 2) Las 3 herramientas de aquí abajo SOLO las
+    # debe usar el modelo cuando la fase del pedido sea "post_pago" (ver
+    # la instrucción correspondiente en el prompt, que solo se inyecta
+    # en esa fase) -- con Fase 2 desactivada (FASE_2_ACTIVA=false, el
+    # default), un pedido nunca llega a esa fase, así que estas
+    # herramientas simplemente nunca se usan, sin afectar nada de la
+    # Fase 1.
+    {
+        "type": "function",
+        "function": {
+            "name": "capturar_datos_post_pago",
+            "description": (
+                "SOLO se usa durante la Fase 2 (después de confirmado el "
+                "anticipo, mientras se arma el checklist final del pedido). "
+                "Llámala cada vez que el cliente te dé cualquiera de estos "
+                "datos -- puedes llamarla varias veces según te vaya "
+                "contestando, no esperes a tener todo junto. Nunca inventes "
+                "ni asumas un valor -- solo manda lo que el cliente "
+                "realmente haya dicho, deja vacíos los campos que todavía "
+                "no te ha dado."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nombre_cliente": {"type": "string", "description": "Nombre completo del cliente."},
+                    "telefono_contacto": {"type": "string", "description": "Número de WhatsApp de contacto que dio el cliente (aplica sobre todo si el canal es Messenger)."},
+                    "tipo_evento": {"type": "string", "description": "Tipo de evento: babyshower, bautizo, revelación de género, confirmación, cumpleaños, boda, etc."},
+                    "direccion_entrega": {"type": "string", "description": "Dirección completa de entrega -- solo aplica si el tipo de entrega es a domicilio o DHL."},
+                    "punto_entrega_elegido": {"type": "string", "description": "Nombre/lugar del punto de entrega que el cliente eligió -- solo aplica si el tipo de entrega es punto de entrega."},
+                    "punto_entrega_hora": {"type": "string", "description": "Hora acordada para el punto de entrega."},
+                    "ubicacion_local_confirmada": {"type": "boolean", "description": "True si ya se le compartió y confirmó al cliente la ubicación del local -- solo aplica si el tipo de entrega es recoger en local."},
+                    "tarjetita_diseno": {"type": "string", "description": "Número o nombre del diseño de tarjetita que el cliente eligió del catálogo."},
+                    "tarjetita_texto": {"type": "string", "description": "Texto exacto que el cliente quiere que lleve la tarjetita."},
+                    "disenio_propio_confirmado": {"type": "boolean", "description": "True si el cliente confirmó que va a mandar su propio diseño en PDF, en vez de elegir uno del catálogo."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cliente_requiere_ayuda_diseno",
+            "description": (
+                "Llama esta función SOLO si el cliente pide explícitamente "
+                "ayuda o apoyo del equipo para editar, diseñar o dar formato "
+                "a su tarjetita personalizada -- nunca la llames si el "
+                "cliente no lo ha pedido, y nunca ofrezcas tú esta ayuda de "
+                "forma proactiva. Esto avisa al equipo, aplica el cargo de "
+                "$50 de apoyo de diseño, y transfiere la conversación a una "
+                "persona real de inmediato -- después de llamarla, tu único "
+                "mensaje debe ser exactamente el que te regrese la función."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "finalizar_fase_2_pedido",
+            "description": (
+                "Llama esta función SOLO después de haberle mostrado al "
+                "cliente el resumen final completo de su pedido (checklist: "
+                "fecha y lugar de entrega, producto, cantidad, colores, "
+                "tarjetita, etc.) y que el cliente lo haya confirmado "
+                "explícitamente como correcto -- nunca antes, y nunca si el "
+                "cliente todavía no ha confirmado. La función verifica que "
+                "todos los datos necesarios ya estén completos; si falta "
+                "algo, te lo va a decir para que se lo preguntes al cliente."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
+
 
 
 if CATALOGO_IMAGENES_PRODUCTO:
@@ -3460,6 +3679,159 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
             )
         return mensaje_resultado, [], False
 
+    if name == "armar_resumen_final":
+        # 🔧 (5 sep 2026, bug real y grave: se perdió una venta real --
+        # Ana Armendariz, 25 ositos con jaboncito, $90 de envío -- porque
+        # el bot se quedó atascado preguntando "¿quieres que te arme el
+        # resumen?" una y otra vez sin nunca mandarlo, aunque la clienta
+        # ya había dicho que sí dos veces. El checklist visual que el
+        # propio bot le mandó a ella mostraba TODO en ✅ -- no faltaba
+        # ningún dato real, el bot simplemente nunca dio el siguiente
+        # paso. Esta función quita esa decisión de las manos del modelo:
+        # Python decide si de verdad no falta nada, y si no falta nada,
+        # entrega el resumen YA ARMADO (reutilizando generar_resumen(),
+        # que ya incluye el total calculado por calcular_total()) para
+        # que el modelo solo lo mande, sin tener que decidir nada.
+        faltantes = campos_faltantes_pedido(pedido)
+        if faltantes:
+            return (
+                f"BLOQUEADO: todavía falta reunir: {', '.join(faltantes)}. "
+                f"Pregúntale esto al cliente de forma específica y directa -- "
+                f"nunca le preguntes de forma genérica \"¿quieres que te arme "
+                f"el resumen?\", dile puntualmente qué dato te falta.",
+                [],
+                False,
+            )
+        resumen_completo = pedido_manager.generar_resumen(borrador=pedido)
+        return (
+            f"📋 RESUMEN REAL (calculado por el sistema, no lo recalcules tú "
+            f"ni cambies ningún dato o el total):\n\n{resumen_completo}\n\n"
+            f"Manda este resumen completo al cliente en un mensaje natural "
+            f"(puedes darle mejor formato para el chat, pero incluye TODOS "
+            f"los datos y el TOTAL exacto tal cual) y pregúntale si está "
+            f"todo correcto para pedirle el anticipo. Esto YA ES el "
+            f"resumen -- mándalo de una vez, no vuelvas a preguntar si lo "
+            f"quiere.",
+            [],
+            False,
+        )
+
+    if name == "capturar_datos_post_pago":
+        # 🔧 (5 sep 2026, Fase 2) Solo debería llegar aquí si fase ==
+        # "post_pago" (lo obliga el prompt), pero por si acaso: si
+        # FASE_2_ACTIVA está apagada, esta herramienta ni siquiera se le
+        # ofrece al modelo (ver construir_system_prompt), así que en la
+        # práctica nunca se ejecuta con la Fase 2 desactivada.
+        try:
+            args_obj = json.loads(args or "{}")
+        except json.JSONDecodeError:
+            args_obj = {}
+        pedido_manager.guardar_datos_post_pago(numero, args_obj)
+        print(f"📋 [Fase 2] Datos post-pago capturados para {numero}: {list(args_obj.keys())}")
+        return (
+            "Datos guardados. Sigue preguntando lo que todavía falte del checklist "
+            "(nombre, teléfono de contacto si es Messenger, tipo de evento, "
+            "dirección/punto de entrega según aplique, y la tarjetita) antes de "
+            "armar el resumen final.",
+            [],
+            False,
+        )
+
+    if name == "cliente_requiere_ayuda_diseno":
+        # 🔧 (5 sep 2026, Fase 2, pedido explícito de Israel) Atajo más
+        # corto que el resto del checklist: se avisa al equipo, se
+        # registra el cargo de $50, y se apaga el bot de inmediato --
+        # sin esperar a terminar las demás preguntas.
+        pedido_manager.guardar_datos_post_pago(numero, {"ayuda_diseno_solicitada": True})
+        pedido_manager.finalizar_fase_2(numero)
+        mensaje_equipo = (
+            f"🎨 (cliente requiere ayuda) El cliente {numero} pidió apoyo del equipo "
+            f"para el diseño de su tarjetita personalizada -- se le va a cobrar el "
+            f"cargo extra de $50 de apoyo de diseño."
+        )
+        if DALIA_WHATSAPP_NUMERO:
+            enviar_whatsapp(DALIA_WHATSAPP_NUMERO, mensaje_equipo)
+        if VENDEDORA_WHATSAPP_NUMERO:
+            enviar_whatsapp(VENDEDORA_WHATSAPP_NUMERO, mensaje_equipo)
+        if ISRAEL_WHATSAPP_NUMERO:
+            enviar_whatsapp(ISRAEL_WHATSAPP_NUMERO, mensaje_equipo)
+        try:
+            pedido_db_actual = crm.cargar_pedido(numero)
+            if pedido_db_actual and pedido_db_actual.folio:
+                actualizar_produccion_dalia(
+                    pedido_db_actual.folio,
+                    pedido_manager.obtener_datos_post_pago(numero),
+                )
+        except Exception as e:
+            print(f"⚠️ No se pudo reeditar la nota tras pedir ayuda de diseño: {repr(e)}")
+        print(f"🎨 [Fase 2] Cliente {numero} requiere ayuda de diseño -- bot apagado (modo DALIA)")
+        return (
+            "Manda EXACTAMENTE este mensaje al cliente, sin agregar ni quitar "
+            "absolutamente nada: \"Ok, en un momento más alguien del equipo te "
+            "contactará para apoyarte con el diseño de tu tarjeta personalizada.\"",
+            [],
+            False,
+        )
+
+    if name == "finalizar_fase_2_pedido":
+        # 🔧 (5 sep 2026, Fase 2, pedido explícito de Israel) Candado
+        # determinístico -- Python decide si de verdad ya está todo
+        # completo, el modelo no puede cerrar la Fase 2 "porque cree que
+        # ya tiene todo". Mismo patrón que ya se usa para el anticipo y
+        # para punto_de_entrega.
+        datos_pp = pedido_manager.obtener_datos_post_pago(numero)
+        faltantes = []
+        if not datos_pp.get("nombre_cliente"):
+            faltantes.append("nombre completo del cliente")
+        if canal == "messenger" and not datos_pp.get("telefono_contacto"):
+            faltantes.append("teléfono de WhatsApp de contacto")
+        if not datos_pp.get("tipo_evento"):
+            faltantes.append("tipo de evento")
+
+        tipo_entrega_actual = str(pedido.get("tipo_entrega") or "").strip().lower()
+        if pedido.get("_envio_fuera_de_zona") or "domicilio" in tipo_entrega_actual:
+            if not datos_pp.get("direccion_entrega"):
+                faltantes.append("dirección completa de entrega")
+        elif _es_tipo_entrega_punto_de_entrega(tipo_entrega_actual):
+            if not datos_pp.get("punto_entrega_elegido") or not datos_pp.get("punto_entrega_hora"):
+                faltantes.append("punto de entrega elegido y la hora acordada")
+        elif "local" in tipo_entrega_actual:
+            if not datos_pp.get("ubicacion_local_confirmada"):
+                faltantes.append("confirmar que ya se le compartió la ubicación del local al cliente")
+
+        tiene_tarjetita = (
+            (datos_pp.get("tarjetita_diseno") and datos_pp.get("tarjetita_texto"))
+            or datos_pp.get("disenio_propio_confirmado")
+        )
+        if not tiene_tarjetita:
+            faltantes.append("diseño y texto de la tarjetita (o confirmación de que mandará diseño propio)")
+
+        if faltantes:
+            return (
+                f"BLOQUEADO: todavía falta reunir: {', '.join(faltantes)}. "
+                f"Sigue preguntándole esto al cliente -- no se puede cerrar el "
+                f"pedido sin esto.",
+                [],
+                False,
+            )
+
+        pedido_manager.finalizar_fase_2(numero)
+        try:
+            pedido_db_actual = crm.cargar_pedido(numero)
+            if pedido_db_actual and pedido_db_actual.folio:
+                actualizar_produccion_dalia(pedido_db_actual.folio, datos_pp)
+        except Exception as e:
+            print(f"⚠️ No se pudo reeditar la nota al cerrar la Fase 2: {repr(e)}")
+        print(f"✅ [Fase 2] Checklist completo y confirmado para {numero} -- bot apagado (modo DALIA)")
+        return (
+            "Manda EXACTAMENTE este mensaje de cierre al cliente, sin agregar ni "
+            "quitar absolutamente nada: \"Un poco más tarde te harán llegar por "
+            "WhatsApp la nota final de tu pedido, para que la revises o confirmes "
+            "y comenzar a trabajar en tus recuerditos!! Gracias!!\"",
+            [],
+            False,
+        )
+
     return "función desconocida", [], False
 
 
@@ -3558,7 +3930,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
 
     conocimiento_relevante = seleccionar_conocimiento_relevante(texto_cliente, historial_reciente=historial)
 
-    system_prompt = construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=conocimiento_relevante)
+    system_prompt = construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=conocimiento_relevante, telefono=numero)
     mensajes_completos = [{"role": "system", "content": system_prompt}] + historial
 
     if len(mensajes_completos) > MAX_TURNOS_HISTORIAL + 1:
@@ -3659,7 +4031,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
                 return None
 
             mensajes_completos[0]["content"] = construir_system_prompt(
-                pedido, pedido_id, info_enviada, conocimiento=conocimiento_relevante
+                pedido, pedido_id, info_enviada, conocimiento=conocimiento_relevante, telefono=numero
             )
             continue
 
@@ -3816,8 +4188,8 @@ def notificar_a_dalia(pedido_db, pedido_ram, canal="whatsapp"):
     VENDEDORA_WHATSAPP_NUMERO están configurados, no hace nada (no rompe
     el resto del flujo).
     """
-    if not DALIA_WHATSAPP_NUMERO and not VENDEDORA_WHATSAPP_NUMERO:
-        print("⚠️ Ni DALIA_WHATSAPP_NUMERO ni VENDEDORA_WHATSAPP_NUMERO están configurados, no se pudo notificar a nadie")
+    if not DALIA_WHATSAPP_NUMERO and not VENDEDORA_WHATSAPP_NUMERO and not ISRAEL_WHATSAPP_NUMERO:
+        print("⚠️ Ni DALIA_WHATSAPP_NUMERO ni VENDEDORA_WHATSAPP_NUMERO ni ISRAEL_WHATSAPP_NUMERO están configurados, no se pudo notificar a nadie")
         return
 
     folio = pedido_db.folio if pedido_db else "SIN FOLIO"
@@ -3907,6 +4279,8 @@ def notificar_a_dalia(pedido_db, pedido_ram, canal="whatsapp"):
         enviar_whatsapp(DALIA_WHATSAPP_NUMERO, mensaje)
     if VENDEDORA_WHATSAPP_NUMERO:
         enviar_whatsapp(VENDEDORA_WHATSAPP_NUMERO, mensaje)
+    if ISRAEL_WHATSAPP_NUMERO:
+        enviar_whatsapp(ISRAEL_WHATSAPP_NUMERO, mensaje)
 
     # 🔧 (3 sep 2026) Ver notificar_produccion_dalia() más abajo. Se
     # llama HASTA AQUÍ, después de que los WhatsApp de arriba ya se
@@ -4004,6 +4378,56 @@ def notificar_produccion_dalia(folio, cliente, telefono, items, entrega, pago, t
             print(f"⚠️ Producción Dalia respondió {r.status_code} para folio {folio}: {r.text[:300]}")
     except Exception as e:
         print(f"⚠️ No se pudo notificar a Producción Dalia (no afecta el resto del flujo): {repr(e)}")
+
+
+def actualizar_produccion_dalia(folio, datos_post_pago):
+    """🔧 (5 sep 2026, Fase 2, pedido explícito de Israel: "nota
+    reeditada") Se llama UNA SOLA VEZ, al terminar y confirmarse el
+    checklist completo de Fase 2 -- completa la nota que ya se había
+    creado al confirmar el anticipo con los datos que solo se saben
+    hasta entonces: nombre y teléfono del cliente van al encabezado;
+    tipo de evento y datos de la tarjetita se anexan a las notas (la
+    parte baja de la nota). Igual que notificar_produccion_dalia: si
+    falla, nunca truena ni afecta el resto del flujo."""
+    if not PRODUCCION_DALIA_URL or not PRODUCCION_API_KEY or not folio:
+        return
+    try:
+        lineas_notas = []
+        if datos_post_pago.get("tipo_evento"):
+            lineas_notas.append(f"Tipo de evento: {datos_post_pago['tipo_evento']}")
+        if datos_post_pago.get("tarjetita_diseno"):
+            lineas_notas.append(f"Tarjetita -- diseño: {datos_post_pago['tarjetita_diseno']}")
+        if datos_post_pago.get("tarjetita_texto"):
+            lineas_notas.append(f"Tarjetita -- texto: {datos_post_pago['tarjetita_texto']}")
+        if datos_post_pago.get("disenio_propio_confirmado"):
+            lineas_notas.append("Tarjetita: diseño propio del cliente (PDF recibido, ver adjunto).")
+        if datos_post_pago.get("punto_entrega_elegido"):
+            lineas_notas.append(
+                f"Punto de entrega: {datos_post_pago['punto_entrega_elegido']}"
+                + (f" a las {datos_post_pago['punto_entrega_hora']}" if datos_post_pago.get("punto_entrega_hora") else "")
+            )
+        if datos_post_pago.get("ayuda_diseno_solicitada"):
+            lineas_notas.append("⚠️ Cliente pidió ayuda de diseño para su tarjetita -- cargo extra de $50.")
+
+        payload = {
+            "folio": folio,
+            "cliente": datos_post_pago.get("nombre_cliente"),
+            "telefono": datos_post_pago.get("telefono_contacto"),
+            "direccion": datos_post_pago.get("direccion_entrega"),
+            "notas_extra": "\n".join(lineas_notas) if lineas_notas else None,
+        }
+        r = requests.post(
+            f"{PRODUCCION_DALIA_URL}/api/pedidos/bot/actualizar",
+            json=payload,
+            headers={"X-API-Key": PRODUCCION_API_KEY},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            print(f"🏭 Nota REEDITADA en Producción Dalia (Fase 2) para folio {folio}")
+        else:
+            print(f"⚠️ Producción Dalia respondió {r.status_code} al reeditar folio {folio}: {r.text[:300]}")
+    except Exception as e:
+        print(f"⚠️ No se pudo reeditar la nota en Producción Dalia (no afecta el resto del flujo): {repr(e)}")
 
 
 def enviar_whatsapp_imagen(numero, image_url, caption=""):
@@ -4229,6 +4653,41 @@ def enviar_messenger_imagen(psid, image_url, pagina_id=None):
         return None
 
 
+def enviar_messenger_documento(psid, url_documento, caption="", pagina_id=None):
+    """🔧 (5 sep 2026, Fase 2) Mismo patrón que enviar_messenger_imagen,
+    pero con attachment type "file" -- para mandar el catálogo de
+    tarjetitas (PDF) por Messenger. Messenger no soporta caption inline
+    en el archivo (igual que con imágenes) -- si hay caption, se manda
+    como mensaje de texto aparte justo después."""
+    data = {
+        "recipient": {"id": psid},
+        "message": {
+            "attachment": {
+                "type": "file",
+                "payload": {"url": url_documento, "is_reusable": True},
+            }
+        },
+        "messaging_type": "RESPONSE",
+    }
+    try:
+        r = requests.post(
+            MESSENGER_GRAPH_URL,
+            params={"access_token": token_para_pagina(pagina_id)},
+            json=data,
+            timeout=15,
+        )
+        if r.status_code >= 400:
+            print("⚠️ Error enviando documento por Messenger:", r.status_code, r.text)
+        else:
+            print(f"📤 Documento enviado por Messenger a {psid}: {url_documento}")
+        if caption:
+            enviar_messenger(psid, caption, pagina_id=pagina_id)
+        return r
+    except requests.RequestException as e:
+        print("⚠️ Excepción enviando documento por Messenger:", e)
+        return None
+
+
 # ===========================
 # COMENTARIOS EN PUBLICACIONES DE LA PÁGINA (Facebook Feed)
 # ===========================
@@ -4390,6 +4849,16 @@ def enviar_imagen_canal(destinatario, image_url, canal="whatsapp", caption="", p
     if _usar_ycloud_en_este_hilo():
         return enviar_whatsapp_ycloud_imagen(destinatario, image_url, caption=caption)
     return enviar_whatsapp_imagen(destinatario, image_url, caption=caption)
+
+
+def enviar_documento_canal(destinatario, url_documento, nombre_archivo, canal="whatsapp", caption="", pagina_id=None):
+    """🔧 (5 sep 2026, Fase 2) Mismo patrón que enviar_imagen_canal, para
+    mandar el catálogo de tarjetitas (PDF) sin importar el canal."""
+    if canal == "messenger":
+        return enviar_messenger_documento(destinatario, url_documento, caption=caption, pagina_id=pagina_id)
+    if _usar_ycloud_en_este_hilo():
+        return enviar_whatsapp_ycloud_documento(destinatario, url_documento, nombre_archivo, caption=caption)
+    return enviar_whatsapp_documento(destinatario, url_documento, nombre_archivo, caption=caption)
 
 
 
@@ -5533,7 +6002,28 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             # de arena SOLO -- Israel pidió explícitamente que el reloj de
             # arena sea siempre el último mensaje que se vea, no pegado al
             # texto anterior.
-            mensaje_2 = "¿Puedes compartirnos por favor un número de WhatsApp para darle seguimiento a tu pedido? ¡Gracias!"
+            #
+            # 🔧 (5 sep 2026, Fase 2, pedido explícito de Israel) Con la
+            # Fase 2 activa, el mensaje 2 YA NO es solo pedir el WhatsApp
+            # de seguimiento -- se reemplaza por el checklist completo de
+            # datos necesarios para pasar el pedido a producción (el
+            # WhatsApp de contacto queda como uno de esos puntos). Estos
+            # textos son FIJOS, igual que el resto de esta secuencia --
+            # nunca los redacta el modelo, para que sean siempre iguales
+            # sin importar qué tan bien o mal esté respondiendo ese día.
+            if pedido_manager.FASE_2_ACTIVA:
+                mensaje_2 = (
+                    "Para continuar y pasar tu pedido a producción, por favor "
+                    "pásame los siguientes datos:\n"
+                    "- Nombre completo\n"
+                    "- Teléfono o WhatsApp de contacto\n"
+                    "- Tipo de evento (baby shower, bautizo, revelación de género, "
+                    "confirmación, cumpleaños, boda, etc.)\n"
+                    "- Dirección de entrega (si tu pedido es a domicilio o por DHL)\n"
+                    "- Número de diseño de tarjetita y el texto que quieres que lleve"
+                )
+            else:
+                mensaje_2 = "¿Puedes compartirnos por favor un número de WhatsApp para darle seguimiento a tu pedido? ¡Gracias!"
             mensaje_3 = "⌛"
 
             # 🔧 (20 ago 2026, a pedido explícito de Israel -- ver
@@ -5585,6 +6075,18 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             enviar_mensaje_canal(numero, mensaje_2, canal, pagina_id=pagina_id)
             time.sleep(1.5)
             enviar_mensaje_canal(numero, mensaje_3, canal, pagina_id=pagina_id)
+
+            # 🔧 (5 sep 2026, Fase 2, pedido explícito de Israel) "el bot
+            # manda PDF de catálogo de tarjetitas y dice..." -- si Israel
+            # todavía no ha subido ese PDF (ver encontrar_catalogo_tarjetitas_pdf
+            # arriba), esto simplemente no manda nada, sin tronar.
+            if pedido_manager.FASE_2_ACTIVA and URL_CATALOGO_TARJETITAS_PDF:
+                time.sleep(1.5)
+                enviar_documento_canal(
+                    numero, URL_CATALOGO_TARJETITAS_PDF, NOMBRE_CATALOGO_TARJETITAS_PDF,
+                    canal, caption="Te mando el catálogo para que escojas el número de diseño de tarjetita 🎀",
+                    pagina_id=pagina_id,
+                )
 
             print("📣 Notificando a Dalia...")
             notificar_a_dalia(pedido_db, sesion["pedido"], canal=canal)

@@ -390,7 +390,7 @@ def exigir_login():
     # persona en el navegador. Debe quedar excluido de este candado de
     # login igual que "login" y "static", o siempre lo mandaría a
     # /login antes de llegar a su propia verificación.
-    rutas_publicas = {"login", "static", "api_pedido_bot"}
+    rutas_publicas = {"login", "static", "api_pedido_bot", "api_pedido_bot_actualizar"}
     if request.endpoint in rutas_publicas:
         return None
     if not session.get("autenticado"):
@@ -1598,6 +1598,69 @@ def api_pedido_bot():
     print(f"🤖 Pedido recibido del bot: folio={datos['folio']!r}, id={pedido_id}, "
           f"necesita_revision={necesita_revision}")
     return jsonify({"status": "ok", "pedido_id": pedido_id}), 200
+
+
+@app.route("/api/pedidos/bot/actualizar", methods=["POST"])
+def api_pedido_bot_actualizar():
+    """🔧 (5 sep 2026, Fase 2, pedido explícito de Israel: "nota
+    reeditada") Al terminar el checklist posterior al anticipo, el bot
+    llama aquí UNA sola vez (nunca antes, nunca varias veces -- ver la
+    Fase 2 del bot) para completar la nota que ya se había creado al
+    confirmar el anticipo, con los datos que solo se saben hasta
+    entonces.
+
+    Solo actualiza los campos del ENCABEZADO que de verdad cambiaron
+    (nombre y teléfono del cliente, dirección si se dio) -- nunca toca
+    productos/total/anticipo (eso ya quedó bien desde la creación). El
+    tipo de evento y los datos de la tarjetita se anexan al final del
+    campo `notas` (la parte baja de la nota), nunca se sobreescribe lo
+    que ya hubiera ahí.
+
+    Misma llave compartida que /api/pedidos/bot. Si el folio no existe
+    (por ejemplo, la nota se borró a mano mientras tanto), regresa 404
+    en vez de crear una nota nueva -- esto es EXCLUSIVAMENTE para
+    completar una nota que ya existe."""
+    if not BOT_API_KEY or not hmac.compare_digest(
+        BOT_API_KEY, request.headers.get("X-API-Key", "")
+    ):
+        return jsonify({"error": "no autorizado"}), 401
+
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        body = {}
+
+    folio = (body.get("folio") or "").strip()
+    if not folio:
+        return jsonify({"error": "falta folio"}), 400
+
+    pedido_existente = database.obtener_pedido_por_folio(folio)
+    if not pedido_existente:
+        return jsonify({"error": f"no existe ninguna nota con folio {folio!r}"}), 404
+
+    datos_actualizados = dict(pedido_existente)
+    if body.get("cliente"):
+        datos_actualizados["cliente"] = body["cliente"]
+    if body.get("telefono"):
+        datos_actualizados["telefono"] = body["telefono"]
+    if body.get("direccion"):
+        datos_actualizados["direccion"] = body["direccion"]
+
+    notas_extra = (body.get("notas_extra") or "").strip()
+    if notas_extra:
+        notas_actuales = (datos_actualizados.get("notas") or "").strip()
+        datos_actualizados["notas"] = (
+            f"{notas_actuales}\n\n{notas_extra}" if notas_actuales else notas_extra
+        )
+
+    try:
+        database.actualizar_pedido(pedido_existente["id"], datos_actualizados)
+    except Exception as e:
+        print(f"⚠️ Error actualizando pedido del bot (folio={folio!r}): {repr(e)}")
+        return jsonify({"error": "no se pudo actualizar"}), 500
+
+    print(f"🤖 Nota reeditada por el bot (Fase 2): folio={folio!r}, id={pedido_existente['id']}")
+    return jsonify({"status": "ok", "pedido_id": pedido_existente["id"]}), 200
 
 
 @app.route("/confirmar/<temp_id>")

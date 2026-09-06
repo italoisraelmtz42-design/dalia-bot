@@ -2377,16 +2377,80 @@ def _normalizar_nombre_producto(nombre):
     return normalizar_producto_clave(nombre)
 
 
-def _buscar_item(pedido, nombre_producto):
+# 🔧 (5 sep 2026, bug real y GRAVE detectado con un pedido de Katia
+# Domínguez: dos lotes del mismo producto "osito con jaboncito" en
+# colores distintos -- el segundo SOBREESCRIBIÓ al primero en vez de
+# agregarse como línea aparte, perdiendo 20 piezas y $240 del total sin
+# que nadie se diera cuenta hasta que el número no cuadró. La nota ya
+# había llegado a Producción con un solo renglón en vez de dos.
+#
+# Causa raíz: _buscar_item (justo abajo) solo comparaba el NOMBRE del
+# producto para decidir "es el mismo item que ya tenía" -- ignoraba
+# por completo los colores/variante. Dos lotes con el mismo nombre pero
+# distinto color SIEMPRE se trataban como si fueran la misma línea.
+#
+# _CAMPOS_VARIANTE_ITEM son los campos que distinguen un lote de otro
+# dentro del mismo producto -- si dos llamadas al mismo producto traen
+# valores distintos en cualquiera de estos campos, son dos líneas
+# DISTINTAS, nunca la misma.
+_CAMPOS_VARIANTE_ITEM = (
+    "color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
+    "color_jaboncito", "nombre_bebe",
+)
+
+
+def _item_coincide_variante(existing, datos):
+    """Decide si un item YA GUARDADO (existing) es compatible con los
+    datos NUEVOS que se están agregando/actualizando (datos) -- es
+    decir, si de verdad son "el mismo lote" y no dos lotes distintos
+    del mismo producto. Compatible significa: para cada campo de
+    variante que datos SÍ trae, o el item guardado todavía no tenía
+    ningún valor ahí, o el valor coincide. En cuanto un campo que datos
+    especifica choca con lo que ya estaba guardado, NO es el mismo
+    lote -- debe tratarse como una línea nueva, nunca sobreescribir la
+    existente."""
+    for campo in _CAMPOS_VARIANTE_ITEM:
+        valor_nuevo = datos.get(campo)
+        if valor_nuevo in (None, ""):
+            continue  # no especificado en esta llamada, no cuenta como choque
+        valor_existente = existing.get(campo)
+        if valor_existente in (None, ""):
+            continue  # el item guardado todavía no tenía este dato -- se puede completar
+        if _normalizar_nombre_producto(str(valor_nuevo)) != _normalizar_nombre_producto(str(valor_existente)):
+            return False
+    return True
+
+
+def _buscar_item(pedido, nombre_producto, datos=None):
+    """Busca, dentro de pedido["items"], la línea que corresponde al
+    mismo lote que se está agregando/actualizando ahora.
+
+    Si se pasa `datos` (los campos nuevos que trae esta llamada), se
+    exige además que la variante coincida (ver _item_coincide_variante)
+    -- así dos lotes del mismo producto con colores distintos nunca se
+    confunden entre sí. Si `datos` no se pasa (o no trae ningún campo de
+    variante), se conserva el comportamiento de siempre: la primera
+    línea que coincida por nombre."""
     clave = _normalizar_nombre_producto(nombre_producto)
     items = pedido.get("items") if isinstance(pedido.get("items"), list) else []
+
+    candidatos = []
     for it in items:
-        if _normalizar_nombre_producto(it.get("producto")) == clave:
-            return it
-        # match parcial
         n = _normalizar_nombre_producto(it.get("producto"))
-        if clave and (clave in n or n in clave):
+        if n == clave or (clave and (clave in n or n in clave)):
+            candidatos.append(it)
+
+    if not candidatos:
+        return None
+    if datos is None:
+        return candidatos[0]
+
+    for it in candidatos:
+        if _item_coincide_variante(it, datos):
             return it
+    # Había uno o más lotes con el mismo nombre, pero NINGUNO compatible
+    # en color/variante con lo que se está pidiendo ahora -- es un lote
+    # nuevo, no se debe sobreescribir ninguno de los existentes.
     return None
 
 
@@ -2550,7 +2614,7 @@ def agregar_item_pedido(pedido, argumentos_json):
     # un turno anterior, se usa esa en vez de caer directo al default de 1.
     cantidad_solicitada = datos.get("cantidad") or pedido.get("cantidad_pendiente")
 
-    existing = _buscar_item(pedido, producto)
+    existing = _buscar_item(pedido, producto, datos)
     if existing:
         # sumar cantidad si viene, actualizar colores
         if cantidad_solicitada:
@@ -2598,7 +2662,7 @@ def actualizar_item_pedido(pedido, argumentos_json):
         return []
     if "items" not in pedido or not isinstance(pedido.get("items"), list):
         pedido["items"] = []
-    existing = _buscar_item(pedido, producto)
+    existing = _buscar_item(pedido, producto, datos)
     if not existing:
         # si no existe, comportarse como agregar
         return agregar_item_pedido(pedido, argumentos_json)

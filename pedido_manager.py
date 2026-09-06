@@ -5,6 +5,7 @@ Corrige el fallo crítico de pérdida de items (elefantes + velitas) y el archiv
 """
 
 import json
+import os
 import uuid
 import logging
 from datetime import datetime
@@ -24,6 +25,17 @@ logger = logging.getLogger("pedido_manager")
 # allá) -- se redefine aquí en vez de importarlo de app.py para evitar
 # un import circular (app.py sí importa este módulo).
 ZONA_HORARIA_NEGOCIO = ZoneInfo("America/Monterrey")
+
+# 🔧 (5 sep 2026, pedido explícito de Israel: candado de reversión
+# inmediata a Fase 1) Interruptor único para toda la Fase 2 (el
+# checklist posterior al anticipo: datos del cliente, tarjetita, nota
+# reeditada). Por default queda DESACTIVADA (False) -- hay que
+# encenderla a propósito en Render con FASE_2_ACTIVA=true. Si algo sale
+# mal, basta con poner esta variable en "false" (o borrarla) en Render
+# -- sin subir ningún archivo ni redeploy -- para que el bot vuelva a
+# comportarse EXACTAMENTE como la Fase 1 de siempre: apagado inmediato
+# al confirmar el anticipo, cero herramientas ni instrucciones nuevas.
+FASE_2_ACTIVA = os.getenv("FASE_2_ACTIVA", "false").strip().lower() == "true"
 
 
 # ---------------------------------------------------------------------------
@@ -454,21 +466,29 @@ def crear_pedido_desde_borrador(telefono: str, cliente_id: int, borrador: Dict, 
     """
     folio = _folio()
     es_urgente = 1 if borrador.get("es_urgente") or borrador.get("urgente") else 0
+    # 🔧 (5 sep 2026, Fase 2) Con el interruptor apagado (default), esto
+    # es IDÉNTICO a como siempre ha funcionado: modo_atencion=DALIA de
+    # inmediato, el bot se apaga en cuanto se confirma el anticipo.
+    # Encendido, el bot se queda respondiendo (modo BOT) para correr el
+    # checklist de datos + tarjetita antes de apagarse.
+    modo_atencion_inicial = ModoAtencion.BOT.value if FASE_2_ACTIVA else ModoAtencion.DALIA.value
+    fase_inicial = "post_pago" if FASE_2_ACTIVA else "venta"
     try:
         with get_db_connection() as conn:
             cur = conn.execute(
                 """INSERT INTO pedidos
-                   (folio, cliente_id, telefono, estado, modo_atencion, es_urgente, porcentaje_completitud, canal)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (folio, cliente_id, telefono, estado, modo_atencion, es_urgente, porcentaje_completitud, canal, fase)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     folio,
                     cliente_id,
                     telefono,
                     EstadoPedido.ANTICIPO_CONFIRMADO.value,
-                    ModoAtencion.DALIA.value,
+                    modo_atencion_inicial,
                     es_urgente,
                     100,
                     canal,
+                    fase_inicial,
                 ),
             )
             pedido_id = cur.lastrowid
@@ -559,15 +579,19 @@ def _insert_item(conn, pedido_id: int, data: Dict):
 
 def confirmar_anticipo_pedido_existente(pedido_id: int, telefono: str, borrador: Dict):
     """Actualiza un pedido ya existente cuando llega un anticipo nuevo."""
+    # 🔧 (5 sep 2026, Fase 2) mismo interruptor que crear_pedido_desde_borrador.
+    modo_atencion_nuevo = ModoAtencion.BOT.value if FASE_2_ACTIVA else ModoAtencion.DALIA.value
+    fase_nueva = "post_pago" if FASE_2_ACTIVA else "venta"
     try:
         with get_db_connection() as conn:
             conn.execute(
                 """UPDATE pedidos SET
-                   estado = ?, modo_atencion = ?, fecha_actualizacion = ?
+                   estado = ?, modo_atencion = ?, fase = ?, fecha_actualizacion = ?
                    WHERE id = ?""",
                 (
                     EstadoPedido.ANTICIPO_CONFIRMADO.value,
-                    ModoAtencion.DALIA.value,
+                    modo_atencion_nuevo,
+                    fase_nueva,
                     _now(),
                     pedido_id,
                 ),
@@ -837,6 +861,86 @@ def obtener_modo_atencion(telefono: str) -> str:
         return row["modo_atencion"] if row else ModoAtencion.BOT.value
     except Exception:
         return ModoAtencion.BOT.value
+
+
+# ---------------------------------------------------------------------------
+# 🔧 (5 sep 2026, Fase 2) Estado del checklist posterior al anticipo.
+# Todas estas funciones son "best effort": si algo falla, nunca truenan
+# ni bloquean el resto del flujo -- ver FASE_2_ACTIVA arriba, el candado
+# real de reversión es esa variable, no depender de que estas funciones
+# sean perfectas.
+# ---------------------------------------------------------------------------
+
+def obtener_fase(telefono: str) -> str:
+    """"venta" (como siempre) o "post_pago" (checklist de Fase 2, solo
+    posible con FASE_2_ACTIVA=true). Nunca truena -- ante cualquier
+    duda se comporta como "venta", el camino ya probado."""
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                """SELECT fase FROM pedidos
+                   WHERE telefono = ?
+                   ORDER BY id DESC LIMIT 1""",
+                (telefono,),
+            ).fetchone()
+        return row["fase"] if row and row["fase"] else "venta"
+    except Exception:
+        return "venta"
+
+
+def obtener_datos_post_pago(telefono: str) -> dict:
+    """Lo que ya se ha recabado del checklist de Fase 2 para el pedido
+    más reciente de este teléfono (nombre, teléfono de contacto, tipo
+    de evento, dirección, punto de entrega, tarjetita...). {} si no hay
+    nada guardado todavía."""
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                """SELECT datos_post_pago FROM pedidos
+                   WHERE telefono = ?
+                   ORDER BY id DESC LIMIT 1""",
+                (telefono,),
+            ).fetchone()
+        if row and row["datos_post_pago"]:
+            return json.loads(row["datos_post_pago"])
+        return {}
+    except Exception as e:
+        logger.error(f"obtener_datos_post_pago: {e}")
+        return {}
+
+
+def guardar_datos_post_pago(telefono: str, datos_nuevos: dict) -> dict:
+    """Fusiona datos_nuevos con lo ya guardado (nunca borra lo anterior
+    -- un dato ya confirmado no se pierde porque un turno posterior no
+    lo repitió) y regresa el resultado fusionado completo."""
+    actuales = obtener_datos_post_pago(telefono)
+    actuales.update({k: v for k, v in (datos_nuevos or {}).items() if v not in (None, "")})
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                """UPDATE pedidos SET datos_post_pago = ?
+                   WHERE id = (SELECT id FROM pedidos WHERE telefono = ? ORDER BY id DESC LIMIT 1)""",
+                (json.dumps(actuales, ensure_ascii=False), telefono),
+            )
+    except Exception as e:
+        logger.error(f"guardar_datos_post_pago: {e}")
+    return actuales
+
+
+def finalizar_fase_2(telefono: str):
+    """Cierra la Fase 2 para el pedido más reciente de este teléfono:
+    pasa modo_atencion a DALIA -- el mismo apagado de siempre, solo que
+    ahora ocurre al final del checklist en vez de al confirmar el
+    anticipo."""
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                """UPDATE pedidos SET modo_atencion = ?
+                   WHERE id = (SELECT id FROM pedidos WHERE telefono = ? ORDER BY id DESC LIMIT 1)""",
+                (ModoAtencion.DALIA.value, telefono),
+            )
+    except Exception as e:
+        logger.error(f"finalizar_fase_2: {e}")
 
 
 def resetear_cliente_completo(telefono: str) -> bool:

@@ -406,6 +406,18 @@ def init_order_tables():
             _agregar_columna_si_falta("uso_openai", "tokens_salida", "INTEGER DEFAULT 0")
             _agregar_columna_si_falta("uso_openai", "tokens_cache", "INTEGER DEFAULT 0")
             _agregar_columna_si_falta("uso_openai", "costo_estimado_usd", "REAL DEFAULT 0.0")
+            # 🔧 (5 sep 2026, Fase 2, pedido explícito de Israel) "fase"
+            # distingue si el pedido sigue en la venta normal ("venta") o
+            # ya está en el checklist posterior al anticipo
+            # ("post_pago") -- controlado por la variable de entorno
+            # FASE_2_ACTIVA (ver app.py). "datos_post_pago" guarda, como
+            # JSON, todo lo que se recaba en ese checklist (nombre,
+            # teléfono de contacto, tipo de evento, tarjetita, etc.) --
+            # un solo campo flexible en vez de una columna por dato,
+            # para no tener que seguir migrando el esquema cada vez que
+            # se agregue un campo nuevo al checklist.
+            _agregar_columna_si_falta("pedidos", "fase", "TEXT DEFAULT 'venta'")
+            _agregar_columna_si_falta("pedidos", "datos_post_pago", "TEXT")
             conn.commit()
 
             if current_version == 0:

@@ -3368,6 +3368,27 @@ _PATRON_COLOR_EN_TEXTO = re.compile(
 )
 
 
+# 🔧 (7 sep 2026, Fase 2, bug real: el modelo nunca llamaba a
+# armar_resumen_post_pago ni a finalizar_fase_2_pedido -- solo componía
+# su propio resumen de memoria una y otra vez, y el bot nunca se
+# apagaba. Este patrón detecta una confirmación corta y genérica
+# ("sí", "correcto", "está bien", "ok"...) para forzar
+# finalizar_fase_2_pedido justo después de mostrar el resumen real --
+# anclado con ^...$ (permitiendo signos de puntuación al final) para NO
+# disparar con mensajes largos que además traigan una corrección (ej.
+# "sí pero cambia la dirección" NO debe hacer match).
+_PATRON_CONFIRMACION_GENERICA = re.compile(
+    r"^\s*("
+    r"(s[ií]|correcto|exacto|as[ií]\s*es|confirmo|de\s*acuerdo|va|dale|"
+    r"ok(ay)?|perfecto|todo\s*est[aá]\s*bien|est[aá]\s*(todo\s*)?bien|todo\s*bien|"
+    r"todo\s*correcto)"
+    r"[\s,!.¡¿?]*"  # separador entre frases (coma, espacio, signos) -- permite
+                     # varias frases de confirmación seguidas, ej. "sí, todo correcto"
+    r")+$",
+    re.IGNORECASE,
+)
+
+
 # 🔧 (19 ago 2026, bug real reportado por Israel) Caso real: la clienta
 # dijo "Oso color celeste" (sin mencionar jaboncito para nada) y el
 # modelo agregó al pedido "osito CON jaboncito" por su cuenta -- en
@@ -4176,6 +4197,13 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
 
         pedido_manager.guardar_datos_post_pago(numero, args_obj)
         print(f"📋 [Fase 2] Datos post-pago capturados para {numero}: {list(args_obj.keys())}")
+        # 🔧 (7 sep 2026, Fase 2) Si el cliente corrige o completa algo
+        # DESPUÉS de que ya se le había mostrado el resumen real, se
+        # resetea la bandera -- el siguiente turno vuelve a forzar
+        # armar_resumen_post_pago con los datos actualizados, en vez de
+        # dejar que un "sí" tardío cierre el pedido con datos viejos.
+        if pedido.get("_resumen_post_pago_mostrado"):
+            pedido["_resumen_post_pago_mostrado"] = False
         mensaje_resultado = (
             "Datos guardados. Sigue preguntando lo que todavía falte del checklist "
             "(nombre y apellido, teléfono de contacto, tipo de evento, "
@@ -4263,6 +4291,13 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
             "chat) y pregúntale si todo está correcto. SOLO cuando confirme "
             "explícitamente que sí, llama a finalizar_fase_2_pedido."
         )
+        # 🔧 (7 sep 2026, Fase 2) Marca que el resumen real ya se mostró
+        # -- ver el forzado de tool_choice más arriba: mientras esta
+        # bandera esté en False, se sigue obligando a llamar esta misma
+        # función (nunca a finalizar_fase_2_pedido) cada vez que el
+        # checklist esté completo. Una vez en True, el siguiente "sí"
+        # del cliente sí puede forzar el cierre real.
+        pedido["_resumen_post_pago_mostrado"] = True
         return mensaje_resultado, [], False
 
     if name == "finalizar_fase_2_pedido":
@@ -4477,6 +4512,30 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
             # prioridad esta vuelta -- el color se verifica en cuanto
             # vuelva a mencionarse solo, en la siguiente vuelta.
             tool_choice_este_turno = {"type": "function", "function": {"name": "verificar_color"}}
+        elif (
+            indice_iteracion == 0
+            and pedido_manager.FASE_2_ACTIVA
+            and pedido_manager.obtener_fase(numero) == "post_pago"
+        ):
+            # 🔧 (7 sep 2026, Fase 2, bug real grave: el bot nunca dejaba
+            # de escribir, mandaba su propio resumen inventado una y otra
+            # vez, y la nota nunca se reeditaba -- porque el modelo nunca
+            # llamaba a armar_resumen_post_pago ni a
+            # finalizar_fase_2_pedido, pese a la instrucción "OBLIGATORIA"
+            # del prompt. Aquí se OBLIGA por código, igual que ya se hace
+            # con fechas y colores -- Python decide, no el modelo:
+            # - Si el checklist ya no tiene ningún ❌ y el resumen real
+            #   todavía no se ha mostrado, se obliga a armar_resumen_post_pago.
+            # - Si el resumen YA se mostró y el cliente contesta con una
+            #   confirmación corta y genérica ("sí", "correcto", "ok"...),
+            #   se obliga a finalizar_fase_2_pedido -- ahí sí se apaga el
+            #   bot de verdad.
+            _, _faltantes_fase2_ahora = _faltantes_fase_2(numero, pedido)
+            if not _faltantes_fase2_ahora:
+                if not pedido.get("_resumen_post_pago_mostrado"):
+                    tool_choice_este_turno = {"type": "function", "function": {"name": "armar_resumen_post_pago"}}
+                elif texto_cliente and _PATRON_CONFIRMACION_GENERICA.search(texto_cliente.strip()):
+                    tool_choice_este_turno = {"type": "function", "function": {"name": "finalizar_fase_2_pedido"}}
 
         r = client.chat.completions.create(
             model=MODELO,
@@ -6685,6 +6744,31 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
                 print("📋 Checklist del pedido enviado (actualizado)")
         except Exception as e:
             print("⚠️ Error armando/mandando el checklist del pedido (no afecta la respuesta ya enviada):", repr(e))
+
+        # 🔧 (7 sep 2026, Fase 2, pedido explícito de Israel: "eso debe
+        # ser visual para el cliente y visual para el bot") Mismo
+        # mecanismo que el checklist de Fase 1 de arriba, pero para el
+        # checklist posterior al anticipo (nombre, teléfono, tipo de
+        # evento, dirección/punto de entrega, tarjetita) -- se manda
+        # como mensaje de apoyo con ✅/❌ cada vez que cambia, mientras
+        # siga faltando algo. Deja de mandarse en cuanto ya no falta
+        # nada (ahí entra armar_resumen_post_pago en su lugar).
+        try:
+            if pedido_manager.FASE_2_ACTIVA and pedido_manager.obtener_fase(numero) == "post_pago":
+                datos_pp_actual = pedido_manager.obtener_datos_post_pago(numero)
+                checklist_fase2_texto = formatear_checklist_fase_2(datos_pp_actual, sesion.get("pedido") or {})
+                if (
+                    checklist_fase2_texto
+                    and "❌" in checklist_fase2_texto
+                    and checklist_fase2_texto != sesion.get("_ultimo_checklist_fase2_enviado")
+                ):
+                    time.sleep(1.2)
+                    crm.guardar_respuesta(cliente, checklist_fase2_texto, canal=canal)
+                    enviar_mensaje_canal(numero, checklist_fase2_texto, canal, pagina_id=pagina_id)
+                    sesion["_ultimo_checklist_fase2_enviado"] = checklist_fase2_texto
+                    print("📋 Checklist de Fase 2 enviado (actualizado)")
+        except Exception as e:
+            print("⚠️ Error armando/mandando el checklist de Fase 2 (no afecta la respuesta ya enviada):", repr(e))
 
         # 🔧 Envío determinístico de imágenes cuando es el BOT quien
         # recomienda colores o menciona/cotiza una variante específica de

@@ -1634,27 +1634,46 @@ def api_pedido_bot_actualizar():
     if not folio:
         return jsonify({"error": "falta folio"}), 400
 
-    pedido_existente = database.obtener_pedido_por_folio(folio)
-    if not pedido_existente:
-        return jsonify({"error": f"no existe ninguna nota con folio {folio!r}"}), 404
-
-    datos_actualizados = dict(pedido_existente)
-    if body.get("cliente"):
-        datos_actualizados["cliente"] = body["cliente"]
-    if body.get("telefono"):
-        datos_actualizados["telefono"] = body["telefono"]
-    if body.get("direccion"):
-        datos_actualizados["direccion"] = body["direccion"]
-
-    notas_extra = (body.get("notas_extra") or "").strip()
-    if notas_extra:
-        notas_actuales = (datos_actualizados.get("notas") or "").strip()
-        datos_actualizados["notas"] = (
-            f"{notas_actuales}\n\n{notas_extra}" if notas_actuales else notas_extra
-        )
-
+    # 🔧 (7 sep 2026, bug real en producción: este endpoint devolvió un
+    # 500 HTML crudo de Flask -- no el JSON limpio que ya tenía
+    # preparado -- porque la excepción ocurría ANTES del try/except de
+    # más abajo (que solo cubría database.actualizar_pedido). No se
+    # pudo reproducir el error exacto en un entorno limpio, lo cual
+    # apunta a un choque transitorio real (el mismo tipo de "database is
+    # locked" que ya se vio y se corrigió del lado del bot -- Producción
+    # Dalia nunca tuvo ese mismo refuerzo). Ahora TODO el cuerpo de la
+    # función queda cubierto por un try/except amplio, con reintento
+    # específico para los choques de bloqueo -- así, pase lo que pase,
+    # el bot siempre recibe un JSON claro (nunca HTML de Flask), y un
+    # choque transitorio de verdad se resuelve solo reintentando en vez
+    # de tronar la primera vez.
     try:
-        database.actualizar_pedido(pedido_existente["id"], datos_actualizados)
+        def _buscar_pedido():
+            return database.obtener_pedido_por_folio(folio)
+
+        pedido_existente = database.ejecutar_con_reintento(_buscar_pedido, "obtener_pedido_por_folio")
+        if not pedido_existente:
+            return jsonify({"error": f"no existe ninguna nota con folio {folio!r}"}), 404
+
+        datos_actualizados = dict(pedido_existente)
+        if body.get("cliente"):
+            datos_actualizados["cliente"] = body["cliente"]
+        if body.get("telefono"):
+            datos_actualizados["telefono"] = body["telefono"]
+        if body.get("direccion"):
+            datos_actualizados["direccion"] = body["direccion"]
+
+        notas_extra = (body.get("notas_extra") or "").strip()
+        if notas_extra:
+            notas_actuales = (datos_actualizados.get("notas") or "").strip()
+            datos_actualizados["notas"] = (
+                f"{notas_actuales}\n\n{notas_extra}" if notas_actuales else notas_extra
+            )
+
+        def _guardar():
+            return database.actualizar_pedido(pedido_existente["id"], datos_actualizados)
+
+        database.ejecutar_con_reintento(_guardar, "actualizar_pedido (bot)")
     except Exception as e:
         print(f"⚠️ Error actualizando pedido del bot (folio={folio!r}): {repr(e)}")
         return jsonify({"error": "no se pudo actualizar"}), 500

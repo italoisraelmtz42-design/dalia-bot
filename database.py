@@ -34,7 +34,22 @@ logger_db = logging.getLogger('database')
 # 2 mensajes de clientes distintos se atiendan EN PARALELO la mayoría
 # de las veces (como debería ser), y solo se espera/reintenta cuando de
 # verdad chocan en el mismo instante exacto contra el mismo archivo.
-REINTENTOS_CONEXION = 4
+# 🔧 (7 sep 2026, CORREGIDO -- error mío real, detectado en el log de
+# producción): subí BUSY_TIMEOUT_MS a 20s pensando en "más paciencia es
+# mejor", sin considerar que ejecutar_con_reintento() (más abajo) vuelve
+# a intentar la operación COMPLETA -- incluyendo un get_db_connection()
+# nuevo, que a su vez reintenta hasta REINTENTOS_CONEXION veces más. Las
+# dos capas se multiplican en vez de sumarse: en el peor caso real,
+# REINTENTOS_CONEXION (4) x intentos de ejecutar_con_reintento (3) x
+# BUSY_TIMEOUT_MS (20s) pudo llegar hasta ~4 MINUTOS para una sola
+# operación -- exactamente lo que se vio en producción: "database is
+# locked" sostenido por más de 2 minutos seguidos, con reintentos
+# apilándose unos sobre otros sin nunca resolverse.
+#
+# Recalibrado para que el PEOR CASO total quede acotado a un rango
+# razonable (unos 20-30s como mucho), bajando ambos números en vez de
+# solo uno, para que las dos capas no se disparen entre sí:
+REINTENTOS_CONEXION = 2
 ESPERA_BASE_REINTENTO_SEGUNDOS = 0.15
 
 # 🔧 (7 sep 2026, bug real detectado en producción: "database is locked"
@@ -46,16 +61,25 @@ ESPERA_BASE_REINTENTO_SEGUNDOS = 0.15
 # la frecuencia de choques reales entre escrituras concurrentes. El
 # PRAGMA busy_timeout de abajo (lo que SQLite espera solo, por su
 # cuenta, antes de tronar con "database is locked") estaba en 5
-# segundos -- insuficiente para las ráfagas que se están viendo ahora.
-# Subido a 20 segundos. IMPORTANTE: esto NO es el candado global que ya
-# se probó y se quitó antes (el que dejaba al bot mudo con todo mundo
-# mientras la fila crecía) -- sigue sin haber ningún candado que
-# serialice a la fuerza; cada quien sigue pudiendo escribir en paralelo,
-# solo que ahora con más paciencia real antes de darse por vencido.
-BUSY_TIMEOUT_MS = 20000
+# segundos.
+#
+# 🔧 CORREGIDO (mismo día, error real mío): lo subí primero a 20
+# segundos, pero eso combinado con ejecutar_con_reintento() (que
+# reintenta la operación COMPLETA, abriendo una conexión nueva cada vez)
+# multiplicaba el tiempo de espera en vez de sumarlo -- en producción se
+# vieron más de 2 MINUTOS seguidos de "database is locked" sin
+# resolverse, con las dos capas de reintento apilándose entre sí.
+# Recalibrado a 7 segundos -- un punto medio real entre los 5 originales
+# (insuficientes) y los 20 que resultaron ser demasiado en combinación
+# con el reintento por operación. IMPORTANTE: esto NO es el candado
+# global que ya se probó y se quitó antes (el que dejaba al bot mudo con
+# todo mundo mientras la fila crecía) -- sigue sin haber ningún candado
+# que serialice a la fuerza; cada quien sigue pudiendo escribir en
+# paralelo, solo que ahora con un tiempo de espera acotado y razonable.
+BUSY_TIMEOUT_MS = 7000
 
 
-def ejecutar_con_reintento(operacion, nombre_operacion, intentos=3, espera_base=0.3):
+def ejecutar_con_reintento(operacion, nombre_operacion, intentos=2, espera_base=0.3):
     """🔧 (7 sep 2026) Segunda capa de red de seguridad, además del
     busy_timeout de arriba -- para las operaciones más importantes
     (guardar el borrador del pedido, el historial de chat, el reset,

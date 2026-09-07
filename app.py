@@ -2074,6 +2074,14 @@ dentro del área metropolitana de Monterrey):
   confirmes "punto de entrega" como su tipo_entrega -- para esos clientes
   solo hay dos opciones válidas: envío nacional por DHL, o que el cliente
   recoja él mismo en el local.
+- 🚨 El mínimo de piezas para ofrecer punto de entrega es EXACTAMENTE
+  {MINIMO_PIEZAS_PUNTO_DE_ENTREGA} piezas -- nunca digas ni inventes otro
+  número (ni 25, ni 60, ni ningún otro). 🚨 Error real ya cometido, nunca lo
+  repitas: en una conversación real, el bot le dijo a una clienta que el
+  mínimo para punto de entrega era de "25 piezas o más" -- ese número
+  nunca ha sido correcto (ni está en la base de conocimiento, ni en
+  ninguna configuración), el bot simplemente lo inventó. El número real,
+  el único que existe, es {MINIMO_PIEZAS_PUNTO_DE_ENTREGA}.
 - Los PEDIDOS URGENTES tampoco aplican para envío fuera de zona (DHL),
   porque urgente solo se puede entregar en el local. Si un cliente foráneo
   pregunta por entrega urgente, dile claramente que no aplica para su caso
@@ -2221,6 +2229,22 @@ Hay una diferencia importante entre dos cosas que NO debes confundir:
 Si el cliente dice "sí" a cualquier otra cosa que NO sea confirmar que ya
 pagó (el resumen del pedido, si quiere que le expliques el anticipo, etc.),
 NO actives anticipo_confirmado — sigue la conversación con normalidad.
+
+🚨 IMPORTANTE -- no confundas "el cliente va a pagar" con "el cliente ya
+pagó": si el cliente confirma que SÍ va a hacer el anticipo (pero
+todavía no lo ha hecho), o simplemente te pide los datos bancarios,
+NUNCA le pidas que te confirme un "monto exacto" antes de compartírselos
+-- el anticipo es SIEMPRE desde $50 MXN, flexible, el cliente puede
+pagar lo que quiera desde ese mínimo. Solo comparte los datos bancarios
+directamente. El monto específico SOLO se te pide DESPUÉS, cuando el
+cliente te diga que YA pagó (ver arriba) -- nunca antes, y nunca como
+condición para mandarle los datos. 🚨 Error real ya cometido, nunca lo
+repitas: un cliente dijo que quería pagar el anticipo pero no sabía
+cuánto exactamente, y el bot se quedó insistiendo "¿me confirmas el
+monto exacto que vas a pagar?" durante varias vueltas antes de por fin
+mandarle los datos bancarios -- ese tipo de insistencia puede hacer que
+un cliente se harte y abandone la compra. En cuanto el cliente confirme
+que quiere pagar o pida los datos, mándalos de una vez.
 
 Cuando SÍ se confirme el pago (por imagen o por texto con monto), llama a
 actualizar_pedido de inmediato, sin que el cliente tenga que pedírtelo de
@@ -2631,6 +2655,28 @@ TOOLS = [
                     },
                 },
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "verificar_info_entregas",
+            "description": (
+                "🚨 OBLIGATORIA: llama a esta función en cuanto el cliente "
+                "pregunte de forma informativa sobre tiempos de anticipación, "
+                "dónde se ubican, dirección del local, o puntos de entrega -- "
+                "incluso antes de haber elegido producto. NUNCA respondas "
+                "estos datos de memoria (el mínimo de piezas para punto de "
+                "entrega, el tiempo de elaboración, la dirección) -- esta "
+                "función te da todos los datos reales exactos para que los "
+                "relayes tal cual. 🚨 Error real ya cometido DOS VECES, nunca "
+                "lo repitas: el bot inventó que el mínimo para punto de "
+                "entrega era \"25 piezas\" -- ese número nunca ha sido "
+                "correcto, ni siquiera después de que se le pidió "
+                "explícitamente que nunca lo repitiera. Llama siempre a esta "
+                "función en vez de confiar en tu memoria."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -3403,6 +3449,27 @@ _PATRON_COLOR_EN_TEXTO = re.compile(
 )
 
 
+# 🔧 (8 sep 2026, bug real reportado por Israel -- YA HABÍA SIDO
+# "corregido" con una instrucción de prompt, pero el bot volvió a
+# inventar "25 piezas" para el mínimo de punto de entrega en la
+# siguiente conversación real. Igual que con fechas y colores, una
+# instrucción de texto no bastó -- se fuerza por código. Detecta
+# preguntas informativas sobre tiempos/lugares de entrega (las que se
+# hacen ANTES incluso de elegir producto, como en el caso real: "con
+# cuánto tiempo es de anticipación y dónde se ubica").
+_PATRON_INFO_ENTREGAS_EN_TEXTO = re.compile(
+    r"("
+    r"tiempo\s+de\s+anticipaci[oó]n|con\s+cu[aá]nto\s+tiempo|"
+    r"cu[aá]nto\s+tiempo\s+(de\s+)?(anticipaci[oó]n|entrega|tardan|se\s+tardan)|"
+    r"d[oó]nde\s+se\s+ubic\w*|d[oó]nde\s+est[aá]n\s+ubicados|d[oó]nde\s+entregan|"
+    r"d[oó]nde\s+recojo|direcci[oó]n\s+del\s+local|"
+    r"punto(s)?\s+de\s+entrega|"
+    r"d[ií]as?\s+h[aá]biles"
+    r")",
+    re.IGNORECASE,
+)
+
+
 # 🔧 (7 sep 2026, Fase 2, bug real: el modelo nunca llamaba a
 # armar_resumen_post_pago ni a finalizar_fase_2_pedido -- solo componía
 # su propio resumen de memoria una y otra vez, y el bot nunca se
@@ -4161,6 +4228,33 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         )
         return mensaje_resultado, [], False
 
+    if name == "verificar_info_entregas":
+        # 🔧 (8 sep 2026, bug real repetido DOS VECES: el bot inventó
+        # "25 piezas" como mínimo para punto de entrega, incluso después
+        # de una corrección de prompt explícita con el caso real. Aquí
+        # se le da la respuesta ya calculada, con los datos reales --
+        # nunca depende de que el modelo se acuerde bien.
+        lineas_puntos = []
+        for nombre_punto, horario in PUNTOS_ENTREGA_HORARIOS.items():
+            lineas_puntos.append(f"  - {nombre_punto.title()}: {horario}")
+        mensaje_resultado = (
+            "📍 INFORMACIÓN REAL DE ENTREGAS (calculada por el sistema, no la "
+            "recalcules tú ni inventes ningún número):\n\n"
+            f"- Tiempo de elaboración normal: 4 días hábiles después de "
+            f"confirmado el anticipo (puede ser urgente con cargo extra de "
+            f"$50, solo si se entrega en el local).\n"
+            f"- Recolección en LOCAL: {DIRECCION_LOCAL}. Mapa: {LINK_MAPS_LOCAL}. "
+            f"Horario: {HORARIO_LOCAL_ENTRE_SEMANA}, {HORARIO_LOCAL_SABADO}.\n"
+            f"- PUNTO DE ENTREGA (Monterrey): solo para pedidos de "
+            f"{MINIMO_PIEZAS_PUNTO_DE_ENTREGA} piezas o más -- este número "
+            f"es EXACTO, nunca digas otro (ni 25, ni 60). Los puntos "
+            f"disponibles son:\n" + "\n".join(lineas_puntos) + "\n"
+            f"- Envío a DOMICILIO: costo según municipio (pregúntale cuál es "
+            f"para cotizarlo).\n\n"
+            f"Usa estos datos tal cual para contestarle al cliente."
+        )
+        return mensaje_resultado, [], False
+
     if name == "armar_resumen_final":
         # 🔧 (5 sep 2026, bug real y grave: se perdió una venta real --
         # Ana Armendariz, 25 ositos con jaboncito, $90 de envío -- porque
@@ -4599,6 +4693,18 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
             # prioridad esta vuelta -- el color se verifica en cuanto
             # vuelva a mencionarse solo, en la siguiente vuelta.
             tool_choice_este_turno = {"type": "function", "function": {"name": "verificar_color"}}
+        elif (
+            indice_iteracion == 0
+            and texto_cliente
+            and _PATRON_INFO_ENTREGAS_EN_TEXTO.search(texto_cliente)
+        ):
+            # 🔧 (8 sep 2026) ver _PATRON_INFO_ENTREGAS_EN_TEXTO arriba --
+            # bug real repetido DOS VECES (el bot inventó "25 piezas"
+            # como mínimo para punto de entrega, incluso después de una
+            # corrección de prompt explícita). Se obliga a verificar los
+            # datos reales de entrega ANTES de que el modelo conteste de
+            # memoria.
+            tool_choice_este_turno = {"type": "function", "function": {"name": "verificar_info_entregas"}}
         elif (
             pedido_manager.FASE_2_ACTIVA
             and pedido_manager.obtener_fase(numero) == "post_pago"

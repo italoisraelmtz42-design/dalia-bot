@@ -4344,11 +4344,23 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         enviar_mensaje_canal(numero, "⌛", canal, pagina_id=pagina_id)
 
         print(f"✅ [Fase 2] Checklist completo y confirmado para {numero} -- bot apagado (modo DALIA)")
+        # 🔧 (7 sep 2026, bug real grave: pedirle al modelo que su
+        # respuesta "quede completamente vacía" NO funcionó -- el código
+        # existente trata cualquier contenido vacío/None como "no
+        # entendí" y manda "Disculpa, ¿me repites tu mensaje?" al
+        # cliente, justo después de los 2 mensajes de cierre reales. En
+        # vez de pedirle al modelo que se quede callado, se corta la
+        # llamada al modelo por completo -- mismo patrón ya probado y
+        # confiable que usa la confirmación del anticipo
+        # (anticipo_recien_confirmado_este_turno -> return None). Se
+        # marca la bandera en el propio `pedido` (que el ciclo principal
+        # de preguntar_ia revisa después de procesar las herramientas de
+        # este turno) para que corte ahí mismo, sin generar ningún texto
+        # más.
+        pedido["_fase2_cerrada_este_turno"] = True
         return (
-            "Los dos mensajes de cierre YA SE MANDARON automáticamente por el "
-            "sistema. Tu respuesta a este turno debe estar COMPLETAMENTE VACÍA "
-            "-- no escribas absolutamente nada más, ni una palabra, ni repitas "
-            "el mensaje de cierre.",
+            "Los dos mensajes de cierre ya se mandaron automáticamente por el "
+            "sistema.",
             [],
             False,
         )
@@ -4585,6 +4597,20 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
                 # _liberar_imagen_del_historial arriba. Como casi toda
                 # venta real trae foto de comprobante, este era el
                 # camino que más se ejecutaba y el que más RAM acumulaba.
+                _liberar_imagen_del_historial(historial, imagen_base64, texto_cliente)
+                return None
+
+            # 🔧 (7 sep 2026, Fase 2) Mismo patrón exacto que el corte de
+            # arriba por anticipo -- ver finalizar_fase_2_pedido, que ya
+            # mandó los 2 mensajes de cierre directo por código. Cortar
+            # aquí evita el bug real donde pedirle al modelo "quédate
+            # callado" resultaba en que el código de más abajo
+            # interpretara la respuesta vacía como "no entendí" y
+            # mandara "Disculpa, ¿me repites tu mensaje?" justo después
+            # del cierre real -- confundiendo al cliente que ya se había
+            # despedido.
+            if pedido.pop("_fase2_cerrada_este_turno", False):
+                print("🔇 Fase 2 cerrada en este turno -- se cortan las respuestas automáticas del modelo (mensajes ya mandados por código)")
                 _liberar_imagen_del_historial(historial, imagen_base64, texto_cliente)
                 return None
 
@@ -6681,6 +6707,20 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             notificar_a_dalia(pedido_db, sesion["pedido"], canal=canal)
 
             print("🏁 Fin procesamiento (anticipo confirmado)")
+            print("=" * 70)
+            return
+
+        # 🔧 (7 sep 2026, Fase 2) Igual que el caso de arriba, pero para
+        # el cierre de Fase 2 (ver finalizar_fase_2_pedido) -- los
+        # mensajes de cierre YA se mandaron directo por código dentro
+        # del handler de la herramienta, así que aquí no hay nada más
+        # que redactar ni enviar. Sin este bloque, respuesta=None caía
+        # al flujo normal de abajo (que espera un string) y terminaba
+        # mandando el mensaje de relleno "Disculpa, ¿me repites tu
+        # mensaje?" justo después del cierre real -- bug real ya
+        # detectado y corregido.
+        if respuesta is None:
+            print("🔇 Fin procesamiento (Fase 2 cerrada -- mensajes ya mandados por código, nada más que enviar)")
             print("=" * 70)
             return
 

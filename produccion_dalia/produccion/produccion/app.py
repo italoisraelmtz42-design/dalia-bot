@@ -1612,9 +1612,10 @@ def api_pedido_bot_actualizar():
     Solo actualiza los campos del ENCABEZADO que de verdad cambiaron
     (nombre y teléfono del cliente, dirección si se dio) -- nunca toca
     productos/total/anticipo (eso ya quedó bien desde la creación). El
-    tipo de evento y los datos de la tarjetita se anexan al final del
-    campo `notas` (la parte baja de la nota), nunca se sobreescribe lo
-    que ya hubiera ahí.
+    tipo de evento y los datos de la tarjetita se anexan al campo
+    `notas_importantes` (la sección "⚠ NOTAS IMPORTANTES" de la nota,
+    aparte del campo `notas` genérico), nunca se sobreescribe lo que ya
+    hubiera ahí.
 
     Misma llave compartida que /api/pedidos/bot. Si el folio no existe
     (por ejemplo, la nota se borró a mano mientras tanto), regresa 404
@@ -1663,11 +1664,18 @@ def api_pedido_bot_actualizar():
         if body.get("direccion"):
             datos_actualizados["direccion"] = body["direccion"]
 
+        # 🔧 (7 sep 2026, pedido explícito de Israel) El tipo de evento y
+        # los datos de la tarjetita van a "NOTAS IMPORTANTES" (una
+        # sección aparte, destacada con ⚠, que ya existía en la nota
+        # pero no se estaba usando desde aquí) -- NO al campo genérico
+        # "notas" (que es para avisos del negocio en general, como "NO
+        # dejar los jabones al sol", y donde antes se estaban mezclando
+        # por error).
         notas_extra = (body.get("notas_extra") or "").strip()
         if notas_extra:
-            notas_actuales = (datos_actualizados.get("notas") or "").strip()
-            datos_actualizados["notas"] = (
-                f"{notas_actuales}\n\n{notas_extra}" if notas_actuales else notas_extra
+            notas_importantes_actuales = (datos_actualizados.get("notas_importantes") or "").strip()
+            datos_actualizados["notas_importantes"] = (
+                f"{notas_importantes_actuales}\n\n{notas_extra}" if notas_importantes_actuales else notas_extra
             )
 
         def _guardar():

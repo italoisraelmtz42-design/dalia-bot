@@ -2286,6 +2286,16 @@ aparece con ✅, aunque no lo recuerdes de mensajes anteriores):
 
 {checklist_actual}
 
+🚨 Error real ya cometido, nunca lo repitas: en una conversación real,
+este mismo checklist ya mostraba ✅ en nombre y teléfono -- y el modelo
+igual le volvió a pedir "tu nombre completo y tu número de teléfono"
+al cliente, DOS veces seguidas, después de que el cliente ya los había
+dado y el checklist ya lo confirmaba. El cliente tuvo que contestar
+"ya te los había pasado" dos veces. Antes de escribir CUALQUIER
+pregunta pidiendo un dato, revisa la lista de arriba línea por línea --
+si ese dato ya tiene ✅, NO lo preguntes bajo ninguna circunstancia, sin
+importar qué tan lejos haya quedado en la conversación.
+
 El mensaje inicial con este checklist (todo en ❌) YA SE LE MANDÓ al
 cliente automáticamente antes de que veas este mensaje -- no lo repitas
 ni lo vuelvas a mandar tú completo; solo ve preguntando uno o dos datos
@@ -2318,12 +2328,15 @@ QUÉ HACER:
    ofrezcas mandar imágenes, números o detalles de diseños específicos
    de tarjetita; si el cliente no se decide, dile que revise el PDF del
    catálogo que ya recibió, o dale una recomendación breve EN TEXTO (sin
-   prometer mandar nada más). Si el cliente dice que quiere mandar su
-   propio diseño, pídele que lo mande en PDF listo para imprimir, con
-   medidas 4.3cm x 6.7cm -- tú SOLO recibes y guardas ese archivo, nunca
-   lo revises, edites ni opines sobre si está bien armado. Marca
-   disenio_propio_confirmado=true en cuanto confirme que mandará su
-   propio diseño.
+   prometer mandar nada más).
+   🚨 Si el cliente dice que quiere mandar su PROPIO diseño (en vez de
+   elegir uno del catálogo): NUNCA le pidas que lo mande aquí mismo en
+   el chat -- el bot todavía no puede recibir archivos PDF. En cuanto
+   confirme que quiere mandar su propio diseño, llama de inmediato a
+   cliente_diseno_propio_transferir y manda EXACTAMENTE el mensaje que
+   te regrese -- no esperes a tener el resto del checklist completo, no
+   sigas preguntando nada más, esto transfiere la conversación a una
+   persona real que va a recibir el PDF directamente.
 4. 🚨 Ayuda de diseño -- flujo de DOS pasos, nunca lo saltes: si el
    cliente pide ayuda para EDITAR su propio diseño (nunca se lo ofrezcas
    tú primero, solo reacciona si él lo pide), primero TÚ MISMO le
@@ -2701,6 +2714,28 @@ TOOLS = [
                 "se aplica el cargo de $50, y se transfiere la conversación a "
                 "una persona real de inmediato -- después de llamarla, tu "
                 "único mensaje debe ser exactamente el que te regrese la "
+                "función."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cliente_diseno_propio_transferir",
+            "description": (
+                "Llama esta función en cuanto el cliente confirme que va a "
+                "mandar su PROPIO diseño de tarjetita (en vez de elegir uno "
+                "del catálogo) -- no esperes a tener el resto del checklist "
+                "completo, y nunca le pidas que mande el archivo aquí mismo "
+                "en el chat: el bot todavía no puede recibir archivos PDF. "
+                "Al llamarla se avisa de inmediato a todo el equipo de "
+                "ventas, se transfiere la conversación a una persona real "
+                "(quien va a recibir el PDF directamente y terminar de "
+                "armar el pedido con el cliente), y se apaga el bot -- con "
+                "los datos que ya se tengan hasta ese momento, aunque el "
+                "checklist no esté completo todavía. Después de llamarla, "
+                "tu único mensaje debe ser exactamente el que te regrese la "
                 "función."
             ),
             "parameters": {"type": "object", "properties": {}},
@@ -4250,6 +4285,46 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
             False,
         )
 
+    if name == "cliente_diseno_propio_transferir":
+        # 🔧 (7 sep 2026, pedido explícito de Israel) Cuando el cliente
+        # dice que va a mandar su propio diseño de tarjetita, en vez de
+        # construir la recepción de archivos PDF (que el bot todavía no
+        # sabe hacer), se transfiere la conversación de inmediato a una
+        # persona real -- sin esperar a que el resto del checklist esté
+        # completo. La nota se reedita con lo que YA se tenga hasta este
+        # momento (puede ir incompleta -- el equipo termina de
+        # completarla a mano con lo que le diga el cliente directamente).
+        pedido_manager.guardar_datos_post_pago(numero, {"disenio_propio_confirmado": True})
+        pedido_manager.finalizar_fase_2(numero)
+        mensaje_equipo = (
+            f"🎨 (cliente requiere ayuda) El cliente {numero} va a mandar su propio "
+            f"diseño de tarjetita en PDF -- transferido para que lo reciban "
+            f"directamente y terminen de armar el pedido con él/ella."
+        )
+        if DALIA_WHATSAPP_NUMERO:
+            enviar_whatsapp(DALIA_WHATSAPP_NUMERO, mensaje_equipo)
+        if VENDEDORA_WHATSAPP_NUMERO:
+            enviar_whatsapp(VENDEDORA_WHATSAPP_NUMERO, mensaje_equipo)
+        if ISRAEL_WHATSAPP_NUMERO:
+            enviar_whatsapp(ISRAEL_WHATSAPP_NUMERO, mensaje_equipo)
+        try:
+            pedido_db_actual = crm.cargar_pedido(numero)
+            if pedido_db_actual and pedido_db_actual.folio:
+                actualizar_produccion_dalia(
+                    pedido_db_actual.folio,
+                    pedido_manager.obtener_datos_post_pago(numero),
+                )
+        except Exception as e:
+            print(f"⚠️ No se pudo reeditar la nota al transferir por diseño propio: {repr(e)}")
+        print(f"🎨 [Fase 2] Cliente {numero} va a mandar diseño propio -- transferido, bot apagado (modo DALIA)")
+        return (
+            "Manda EXACTAMENTE este mensaje al cliente, sin agregar ni quitar "
+            "absolutamente nada: \"Ok, en un momento más alguien del equipo te "
+            "contactará para continuar con tu pedido.\"",
+            [],
+            False,
+        )
+
     if name == "armar_resumen_post_pago":
         # 🔧 (6 sep 2026, Fase 2, pedido explícito de Israel: "el resumen
         # final con total $ es el más importante, ahí viene toda la
@@ -4525,8 +4600,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
             # vuelva a mencionarse solo, en la siguiente vuelta.
             tool_choice_este_turno = {"type": "function", "function": {"name": "verificar_color"}}
         elif (
-            indice_iteracion == 0
-            and pedido_manager.FASE_2_ACTIVA
+            pedido_manager.FASE_2_ACTIVA
             and pedido_manager.obtener_fase(numero) == "post_pago"
         ):
             # 🔧 (7 sep 2026, Fase 2, bug real grave: el bot nunca dejaba
@@ -4540,6 +4614,18 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
             #   todavía no se ha mostrado, se obliga a armar_resumen_post_pago.
             # - Si el resumen YA se mostró y el cliente contesta con una
             #   confirmación corta y genérica ("sí", "correcto", "ok"...),
+            #
+            # 🔧 CORREGIDO (mismo día, pedido explícito de Israel, quien
+            # tenía toda la razón): este candado solo se revisaba en
+            # indice_iteracion == 0 -- la PRIMERA vuelta del turno. Pero
+            # cuando el ÚLTIMO dato del checklist se captura precisamente
+            # en esa primera vuelta (ej. el cliente dice "voy a mandar mi
+            # propio diseño" y con eso ya queda todo en ✅), el checklist
+            # no queda completo hasta DESPUÉS de esa vuelta -- en la
+            # segunda vuelta ya no se forzaba nada, y el modelo quedaba
+            # libre para responder lo que se le ocurriera (incluyendo
+            # volver a pedir datos que ya tenía). Ahora se revisa en
+            # TODAS las vueltas del turno, no solo la primera.
             #   se obliga a finalizar_fase_2_pedido -- ahí sí se apaga el
             #   bot de verdad.
             _, _faltantes_fase2_ahora = _faltantes_fase_2(numero, pedido)

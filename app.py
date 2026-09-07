@@ -1042,6 +1042,34 @@ COSTOS_ENVIO_MUNICIPIO = {
 COSTO_ENVIO_FUERA_DE_ZONA = 300.0  # DHL, requiere pedido 100% liquidado
 
 
+# 🔧 (6 sep 2026, Fase 2, pedido explícito de Israel: "cuando es punto de
+# entrega no pregunta la hora, le dice al cliente cuál es la hora
+# asignada a ese punto de entrega") -- mismos 4 puntos y horarios que
+# "Entregas y envíos.txt". Si Israel cambia algún punto u horario ahí,
+# hay que actualizar este diccionario también, o se desincronizan.
+PUNTOS_ENTREGA_HORARIOS = {
+    "soriana fresnos": "miércoles 11:00 am",
+    "sendero escobedo": "jueves 11:00 am",
+    "merco pueblo nuevo": "viernes 8:00 pm",
+    "estacion metro mitras": "sábado 11:30 am",
+}
+
+
+def hora_punto_entrega(nombre_punto):
+    """Busca el horario fijo real de un punto de entrega por nombre
+    (comparación difusa, igual que resolver_costo_envio) -- o None si no
+    coincide con ninguno de los 4 puntos oficiales."""
+    if not nombre_punto:
+        return None
+    clave = normalizar_producto_clave(nombre_punto)
+    if clave in PUNTOS_ENTREGA_HORARIOS:
+        return PUNTOS_ENTREGA_HORARIOS[clave]
+    for k, v in PUNTOS_ENTREGA_HORARIOS.items():
+        if k in clave or clave in k:
+            return v
+    return None
+
+
 def resolver_costo_envio(municipio: str) -> float | None:
     """Devuelve el costo oficial de envío para un municipio, o None si el
     municipio no viene en la lista (fuera de zona -- requiere el precio
@@ -2206,11 +2234,12 @@ solicitados YA SE LE MANDARON al cliente automáticamente antes de que
 veas este mensaje -- no los repitas ni los vuelvas a mandar tú.
 
 QUÉ HACER:
-1. Conforme el cliente te vaya dando cada dato (nombre, teléfono de
-   contacto, tipo de evento, dirección o punto de entrega según
-   aplique, diseño y texto de tarjetita), llama a
+1. Conforme el cliente te vaya dando cada dato (nombre y apellido,
+   teléfono de contacto, tipo de evento, dirección o punto de entrega
+   según aplique, diseño y texto de tarjetita), llama a
    capturar_datos_post_pago con lo que te haya dado -- puedes llamarla
-   varias veces, no esperes a tener todo junto.
+   varias veces, no esperes a tener todo junto. El teléfono de contacto
+   se pide siempre, sin importar el canal por el que llegó el cliente.
 2. Sobre la dirección/lugar de entrega -- depende del tipo de entrega
    de ESTE pedido:
    - Si es a domicilio o DHL: pide la dirección completa.
@@ -2219,7 +2248,11 @@ QUÉ HACER:
      compartido, mándasela tú y luego confirma con
      capturar_datos_post_pago(ubicacion_local_confirmada=true)).
    - Si es PUNTO DE ENTREGA: pregunta cuál punto de entrega eligió (de
-     los que ya se le mencionaron durante la venta) y a qué hora.
+     los que ya se le mencionaron durante la venta) -- pero NUNCA le
+     preguntes la hora. Llama a capturar_datos_post_pago con el punto
+     que dijo, y la función te va a regresar la hora fija real de ese
+     punto -- infórmasela tú al cliente, nunca se la preguntes ni
+     inventes una.
 3. Sobre la tarjetita: si el cliente elige un diseño del catálogo que
    ya se le mandó, captura el número de diseño y el texto exacto. Si
    dice que quiere mandar su propio diseño, pídele que lo mande en PDF
@@ -2227,15 +2260,19 @@ QUÉ HACER:
    guardas ese archivo, nunca lo revises, edites ni opines sobre si
    está bien armado. Marca disenio_propio_confirmado=true en cuanto
    confirme que mandará su propio diseño.
-4. 🚨 Si el cliente pide AYUDA o apoyo del equipo para editar/diseñar/dar
-   formato a su tarjetita (nunca se lo ofrezcas tú primero, solo
-   reacciona si él lo pide), llama a cliente_requiere_ayuda_diseno de
-   inmediato y manda EXACTAMENTE el mensaje que te regrese esa función,
-   sin agregar nada más -- esto cierra la conversación por ti.
-5. Cuando ya tengas TODOS los datos que aplican para este pedido,
-   arma un resumen final completo (fecha y lugar de entrega, producto,
-   cantidad, colores, tarjetita, etc.) y pregúntale al cliente si todo
-   está correcto. Espera su confirmación EXPLÍCITA -- nunca asumas.
+4. 🚨 Ayuda de diseño -- flujo de DOS pasos, nunca lo saltes: si el
+   cliente pide ayuda para EDITAR su propio diseño (nunca se lo ofrezcas
+   tú primero, solo reacciona si él lo pide), primero TÚ MISMO le
+   comentas en un mensaje normal que ese apoyo tiene costo extra de $50
+   -- todavía NO llames a ninguna función aquí. Solo si el cliente
+   CONFIRMA que sí quiere el servicio pagando ese costo, ENTONCES llama
+   a cliente_requiere_ayuda_diseno y manda EXACTAMENTE el mensaje que te
+   regrese, sin agregar nada más -- esto cierra la conversación por ti.
+5. Cuando ya tengas TODOS los datos que aplican para este pedido, llama
+   a armar_resumen_post_pago -- NUNCA armes tú mismo el resumen ni el
+   total de memoria. Manda ese resumen tal cual al cliente y pregúntale
+   si todo está correcto. Espera su confirmación EXPLÍCITA -- nunca
+   asumas.
 6. Solo hasta que el cliente confirme ese resumen como correcto, llama
    a finalizar_fase_2_pedido. Si todavía falta algo, la función te lo va
    a decir -- síguelo preguntando. Cuando te deje pasar, manda
@@ -2563,12 +2600,11 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "nombre_cliente": {"type": "string", "description": "Nombre completo del cliente."},
-                    "telefono_contacto": {"type": "string", "description": "Número de WhatsApp de contacto que dio el cliente (aplica sobre todo si el canal es Messenger)."},
+                    "nombre_cliente": {"type": "string", "description": "Nombre y apellido del cliente -- no hace falta el nombre completo/legal, con nombre y apellido basta. Esto sustituye al identificador de Messenger en la nota de producción."},
+                    "telefono_contacto": {"type": "string", "description": "Número de teléfono/WhatsApp de contacto que dio el cliente -- se pide siempre, sin importar el canal."},
                     "tipo_evento": {"type": "string", "description": "Tipo de evento: babyshower, bautizo, revelación de género, confirmación, cumpleaños, boda, etc."},
                     "direccion_entrega": {"type": "string", "description": "Dirección completa de entrega -- solo aplica si el tipo de entrega es a domicilio o DHL."},
-                    "punto_entrega_elegido": {"type": "string", "description": "Nombre/lugar del punto de entrega que el cliente eligió -- solo aplica si el tipo de entrega es punto de entrega."},
-                    "punto_entrega_hora": {"type": "string", "description": "Hora acordada para el punto de entrega."},
+                    "punto_entrega_elegido": {"type": "string", "description": "Nombre/lugar del punto de entrega que el cliente eligió -- solo aplica si el tipo de entrega es punto de entrega. NO le preguntes la hora -- la función te la regresa ya calculada, tú solo infórmasela."},
                     "ubicacion_local_confirmada": {"type": "boolean", "description": "True si ya se le compartió y confirmó al cliente la ubicación del local -- solo aplica si el tipo de entrega es recoger en local."},
                     "tarjetita_diseno": {"type": "string", "description": "Número o nombre del diseño de tarjetita que el cliente eligió del catálogo."},
                     "tarjetita_texto": {"type": "string", "description": "Texto exacto que el cliente quiere que lleve la tarjetita."},
@@ -2582,14 +2618,40 @@ TOOLS = [
         "function": {
             "name": "cliente_requiere_ayuda_diseno",
             "description": (
-                "Llama esta función SOLO si el cliente pide explícitamente "
-                "ayuda o apoyo del equipo para editar, diseñar o dar formato "
-                "a su tarjetita personalizada -- nunca la llames si el "
-                "cliente no lo ha pedido, y nunca ofrezcas tú esta ayuda de "
-                "forma proactiva. Esto avisa al equipo, aplica el cargo de "
-                "$50 de apoyo de diseño, y transfiere la conversación a una "
-                "persona real de inmediato -- después de llamarla, tu único "
-                "mensaje debe ser exactamente el que te regrese la función."
+                "🚨 Llama esta función ÚNICAMENTE en el segundo paso de este "
+                "flujo de dos pasos -- nunca en el primero: "
+                "(1) Cuando el cliente pida ayuda/apoyo para EDITAR o dar "
+                "formato a su propio diseño de tarjetita, primero coméntale "
+                "tú mismo, en un mensaje normal, que ese apoyo tiene un costo "
+                "extra de $50 -- todavía NO llames a esta función aquí. "
+                "(2) Solo si el cliente CONFIRMA explícitamente que sí quiere "
+                "el servicio pagando ese costo, ENTONCES llama a esta "
+                "función. Nunca la llames si el cliente solo preguntó o no ha "
+                "confirmado, y nunca ofrezcas tú esta ayuda de forma "
+                "proactiva. Al llamarla se avisa a todo el equipo de ventas, "
+                "se aplica el cargo de $50, y se transfiere la conversación a "
+                "una persona real de inmediato -- después de llamarla, tu "
+                "único mensaje debe ser exactamente el que te regrese la "
+                "función."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "armar_resumen_post_pago",
+            "description": (
+                "🚨 OBLIGATORIA: llama a esta función en cuanto sientas que "
+                "ya reuniste todos los datos del checklist de Fase 2 -- "
+                "NUNCA armes tú mismo el resumen final ni el total, y NUNCA "
+                "le preguntes al cliente algo genérico como '¿quieres que te "
+                "arme el resumen?'. Esta función revisa si de verdad no "
+                "falta nada y te da el resumen YA ARMADO -- con el pedido "
+                "original completo (productos, colores, TOTAL) más todos los "
+                "datos nuevos del checklist -- listo para mandar y pedirle "
+                "al cliente su confirmación final. Solo cuando el cliente "
+                "confirme ese resumen, llama a finalizar_fase_2_pedido."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
@@ -2599,10 +2661,8 @@ TOOLS = [
         "function": {
             "name": "finalizar_fase_2_pedido",
             "description": (
-                "Llama esta función SOLO después de haberle mostrado al "
-                "cliente el resumen final completo de su pedido (checklist: "
-                "fecha y lugar de entrega, producto, cantidad, colores, "
-                "tarjetita, etc.) y que el cliente lo haya confirmado "
+                "Llama esta función SOLO después de que armar_resumen_post_pago "
+                "te haya dado el resumen final y el cliente lo haya confirmado "
                 "explícitamente como correcto -- nunca antes, y nunca si el "
                 "cliente todavía no ha confirmado. La función verifica que "
                 "todos los datos necesarios ya estén completos; si falta "
@@ -3273,6 +3333,77 @@ def _cliente_confirmo_pago_ya_realizado_por_texto(texto_cliente):
     return bool(_PATRON_PAGO_YA_REALIZADO.search(texto_cliente))
 
 
+def _faltantes_fase_2(numero, pedido):
+    """🔧 (6 sep 2026, Fase 2) Candado determinístico compartido entre
+    armar_resumen_post_pago y finalizar_fase_2_pedido -- Python decide
+    qué falta, nunca el modelo. Regresa (datos_pp, lista_de_faltantes)."""
+    datos_pp = pedido_manager.obtener_datos_post_pago(numero)
+    faltantes = []
+    if not datos_pp.get("nombre_cliente"):
+        faltantes.append("nombre y apellido del cliente")
+    # 🔧 (6 sep 2026, pedido explícito de Israel: "se puede pedir el
+    # teléfono siempre") -- ya no depende del canal, siempre se exige.
+    if not datos_pp.get("telefono_contacto"):
+        faltantes.append("teléfono de contacto")
+    if not datos_pp.get("tipo_evento"):
+        faltantes.append("tipo de evento")
+
+    tipo_entrega_actual = str(pedido.get("tipo_entrega") or "").strip().lower()
+    if pedido.get("_envio_fuera_de_zona") or "domicilio" in tipo_entrega_actual:
+        if not datos_pp.get("direccion_entrega"):
+            faltantes.append("dirección completa de entrega")
+    elif _es_tipo_entrega_punto_de_entrega(tipo_entrega_actual):
+        # 🔧 (6 sep 2026, pedido explícito de Israel: "cuando es punto de
+        # entrega no pregunta la hora, le dice cuál es la hora asignada")
+        # -- ya no se le exige la hora al cliente, se calcula sola en
+        # capturar_datos_post_pago (ver hora_punto_entrega). Si el punto
+        # que dio no coincidió con ninguno real, sí falta aclararlo.
+        if not datos_pp.get("punto_entrega_elegido"):
+            faltantes.append("punto de entrega elegido")
+        elif not datos_pp.get("punto_entrega_hora"):
+            faltantes.append("un punto de entrega VÁLIDO (el que dio no coincide con ninguno de los 4 oficiales)")
+    elif "local" in tipo_entrega_actual:
+        if not datos_pp.get("ubicacion_local_confirmada"):
+            faltantes.append("confirmar que ya se le compartió la ubicación del local al cliente")
+
+    tiene_tarjetita = (
+        (datos_pp.get("tarjetita_diseno") and datos_pp.get("tarjetita_texto"))
+        or datos_pp.get("disenio_propio_confirmado")
+    )
+    if not tiene_tarjetita:
+        faltantes.append("diseño y texto de la tarjetita (o confirmación de que mandará diseño propio)")
+
+    return datos_pp, faltantes
+
+
+def _formatear_datos_post_pago(datos_pp):
+    """Formatea los datos del checklist de Fase 2 en líneas de texto
+    legibles, para anexar al resumen del pedido original."""
+    lineas = []
+    if datos_pp.get("nombre_cliente"):
+        lineas.append(f"Nombre: {datos_pp['nombre_cliente']}")
+    if datos_pp.get("telefono_contacto"):
+        lineas.append(f"Teléfono de contacto: {datos_pp['telefono_contacto']}")
+    if datos_pp.get("tipo_evento"):
+        lineas.append(f"Tipo de evento: {datos_pp['tipo_evento']}")
+    if datos_pp.get("direccion_entrega"):
+        lineas.append(f"Dirección de entrega: {datos_pp['direccion_entrega']}")
+    if datos_pp.get("punto_entrega_elegido"):
+        hora = datos_pp.get("punto_entrega_hora", "")
+        lineas.append(f"Punto de entrega: {datos_pp['punto_entrega_elegido']} ({hora})")
+    if datos_pp.get("ubicacion_local_confirmada"):
+        lineas.append("Entrega: recolección en el local (ubicación ya compartida)")
+    if datos_pp.get("tarjetita_diseno"):
+        lineas.append(f"Tarjetita -- diseño: {datos_pp['tarjetita_diseno']}")
+    if datos_pp.get("tarjetita_texto"):
+        lineas.append(f"Tarjetita -- texto: {datos_pp['tarjetita_texto']}")
+    if datos_pp.get("disenio_propio_confirmado"):
+        lineas.append("Tarjetita: diseño propio del cliente (PDF)")
+    if datos_pp.get("ayuda_diseno_solicitada"):
+        lineas.append("⚠️ Cliente solicitó y confirmó ayuda de diseño -- cargo extra de $50")
+    return lineas
+
+
 def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagina_id=None, texto_cliente=None):
     name = tool_call.function.name
     args = tool_call.function.arguments
@@ -3812,16 +3943,39 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
             args_obj = json.loads(args or "{}")
         except json.JSONDecodeError:
             args_obj = {}
+
+        # 🔧 (6 sep 2026, pedido explícito de Israel: "cuando es punto de
+        # entrega no pregunta la hora, le dice al cliente cuál es la hora
+        # asignada a ese punto de entrega") -- en cuanto se sepa QUÉ punto
+        # eligió, la hora se calcula aquí, determinística, nunca se le
+        # pregunta al cliente ni la inventa el modelo.
+        aviso_hora = None
+        if args_obj.get("punto_entrega_elegido"):
+            hora_real = hora_punto_entrega(args_obj["punto_entrega_elegido"])
+            if hora_real:
+                args_obj["punto_entrega_hora"] = hora_real
+                aviso_hora = (
+                    f"La hora de ese punto de entrega es fija: {hora_real}. "
+                    f"Infórmasela al cliente, no se la preguntes ni la cambies."
+                )
+            else:
+                aviso_hora = (
+                    f"'{args_obj['punto_entrega_elegido']}' no coincide con ninguno "
+                    f"de los 4 puntos de entrega oficiales -- confírmale al cliente "
+                    f"cuál de los 4 puntos reales quiere."
+                )
+
         pedido_manager.guardar_datos_post_pago(numero, args_obj)
         print(f"📋 [Fase 2] Datos post-pago capturados para {numero}: {list(args_obj.keys())}")
-        return (
+        mensaje_resultado = (
             "Datos guardados. Sigue preguntando lo que todavía falte del checklist "
-            "(nombre, teléfono de contacto si es Messenger, tipo de evento, "
+            "(nombre y apellido, teléfono de contacto, tipo de evento, "
             "dirección/punto de entrega según aplique, y la tarjetita) antes de "
-            "armar el resumen final.",
-            [],
-            False,
+            "armar el resumen final."
         )
+        if aviso_hora:
+            mensaje_resultado += f"\n\n{aviso_hora}"
+        return (mensaje_resultado, [], False)
 
     if name == "cliente_requiere_ayuda_diseno":
         # 🔧 (5 sep 2026, Fase 2, pedido explícito de Israel) Atajo más
@@ -3859,38 +4013,56 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
             False,
         )
 
+    if name == "armar_resumen_post_pago":
+        # 🔧 (6 sep 2026, Fase 2, pedido explícito de Israel: "el resumen
+        # final con total $ es el más importante, ahí viene toda la
+        # información del pedido completo -- se anexan los datos de
+        # antes del anticipo y los últimos que dé el cliente"). Mismo
+        # patrón que armar_resumen_final (Fase 1): Python arma el
+        # resumen completo -- el del pedido original (productos,
+        # colores, TOTAL) reutilizando generar_resumen(), más todo lo
+        # nuevo del checklist de Fase 2 -- para que el modelo nunca tenga
+        # que reconstruirlo de memoria antes de pedirle la confirmación
+        # final al cliente.
+        datos_pp, faltantes = _faltantes_fase_2(numero, pedido)
+        if faltantes:
+            return (
+                f"BLOQUEADO: todavía falta reunir: {', '.join(faltantes)}. "
+                f"Pregúntale esto al cliente antes de armar el resumen.",
+                [],
+                False,
+            )
+
+        try:
+            pedido_db_actual = crm.cargar_pedido(numero)
+            resumen_original = pedido_manager.generar_resumen(
+                pedido_id=pedido_db_actual.id if pedido_db_actual else None, borrador=pedido,
+            )
+        except Exception as e:
+            print(f"⚠️ No se pudo generar el resumen original para Fase 2: {repr(e)}")
+            resumen_original = pedido_manager.generar_resumen(borrador=pedido)
+
+        lineas_nuevas = _formatear_datos_post_pago(datos_pp)
+        mensaje_resultado = (
+            "📋 RESUMEN COMPLETO REAL (calculado por el sistema -- incluye el pedido "
+            "original completo con su TOTAL, más todo lo nuevo del checklist. No lo "
+            "recalcules ni cambies ningún dato):\n\n"
+            f"{resumen_original}\n\n"
+            "--- Datos adicionales para producción ---\n"
+            + "\n".join(lineas_nuevas)
+            + "\n\nManda este resumen completo al cliente (dale buen formato para el "
+            "chat) y pregúntale si todo está correcto. SOLO cuando confirme "
+            "explícitamente que sí, llama a finalizar_fase_2_pedido."
+        )
+        return mensaje_resultado, [], False
+
     if name == "finalizar_fase_2_pedido":
         # 🔧 (5 sep 2026, Fase 2, pedido explícito de Israel) Candado
         # determinístico -- Python decide si de verdad ya está todo
         # completo, el modelo no puede cerrar la Fase 2 "porque cree que
         # ya tiene todo". Mismo patrón que ya se usa para el anticipo y
         # para punto_de_entrega.
-        datos_pp = pedido_manager.obtener_datos_post_pago(numero)
-        faltantes = []
-        if not datos_pp.get("nombre_cliente"):
-            faltantes.append("nombre completo del cliente")
-        if canal == "messenger" and not datos_pp.get("telefono_contacto"):
-            faltantes.append("teléfono de WhatsApp de contacto")
-        if not datos_pp.get("tipo_evento"):
-            faltantes.append("tipo de evento")
-
-        tipo_entrega_actual = str(pedido.get("tipo_entrega") or "").strip().lower()
-        if pedido.get("_envio_fuera_de_zona") or "domicilio" in tipo_entrega_actual:
-            if not datos_pp.get("direccion_entrega"):
-                faltantes.append("dirección completa de entrega")
-        elif _es_tipo_entrega_punto_de_entrega(tipo_entrega_actual):
-            if not datos_pp.get("punto_entrega_elegido") or not datos_pp.get("punto_entrega_hora"):
-                faltantes.append("punto de entrega elegido y la hora acordada")
-        elif "local" in tipo_entrega_actual:
-            if not datos_pp.get("ubicacion_local_confirmada"):
-                faltantes.append("confirmar que ya se le compartió la ubicación del local al cliente")
-
-        tiene_tarjetita = (
-            (datos_pp.get("tarjetita_diseno") and datos_pp.get("tarjetita_texto"))
-            or datos_pp.get("disenio_propio_confirmado")
-        )
-        if not tiene_tarjetita:
-            faltantes.append("diseño y texto de la tarjetita (o confirmación de que mandará diseño propio)")
+        datos_pp, faltantes = _faltantes_fase_2(numero, pedido)
 
         if faltantes:
             return (

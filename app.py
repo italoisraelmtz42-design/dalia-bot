@@ -1070,6 +1070,34 @@ def hora_punto_entrega(nombre_punto):
     return None
 
 
+MUNICIPIOS_ZONA_EXTENDIDA_COSTO = 150.0
+
+# 🔧 (6 sep 2026, pedido explícito de Israel: nueva categoría "Zona
+# Extendida") García, Nuevo León y Saltillo, Coahuila -- antes García se
+# trataba como fuera de zona (DHL $300, ver historial abajo) y Saltillo
+# nunca se había distinguido de "fuera de zona" en general. Ahora ambos
+# tienen su propia categoría: SÍ se hacen envíos, a $150, pero con un
+# tiempo de entrega fijo de 6 días hábiles (sin contar sábado, distinto
+# del resto del negocio) que nunca se puede acelerar ni pagando urgente
+# -- ver es_zona_extendida() y fecha_minima_zona_extendida() más abajo.
+def es_zona_extendida(municipio: str) -> bool:
+    """True si el municipio es García, Nuevo León o Saltillo, Coahuila
+    -- la nueva categoría de "Zona Extendida" (envío $150, 6 días
+    hábiles sin sábado, nunca urgente). Usa el mismo criterio de palabra
+    completa que ya se usaba para distinguir "García" de "San Pedro
+    Garza García" -- nunca debe confundirse con esa ni con ninguna otra
+    clave que solo contenga "garcia" como substring."""
+    if not municipio:
+        return False
+    clave = normalizar_producto_clave(municipio)
+    palabras_municipio = set(clave.replace(",", " ").split())
+    if "garcia" in palabras_municipio and "pedro" not in palabras_municipio:
+        return True
+    if "saltillo" in palabras_municipio:
+        return True
+    return False
+
+
 def resolver_costo_envio(municipio: str) -> float | None:
     """Devuelve el costo oficial de envío para un municipio, o None si el
     municipio no viene en la lista (fuera de zona -- requiere el precio
@@ -1078,24 +1106,13 @@ def resolver_costo_envio(municipio: str) -> float | None:
         return None
     clave = normalizar_producto_clave(municipio)
 
-    # 🔧 (1 sep 2026, bug real + pedido explícito de Israel) "García" es
-    # un municipio real y aparte de "San Pedro Garza García" -- pero el
-    # match difuso de abajo (clave in k / k in clave) hacía que "garcia"
-    # a secas matcheara por accidente con la clave "san pedro garza
-    # garcia" (por ser substring literal de ella) y le cotizaba $120 de
-    # domicilio como si tuviera cobertura. García NO tiene cobertura de
-    # domicilio -- se trata como fuera de zona (DHL $300, pedido
-    # liquidado), decisión confirmada con Israel. Se detecta por palabra
-    # completa "garcia" SIN "pedro" en el texto (cubre "García",
-    # "García NL", "García, Nuevo León", etc.) para no afectar el match
-    # normal de "san pedro garza garcia" / "san pedro", que sí deben
-    # seguir cotizando con normalidad.
-    palabras_municipio = set(clave.replace(",", " ").split())
-    if "garcia" in palabras_municipio and "pedro" not in palabras_municipio:
-        print(f"⚠️ Municipio '{municipio}' identificado como García (no San Pedro "
-              f"Garza García) -- sin cobertura de domicilio, tratado como fuera de "
-              f"zona (${COSTO_ENVIO_FUERA_DE_ZONA} DHL).")
-        return None
+    # 🔧 (6 sep 2026) García y Saltillo -- Zona Extendida, $150 fijo (ver
+    # es_zona_extendida arriba). Reemplaza la regla anterior del 1 sep
+    # que trataba a García como fuera de zona sin cobertura -- ahora SÍ
+    # tiene cobertura, a este precio y con el tiempo fijo de 6 días
+    # hábiles (ver fecha_minima_zona_extendida).
+    if es_zona_extendida(municipio):
+        return MUNICIPIOS_ZONA_EXTENDIDA_COSTO
 
     if clave in COSTOS_ENVIO_MUNICIPIO:
         return COSTOS_ENVIO_MUNICIPIO[clave]
@@ -1483,6 +1500,21 @@ def sumar_dias_habiles(fecha_inicio, dias_habiles):
     return fecha
 
 
+def sumar_dias_habiles_sin_sabado(fecha_inicio, dias_habiles):
+    """🔧 (6 sep 2026, pedido explícito de Israel, Zona Extendida --
+    García/Saltillo) A diferencia de sumar_dias_habiles() (que cuenta
+    sábado como día hábil, solo excluye domingo), para Zona Extendida
+    NI sábado NI domingo cuentan como día hábil -- son 6 días hábiles
+    de verdad, solo Lunes a Viernes."""
+    fecha = fecha_inicio
+    dias_sumados = 0
+    while dias_sumados < dias_habiles:
+        fecha += timedelta(days=1)
+        if fecha.weekday() < 5:  # 0=lunes ... 4=viernes
+            dias_sumados += 1
+    return fecha
+
+
 def parsear_fecha_pedido(texto_fecha):
     """Convierte el texto de fecha_evento/fecha_entrega (como lo haya
     escrito el modelo) a un date real de Python, o None si no se pudo
@@ -1814,6 +1846,7 @@ nunca calcules fechas por tu cuenta):
   fecha completa -- no llames a actualizar_pedido con fecha_evento hasta
   tener el día exacto.
 
+- 🚨 NUEVA REGLA (3 sep 2026, decisión de negocio de Israel, ya NO es
   opcional): NUNCA se ofrece ni se acepta entrega para EL MISMO DÍA, bajo
   ninguna circunstancia -- ni siquiera pagando el cargo urgente de $50. Lo
   más rápido posible que se puede entregar un pedido es MAÑANA (el día
@@ -1824,6 +1857,15 @@ nunca calcules fechas por tu cuenta):
   el mismo día "para no perder la venta"; caso real que motivó esta regla:
   el bot prometió y cobró urgente por una entrega el mismo día, y no
   debió haber sido posible.
+
+- 🚨 ZONA EXTENDIDA (6 sep 2026, pedido explícito de Israel): García,
+  Nuevo León y Saltillo, Coahuila tienen su PROPIA regla de fechas,
+  distinta de todo lo demás -- 6 días hábiles fijos desde hoy (sin
+  contar sábado, a diferencia del resto del negocio) y NUNCA se puede
+  entregar antes, ni pagando cargo urgente -- para estos dos destinos ni
+  siquiera existe la opción de "urgente". verificar_urgencia_fecha ya
+  detecta esto solo con el municipio del pedido -- confía en su
+  respuesta, no hagas esta cuenta tú mismo.
 
 - El tiempo normal de elaboración de un pedido es de 4 días hábiles.
 - La fecha de entrega para un pedido NORMAL (no urgente) hecho hoy es el
@@ -2872,13 +2914,36 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
             campos_modificados = [c for c in campos_modificados if c != "fecha_evento"]
             pedido["_fecha_evento_rechazada_mismo_dia"] = True
 
+    # 🔧 (6 sep 2026, pedido explícito de Israel, Zona Extendida --
+    # García/Saltillo): 6 días hábiles fijos desde HOY, sin sábado, y
+    # NUNCA se puede acelerar -- si fecha_evento resultó ser anterior a
+    # ese mínimo, se revierte (igual que el candado de mismo día) en vez
+    # de dejarla guardada. Esto se revisa DESPUÉS del rechazo de mismo
+    # día (que ya la pudo haber revertido) y ANTES de la urgencia normal,
+    # porque para esta zona "urgente" ni siquiera es una opción.
+    if "fecha_evento" in campos_modificados and es_zona_extendida(pedido.get("municipio")):
+        _fecha_zona_parseada = parsear_fecha_pedido(pedido.get("fecha_evento"))
+        _hoy_zona = datetime.now(ZONA_HORARIA_NEGOCIO).date()
+        _minima_zona = sumar_dias_habiles_sin_sabado(_hoy_zona, 6)
+        if _fecha_zona_parseada is not None and _fecha_zona_parseada < _minima_zona:
+            pedido["fecha_evento"] = _fecha_evento_previa
+            campos_modificados = [c for c in campos_modificados if c != "fecha_evento"]
+            pedido["_fecha_evento_rechazada_zona_extendida"] = _minima_zona.strftime("%d/%m/%Y")
+        elif "fecha_evento" in campos_modificados:
+            # Fecha válida para Zona Extendida -- ahí NUNCA es urgente.
+            pedido["es_urgente"] = False
+            pedido["urgente"] = False
+            if "es_urgente" not in campos_modificados:
+                campos_modificados.append("es_urgente")
+
     # 🔧 Urgencia determinística -- ver es_pedido_urgente() arriba. En
     # cuanto se sepa fecha_evento, Python decide si es urgente o no
     # comparando contra la fecha real de HOY, sin importar qué haya
     # decidido el modelo. Esto sobreescribe cualquier es_urgente/urgente
     # que el modelo haya puesto (bug real: confundió una fecha a más de
-    # un mes de distancia con una urgente).
-    if "fecha_evento" in campos_modificados:
+    # un mes de distancia con una urgente). No aplica si el municipio es
+    # Zona Extendida -- ese caso ya se resolvió arriba (nunca es urgente).
+    if "fecha_evento" in campos_modificados and not es_zona_extendida(pedido.get("municipio")):
         urgente_real = es_pedido_urgente(pedido.get("fecha_evento"))
         if urgente_real is not None and pedido.get("es_urgente") != urgente_real:
             pedido["es_urgente"] = urgente_real
@@ -3429,6 +3494,25 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                 False,
             )
 
+        # 🔧 (6 sep 2026, pedido explícito de Israel, Zona Extendida --
+        # García/Saltillo): ver _fecha_evento_rechazada_zona_extendida en
+        # aplicar_actualizacion_pedido -- 6 días hábiles fijos, sin
+        # sábado, nunca se acelera ni pagando urgente.
+        _fecha_minima_zona_rechazo = pedido.pop("_fecha_evento_rechazada_zona_extendida", None)
+        if _fecha_minima_zona_rechazo:
+            print(f"🚨 Se bloqueó fecha_evento: Zona Extendida (García/Saltillo) exige mínimo {_fecha_minima_zona_rechazo}")
+            return (
+                f"BLOQUEADO: para Zona Extendida (García/Saltillo) el tiempo de entrega "
+                f"es FIJO de 6 días hábiles desde hoy (lunes a viernes, sábado NO "
+                f"cuenta) y NUNCA se puede acelerar, ni pagando cargo urgente -- no es "
+                f"cuestión de urgencia, simplemente no es posible antes. La fecha más "
+                f"próxima real es {_fecha_minima_zona_rechazo}. Explícaselo al cliente "
+                f"con amabilidad y pregúntale si esa fecha (u otra más adelante) le "
+                f"funciona.",
+                campos_modificados,
+                False,
+            )
+
         # 🔧 Mínimo de 25 piezas para punto de entrega (bug real, ver nota
         # junto a _es_tipo_entrega_punto_de_entrega arriba). Se revisa
         # justo aquí, apenas se intenta poner/cambiar tipo_entrega, para
@@ -3536,7 +3620,12 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
             # urgente (o su ausencia) siempre corresponde al día real en
             # que se cobra, nunca al día en que se cotizó.
             if pedido.get("fecha_evento"):
-                urgente_al_momento_de_pagar = es_pedido_urgente(pedido.get("fecha_evento"))
+                if es_zona_extendida(pedido.get("municipio")):
+                    # Zona Extendida (García/Saltillo) nunca es urgente,
+                    # sin importar el día del pago.
+                    urgente_al_momento_de_pagar = False
+                else:
+                    urgente_al_momento_de_pagar = es_pedido_urgente(pedido.get("fecha_evento"))
                 if urgente_al_momento_de_pagar is not None and pedido.get("es_urgente") != urgente_al_momento_de_pagar:
                     pedido["es_urgente"] = urgente_al_momento_de_pagar
                     pedido["urgente"] = urgente_al_momento_de_pagar
@@ -3792,6 +3881,40 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                 f"cargo urgente de $50. Dile al cliente que lo más rápido posible es "
                 f"MAÑANA ({manana}), y pregúntale si esa fecha (u otra más adelante) "
                 f"le funciona.",
+                [],
+                False,
+            )
+
+        # 🔧 (6 sep 2026, pedido explícito de Israel, Zona Extendida --
+        # García, Nuevo León y Saltillo, Coahuila) Estos dos destinos
+        # tienen su propia regla, distinta de todo lo demás: 6 días
+        # hábiles fijos desde HOY (sin contar sábado, a diferencia del
+        # resto del negocio), y NUNCA se puede entregar antes, ni
+        # pagando urgente -- no es "urgente con cargo", es sencillamente
+        # imposible. Se revisa ANTES del cálculo normal de urgencia
+        # porque esta regla reemplaza esa lógica por completo para estos
+        # dos destinos.
+        if es_zona_extendida(pedido.get("municipio")):
+            fecha_minima_zona = sumar_dias_habiles_sin_sabado(hoy_real, 6)
+            if fecha_candidata < fecha_minima_zona:
+                return (
+                    f"📅 CÁLCULO REAL (hecho por el sistema, no lo recalcules tú): "
+                    f"{fecha_candidata.strftime('%d/%m/%Y')} NO se puede ofrecer para "
+                    f"Zona Extendida (García/Saltillo) -- el tiempo de entrega ahí es "
+                    f"FIJO de 6 días hábiles desde hoy (de lunes a viernes, sábado NO "
+                    f"cuenta) y NUNCA se puede acelerar, ni pagando cargo urgente -- no "
+                    f"es una cuestión de urgencia, simplemente no es posible antes. La "
+                    f"fecha más próxima real es {fecha_minima_zona.strftime('%d/%m/%Y')}.",
+                    [],
+                    False,
+                )
+            return (
+                f"📅 CÁLCULO REAL (hecho por el sistema, no lo recalcules tú): "
+                f"{fecha_candidata.strftime('%d/%m/%Y')} SÍ se puede ofrecer para Zona "
+                f"Extendida (García/Saltillo) -- es un PEDIDO NORMAL, NUNCA urgente "
+                f"para este destino (el tiempo de entrega ahí es fijo, no se acelera "
+                f"pagando cargo urgente). El envío para esta zona cuesta "
+                f"${MUNICIPIOS_ZONA_EXTENDIDA_COSTO:.2f} MXN, se paga al recibir.",
                 [],
                 False,
             )

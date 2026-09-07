@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from contextlib import contextmanager
 
 DB_PATH = os.getenv("PRODUCCION_DB_PATH", "produccion.db")
@@ -143,6 +144,37 @@ def _conectar():
     conn.execute("PRAGMA busy_timeout=5000;")
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn
+
+
+# 🔧 (7 sep 2026, bug real en producción: /api/pedidos/bot/actualizar
+# devolvió un 500 HTML crudo de Flask, no reproducible en un entorno
+# limpio -- lo que apunta a un choque transitorio real de SQLite, el
+# mismo tipo de "database is locked" que ya se detectó y se corrigió
+# del lado de dalia-bot. Producción Dalia nunca había tenido ese mismo
+# refuerzo -- misma función, traída aquí para las operaciones que llama
+# el bot (que no pueden darse el lujo de fallar en silencio, a
+# diferencia de una edición manual desde el dashboard, donde Israel
+# puede simplemente reintentar dando clic de nuevo).
+def ejecutar_con_reintento(operacion, nombre_operacion, intentos=2, espera_base=0.3):
+    """Ejecuta `operacion` (una función sin argumentos) reintentando
+    unas veces más si truena con "database is locked"/"disk i/o
+    error"/"busy" -- fallas transitorias esperables bajo escrituras
+    concurrentes, no errores reales de programación. Si se agotan los
+    intentos, relanza el último error tal cual."""
+    ultimo_error = None
+    for intento in range(intentos):
+        try:
+            return operacion()
+        except sqlite3.OperationalError as e:
+            texto = str(e).lower()
+            if "database is locked" not in texto and "disk i/o error" not in texto and "busy" not in texto:
+                raise
+            ultimo_error = e
+            if intento < intentos - 1:
+                print(f"⚠️ {nombre_operacion}: intento {intento + 1}/{intentos} falló "
+                      f"({e}) -- reintentando en {espera_base * (intento + 1):.2f}s...")
+                time.sleep(espera_base * (intento + 1))
+    raise ultimo_error
 
 
 @contextmanager
@@ -352,6 +384,18 @@ def eliminar_pedidos(ids):
 def obtener_pedido(pedido_id):
     with _cursor() as cur:
         cur.execute("SELECT * FROM pedidos_confirmados WHERE id=?", (pedido_id,))
+        row = cur.fetchone()
+        return _fila_a_dict(row) if row else None
+
+
+def obtener_pedido_por_folio(folio):
+    """🔧 (5 sep 2026, Fase 2) Para /api/pedidos/bot/actualizar -- el bot
+    identifica el pedido a actualizar por folio (no tiene el id interno
+    de esta base de datos, que es un mundo aparte del suyo)."""
+    if not folio:
+        return None
+    with _cursor() as cur:
+        cur.execute("SELECT * FROM pedidos_confirmados WHERE folio=? ORDER BY id DESC LIMIT 1", (folio,))
         row = cur.fetchone()
         return _fila_a_dict(row) if row else None
 

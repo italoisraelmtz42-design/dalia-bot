@@ -71,9 +71,33 @@ Si el cliente decide el envió a domicilio, solicitar entonces esta información
 *No solicitar si el cliente quiere un presupuesto del envío únicamente.
 
 
+===== ZONA EXTENDIDA (García, Nuevo León y Saltillo, Coahuila) =====
+🔧 Actualizado 6 sep 2026: estos dos destinos YA NO son "fuera de zona"
+(no aplica DHL $300 para ellos) -- tienen su propia categoría:
+
+*Costo de envío: $150 pesos, se paga al recibir (igual que domicilio normal).
+*Tiempo de entrega: FIJO de 6 días hábiles, contados a partir del día en
+ que se confirma el anticipo (no desde que se empieza a platicar).
+*Para esta zona, el sábado NO cuenta como día hábil (aquí sí se
+ descuenta, a diferencia del resto del negocio donde sábado sí cuenta).
+*NUNCA se puede entregar antes de esos 6 días hábiles, ni pagando el
+ cargo urgente -- no es una cuestión de "urgente o no", simplemente no
+ es posible antes para estos dos destinos.
+
+Ejemplo real: si el pedido se paga el domingo 6 de septiembre, la fecha
+más próxima de entrega es el lunes 14 de septiembre (Lun 7, Mar 8, Mié 9,
+Jue 10, Vie 11 = 5 días hábiles; sábado 12 y domingo 13 no cuentan;
+lunes 14 = día hábil número 6).
+
+
 ===== ENVÍOS FUERA DE NUESTRA ZONA DE COBERTURA =====
 
-Nota: Si son envíos a otros municipios, ciudades o estados del país solamente manejamos envíos por DHL (ofrecer envío nacional por DHL $300 por envío, el pedido debe estar 100% liquidado antes de mandarse por paquetería, la paquetería tarda 3 días hábiles + el tiempo de elaboración del pedido)
+Nota: Si son envíos a otros municipios, ciudades o estados del país
+(que NO sean García, Nuevo León ni Saltillo, Coahuila -- esos tienen su
+propia categoría de Zona Extendida, ver arriba) solamente manejamos
+envíos por DHL (ofrecer envío nacional por DHL $300 por envío, el pedido
+debe estar 100% liquidado antes de mandarse por paquetería, la
+paquetería tarda 3 días hábiles + el tiempo de elaboración del pedido)
 
 Para estos clientes (fuera de zona) SOLO existen DOS opciones de entrega:
 1) Envío nacional por DHL a su domicilio.

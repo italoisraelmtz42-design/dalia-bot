@@ -37,6 +37,55 @@ logger_db = logging.getLogger('database')
 REINTENTOS_CONEXION = 4
 ESPERA_BASE_REINTENTO_SEGUNDOS = 0.15
 
+# 🔧 (7 sep 2026, bug real detectado en producción: "database is locked"
+# en reclamar_mensaje_procesado, chat_guardar_mensaje,
+# resetear_cliente_completo, guardar_borrador_pedido y
+# uso_registrar_openai, varias veces en la misma ráfaga de un solo
+# mensaje) Con la Fase 2 ya activa, cada mensaje dispara más escrituras
+# a la base de datos que antes (checklist, folio, etc.), y con eso subió
+# la frecuencia de choques reales entre escrituras concurrentes. El
+# PRAGMA busy_timeout de abajo (lo que SQLite espera solo, por su
+# cuenta, antes de tronar con "database is locked") estaba en 5
+# segundos -- insuficiente para las ráfagas que se están viendo ahora.
+# Subido a 20 segundos. IMPORTANTE: esto NO es el candado global que ya
+# se probó y se quitó antes (el que dejaba al bot mudo con todo mundo
+# mientras la fila crecía) -- sigue sin haber ningún candado que
+# serialice a la fuerza; cada quien sigue pudiendo escribir en paralelo,
+# solo que ahora con más paciencia real antes de darse por vencido.
+BUSY_TIMEOUT_MS = 20000
+
+
+def ejecutar_con_reintento(operacion, nombre_operacion, intentos=3, espera_base=0.3):
+    """🔧 (7 sep 2026) Segunda capa de red de seguridad, además del
+    busy_timeout de arriba -- para las operaciones más importantes
+    (guardar el borrador del pedido, el historial de chat, el reset,
+    etc.), reintenta la operación COMPLETA (con una conexión nueva,
+    no la misma que ya falló) unas cuantas veces más si truena con
+    "database is locked"/"disk i/o error"/"busy" -- fallas transitorias
+    esperables bajo ráfagas de escrituras concurrentes, no errores reales
+    de programación. `operacion` debe ser una función sin argumentos que
+    abre su propia conexión (con get_db_connection()) y hace su propio
+    commit -- típicamente un closure chiquito armado con una función
+    interna. Si se agotan los intentos, se relanza el último error tal
+    cual, para que el caller lo maneje/loguee exactamente como ya lo
+    hacía antes de que existiera esta función."""
+    ultimo_error = None
+    for intento in range(intentos):
+        try:
+            return operacion()
+        except sqlite3.OperationalError as e:
+            texto = str(e).lower()
+            if "database is locked" not in texto and "disk i/o error" not in texto and "busy" not in texto:
+                raise
+            ultimo_error = e
+            if intento < intentos - 1:
+                logger_db.warning(
+                    f"{nombre_operacion}: intento {intento + 1}/{intentos} falló "
+                    f"({e}) -- reintentando en {espera_base * (intento + 1):.2f}s..."
+                )
+                time.sleep(espera_base * (intento + 1))
+    raise ultimo_error
+
 DB_PATH = os.getenv("SQLITE_DB_PATH", "dalia_bot.db")
 
 db_dir = os.path.dirname(DB_PATH)
@@ -73,11 +122,12 @@ def get_db_connection():
     ultimo_error = None
     for intento in range(REINTENTOS_CONEXION):
         try:
-            # timeout=10: si la BD está ocupada, espera hasta 10s antes
+            # timeout=20: si la BD está ocupada, espera hasta 20s antes
             # de fallar (en vez de tronar de inmediato con "database is
             # locked") -- esto ya lo maneja SQLite solo, sin que
-            # nosotros tengamos que serializar nada a mano.
-            conn = sqlite3.connect(DB_PATH, timeout=10, factory=_ConexionAutoCierre)
+            # nosotros tengamos que serializar nada a mano. Sincronizado
+            # con BUSY_TIMEOUT_MS (ver PRAGMA busy_timeout más abajo).
+            conn = sqlite3.connect(DB_PATH, timeout=BUSY_TIMEOUT_MS / 1000, factory=_ConexionAutoCierre)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys = ON;")
             # 🔧 (23 ago 2026, a pedido de Israel -- "disk I/O error" en TODAS las
@@ -92,7 +142,7 @@ def get_db_connection():
             # DELETE es el modo clásico de SQLite (un solo archivo de journal,
             # sin memoria compartida) -- más confiable sobre disco de red que WAL.
             conn.execute("PRAGMA journal_mode = DELETE;")
-            conn.execute("PRAGMA busy_timeout = 5000;")
+            conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS};")
             return conn
         except sqlite3.OperationalError as e:
             ultimo_error = e
@@ -125,7 +175,8 @@ def reclamar_mensaje_procesado(mensaje_id):
     pedido_manager.py."""
     if not mensaje_id:
         return False
-    try:
+
+    def _operacion():
         with get_db_connection() as conn:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO mensajes_webhook_procesados (mensaje_id) VALUES (?)",
@@ -133,6 +184,9 @@ def reclamar_mensaje_procesado(mensaje_id):
             )
             conn.commit()
             return cur.rowcount == 0  # 0 filas insertadas = ya existía = duplicado
+
+    try:
+        return ejecutar_con_reintento(_operacion, "reclamar_mensaje_procesado")
     except Exception as e:
         logger_db.error(f"reclamar_mensaje_procesado: {e}")
         return False

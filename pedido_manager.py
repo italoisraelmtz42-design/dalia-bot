@@ -12,7 +12,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional, Dict, Any, List
 
-from database import get_db_connection, siguiente_consecutivo_folio_bot
+from database import get_db_connection, siguiente_consecutivo_folio_bot, ejecutar_con_reintento
 from constantes import (
     EstadoPedido, ModoAtencion, OrigenEvento,
     ItemData, PagoData, EntregaData, PedidoData,
@@ -205,13 +205,16 @@ def es_cliente_nuevo(telefono: str) -> bool:
 
 def chat_guardar_mensaje(telefono: str, mensaje: str, emisor: str, canal: str = "whatsapp"):
     """emisor = 'usuario' | 'bot'. canal = 'whatsapp' | 'messenger'."""
-    try:
+    def _operacion():
         with get_db_connection() as conn:
             conn.execute(
                 "INSERT INTO historial_chat (telefono, mensaje, emisor, canal) VALUES (?, ?, ?, ?)",
                 (telefono, mensaje, emisor, canal),
             )
             conn.commit()
+
+    try:
+        ejecutar_con_reintento(_operacion, "chat_guardar_mensaje")
     except Exception as e:
         logger.error(f"chat_guardar_mensaje: {e}")
 
@@ -335,7 +338,7 @@ def uso_registrar_openai(telefono: str, modelo: str = None, tokens_entrada: int 
         + (tokens_salida / 1_000_000) * PRECIO_SALIDA_POR_MILLON
     )
 
-    try:
+    def _operacion():
         with get_db_connection() as conn:
             conn.execute(
                 """INSERT INTO uso_openai
@@ -344,6 +347,9 @@ def uso_registrar_openai(telefono: str, modelo: str = None, tokens_entrada: int 
                 (telefono, modelo, tokens_entrada, tokens_salida, tokens_cache, costo),
             )
             conn.commit()
+
+    try:
+        ejecutar_con_reintento(_operacion, "uso_registrar_openai")
     except Exception as e:
         logger.error(f"uso_registrar_openai: {e}")
 
@@ -354,7 +360,7 @@ def uso_registrar_openai(telefono: str, modelo: str = None, tokens_entrada: int 
 
 def guardar_borrador_pedido(telefono: str, datos: Dict[str, Any]):
     """Guarda o actualiza el borrador JSON del teléfono."""
-    try:
+    def _operacion():
         payload = json.dumps(datos, ensure_ascii=False, default=str)
         with get_db_connection() as conn:
             conn.execute(
@@ -366,6 +372,9 @@ def guardar_borrador_pedido(telefono: str, datos: Dict[str, Any]):
                 (telefono, payload, _now()),
             )
             conn.commit()
+
+    try:
+        ejecutar_con_reintento(_operacion, "guardar_borrador_pedido")
         logger_pedidos.info(f"Borrador guardado para {telefono}")
     except Exception as e:
         logger.error(f"guardar_borrador_pedido: {e}")
@@ -958,7 +967,7 @@ def resetear_cliente_completo(telefono: str) -> bool:
     ese número después del reset, aunque pareciera haber funcionado (el
     mensaje de confirmación del reset sí se mandaba bien).
     """
-    try:
+    def _operacion():
         with get_db_connection() as conn:
             conn.execute("DELETE FROM borradores_pedido WHERE telefono = ?", (telefono,))
             conn.execute("DELETE FROM historial_chat WHERE telefono = ?", (telefono,))
@@ -969,6 +978,9 @@ def resetear_cliente_completo(telefono: str) -> bool:
             # en silencio.
             conn.execute("DELETE FROM pedidos WHERE telefono = ?", (telefono,))
             conn.commit()
+
+    try:
+        ejecutar_con_reintento(_operacion, "resetear_cliente_completo")
         return True
     except Exception as e:
         logger.error(f"resetear_cliente_completo: {e}")

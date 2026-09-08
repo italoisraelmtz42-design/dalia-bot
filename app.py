@@ -2510,12 +2510,33 @@ TOOLS = [
             "description": (
                 "Modifica un producto ya existente en el pedido (cantidad, colores, etc.). "
                 "Identifica por nombre de producto. No afecta a los demás items. "
-                "NO envíes precio_unitario."
+                "NO envíes precio_unitario. 🚨 Si en el checklist hay DOS O MÁS lotes "
+                "del mismo producto (ej. dos líneas de 'osito con jaboncito' con "
+                "colores distintos), SIEMPRE incluye numero_lote para decir cuál de "
+                "los dos quieres corregir -- si no lo incluyes, el sistema no puede "
+                "adivinar cuál es y puede corregir el lote equivocado. 🚨 Error real "
+                "y grave ya cometido, nunca lo repitas: con 2 lotes del mismo "
+                "producto, el modelo intentó fijar la figura de jaboncito del "
+                "SEGUNDO lote sin nunca especificar cuál -- terminó corrigiendo el "
+                "PRIMERO una y otra vez (y hasta le cambió el color por accidente), "
+                "mientras la clienta confirmaba lo mismo MÁS DE 10 VECES sin que "
+                "nunca quedara bien. Ella tuvo que decir \"ya le dije muchas veces "
+                "que sí\" y aun así no se resolvió."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "producto": {"type": "string", "description": "Producto a modificar"},
+                    "numero_lote": {
+                        "type": "integer",
+                        "description": (
+                            "OBLIGATORIO si hay dos o más lotes del mismo producto en el "
+                            "pedido. Usa el orden en que aparecen en el checklist que ya "
+                            "se le mostró al cliente: 1 para el primero, 2 para el "
+                            "segundo, etc. Si solo hay un lote de este producto, no hace "
+                            "falta enviarlo."
+                        ),
+                    },
                     "cantidad": {
                         "type": "integer",
                         "description": (
@@ -2939,6 +2960,81 @@ def _buscar_item(pedido, nombre_producto, datos=None):
     return None
 
 
+def _buscar_item_para_actualizar(pedido, nombre_producto, datos):
+    """🔧 (8 sep 2026, bug real y GRAVÍSIMO: una clienta con 2 lotes del
+    mismo producto -- 15 celeste + 15 rosa pastel -- confirmó "sí" más
+    de 10 VECES intentando fijar la figura de jaboncito del SEGUNDO
+    lote, y el bot nunca lo logró -- porque actualizar_item_pedido
+    (arreglado el 6 sep para el caso de Nelly Kastro) empareja SOLO por
+    nombre, así que con 2+ lotes del mismo producto SIEMPRE agarraba el
+    PRIMERO, sin importar cuál quisiera corregir el cliente. Encima,
+    esto corrompió el primer lote: su color de toalla cambió de
+    "celeste" a "rosa pastel" sin que nadie lo pidiera, porque cada
+    intento de actualizar "el segundo lote" en realidad sobreescribía
+    el primero.
+
+    Esta función busca, entre TODOS los lotes con el mismo nombre, cuál
+    es el correcto usando (en este orden):
+    1. numero_lote (1, 2, 3...) si el modelo lo especifica -- el orden
+       en que aparecen en el checklist que ya se le mostró al cliente.
+    2. Si no hay numero_lote pero SÍ hay campos de color en `datos` que
+       coinciden con UN SOLO lote existente (aunque sea parcialmente),
+       ese es el lote.
+    3. Si solo hay UN lote con ese nombre, ese (no hay ambigüedad).
+    4. Si nada de lo anterior desambigua y hay más de un lote, se cae
+       al primero como antes -- pero esto ya solo debería pasar si el
+       modelo no mandó ninguna pista, lo cual el prompt ahora prohíbe
+       explícitamente cuando hay más de un lote."""
+    clave = _normalizar_nombre_producto(nombre_producto)
+    items = pedido.get("items") if isinstance(pedido.get("items"), list) else []
+    candidatos = []
+    for it in items:
+        n = _normalizar_nombre_producto(it.get("producto"))
+        if n == clave or (clave and (clave in n or n in clave)):
+            candidatos.append(it)
+
+    if not candidatos:
+        return None
+    if len(candidatos) == 1:
+        return candidatos[0]
+
+    numero_lote = datos.get("numero_lote")
+    if numero_lote not in (None, ""):
+        try:
+            idx = int(numero_lote) - 1
+            if 0 <= idx < len(candidatos):
+                return candidatos[idx]
+        except (TypeError, ValueError):
+            pass
+
+    campos_para_distinguir = [c for c in _CAMPOS_VARIANTE_ITEM if datos.get(c) not in (None, "")]
+    if campos_para_distinguir:
+        # 🔧 Puntaje por coincidencias, NO exigir que TODOS los campos
+        # coincidan -- si datos trae el campo que se está CAMBIANDO
+        # (ej. tipo_jaboncito="cruz" para fijarlo por primera vez), ese
+        # campo NUNCA va a coincidir con el valor viejo del candidato
+        # (todavía no lo tiene) -- eso no significa que el candidato sea
+        # el equivocado. Se elige el candidato con más campos que sí
+        # coinciden con lo ya guardado (la señal real de identidad),
+        # y solo si claramente le gana a los demás.
+        candidatos_con_puntaje = []
+        for it in candidatos:
+            puntaje = sum(
+                1 for c in campos_para_distinguir
+                if it.get(c) not in (None, "")
+                and _normalizar_nombre_producto(str(it[c])) == _normalizar_nombre_producto(str(datos[c]))
+            )
+            candidatos_con_puntaje.append((puntaje, it))
+        candidatos_con_puntaje.sort(key=lambda par: -par[0])
+        mejor_puntaje = candidatos_con_puntaje[0][0]
+        if mejor_puntaje > 0 and (
+            len(candidatos_con_puntaje) == 1 or candidatos_con_puntaje[1][0] < mejor_puntaje
+        ):
+            return candidatos_con_puntaje[0][1]
+
+    return candidatos[0]
+
+
 # 🆕 Bug real detectado (17 ago 2026, prueba real de Israel): un pedido
 # de 1 SOLO osito terminó con tipo_entrega="punto_de_entrega" (que según
 # la política del negocio requiere mínimo 25 piezas -- ver
@@ -3185,7 +3281,13 @@ def actualizar_item_pedido(pedido, argumentos_json):
     # coincidía, es PORQUE se está corrigiendo, no porque sea un lote
     # distinto. Resultado real del bug: 20 piezas de más y $240 de más
     # en el total, sin que nadie pidiera esas piezas extra.
-    existing = _buscar_item(pedido, producto)
+    #
+    # 🔧 CORREGIDO (8 sep 2026, bug real aún más grave: con 2+ lotes del
+    # mismo producto, "solo por nombre" significa SIEMPRE agarrar el
+    # primero -- ver _buscar_item_para_actualizar arriba para el caso
+    # real completo). Ahora, cuando hay varios lotes, se usa
+    # numero_lote o los colores ya guardados para saber CUÁL es.
+    existing = _buscar_item_para_actualizar(pedido, producto, datos)
     if not existing:
         # si no existe, comportarse como agregar
         return agregar_item_pedido(pedido, argumentos_json)

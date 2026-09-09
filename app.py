@@ -1698,9 +1698,34 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None, 
     fecha_minima = sumar_dias_habiles(ahora.date(), 4)
     dia_semana_minima = dias[fecha_minima.weekday()]
 
+    contexto_anuncio = ""
+    if isinstance(pedido, dict) and pedido.get("_anuncio_origen"):
+        # 🔧 (8 sep 2026, corregido antes de subirse -- Israel detectó el
+        # problema a tiempo con una pregunta directa: "¿y si el anuncio
+        # es de otro producto, como abanicos?") La primera versión de
+        # este texto asumía a la fuerza que CUALQUIER anuncio era del
+        # osito con jaboncito -- eso hubiera sido incorrecto y confuso
+        # para anuncios de cualquier otro producto (abanicos, veladoras,
+        # etc.). Ahora solo se le da el TÍTULO real del anuncio, sin
+        # asumir de qué producto es -- el modelo debe leerlo e inferir
+        # el producto correcto (osito, abanico, lo que sea), igual que
+        # ya sabe leer cualquier otro mensaje del cliente.
+        contexto_anuncio = (
+            f"\n🚨 CONTEXTO REAL DE ESTA CONVERSACIÓN: este cliente llegó dando clic "
+            f"directo en tu anuncio de Facebook titulado \"{pedido['_anuncio_origen']}\" "
+            f"-- normalmente esto significa que el producto que busca es justo el que "
+            f"anuncia ese título. Si menciona el producto de forma genérica, sin "
+            f"especificar modelo o variante, usa el título del anuncio como pista "
+            f"fuerte de cuál producto es, y confírmaselo de forma breve (ej. \"¿te "
+            f"refieres al osito con jaboncito de $12, como el del anuncio?\") en vez "
+            f"de abrirle la pregunta genérica de qué modelo busca. Esto aplica sin "
+            f"importar de qué producto sea el anuncio -- no asumas que siempre es el "
+            f"osito con jaboncito, lee el título real de arriba.\n"
+        )
+
     prompt = f"""
 Eres DALIA, asesora de ventas de Recuerditos Dalia.
-
+{contexto_anuncio}
 Toda la información oficial está en la Base de Conocimiento.
 
 REGLAS (prioridad máxima — leen antes que cualquier otra instrucción):
@@ -6613,7 +6638,7 @@ def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp", pagina_id=None
     enviar_mensaje_canal(numero, respuesta, canal, pagina_id=pagina_id)
 
 
-def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None, proveedor_whatsapp="meta", media_url_imagen_ycloud=None, media_url_audio_ycloud=None, media_url_audio_messenger=None):
+def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None, proveedor_whatsapp="meta", media_url_imagen_ycloud=None, media_url_audio_ycloud=None, media_url_audio_messenger=None, referral_anuncio=None):
     # 🔧 Marca, para ESTE hilo únicamente, si los envíos de este mensaje
     # deben salir por YCloud (número de prueba) o por Meta (producción,
     # comportamiento de siempre). Ver _usar_ycloud_en_este_hilo() arriba.
@@ -6817,6 +6842,17 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
     # jaboncito como ya mandada. obtener_sesion() es idempotente (solo
     # hidrata una vez por número), así que adelantarla no repite trabajo.
     sesion = obtener_sesion(numero)
+
+    # 🔧 (8 sep 2026, pedido explícito de Israel) Si Meta mandó el dato
+    # del anuncio de Facebook que originó esta conversación (requiere
+    # messaging_referrals suscrito -- ver conversación del 8 sep), se
+    # guarda en el pedido de esta sesión para que construir_system_prompt
+    # lo use como contexto real. Solo aplica normalmente al primer
+    # mensaje de una conversación nueva -- no se sobreescribe si ya
+    # había uno guardado de antes.
+    if referral_anuncio and not sesion["pedido"].get("_anuncio_origen"):
+        sesion["pedido"]["_anuncio_origen"] = referral_anuncio
+        print(f"📣 Conversación originada por anuncio de Facebook: {referral_anuncio}")
 
     # 🔧 CAMBIO DE DECISIÓN DE NEGOCIO (segunda vuelta): ahora sí se
     # fuerza otra vez un saludo garantizado en el primer mensaje de cada
@@ -7420,6 +7456,20 @@ def handle_message_messenger():
                     continue
 
                 texto_cliente = mensaje.get("text", "") or ""
+                # 🔧 (8 sep 2026, pedido explícito de Israel) Si el
+                # cliente llegó dando clic en un anuncio "Click-to-
+                # Messenger", Meta incluye aquí el título y la foto del
+                # anuncio (requiere messaging_referrals suscrito, ya
+                # confirmado activo en el panel de Meta). Se arma un
+                # texto corto y humano para dárselo al modelo como
+                # contexto -- nunca se le muestra tal cual al cliente.
+                referral_data = mensaje.get("referral") or {}
+                referral_anuncio = None
+                if referral_data.get("source") == "ADS":
+                    ad_title = (referral_data.get("ads_context_data") or {}).get("ad_title")
+                    if ad_title:
+                        referral_anuncio = ad_title.strip()
+                        print(f"📣 Mensaje con referral de anuncio -- ad_title={referral_anuncio!r}")
                 adjuntos = mensaje.get("attachments") or []
                 imagen_url = None
                 audio_url = None
@@ -7465,25 +7515,27 @@ def handle_message_messenger():
                     _lanzar_en_fondo(
                         procesar_mensaje_en_fondo,
                         psid, texto_cliente or "(el cliente reaccionó con un sticker/👍)",
-                        canal="messenger", pagina_id=pagina_id_actual,
+                        canal="messenger", pagina_id=pagina_id_actual, referral_anuncio=referral_anuncio,
                     )
                 elif imagen_url:
                     _lanzar_en_fondo(
                         procesar_mensaje_en_fondo,
                         psid, texto_cliente,
                         media_url_imagen_messenger=imagen_url, canal="messenger", pagina_id=pagina_id_actual,
+                        referral_anuncio=referral_anuncio,
                     )
                 elif audio_url:
                     _lanzar_en_fondo(
                         procesar_mensaje_en_fondo,
                         psid, texto_cliente,
                         media_url_audio_messenger=audio_url, canal="messenger", pagina_id=pagina_id_actual,
+                        referral_anuncio=referral_anuncio,
                     )
                 elif texto_cliente:
                     _lanzar_en_fondo(
                         procesar_mensaje_en_fondo,
                         psid, texto_cliente,
-                        canal="messenger", pagina_id=pagina_id_actual,
+                        canal="messenger", pagina_id=pagina_id_actual, referral_anuncio=referral_anuncio,
                     )
                 else:
                     _lanzar_en_fondo(

@@ -38,8 +38,14 @@
   .fila-info .valor.destacado.grande { font-size: 0.95rem; }
   .bloque-superior { display: flex; flex-wrap: wrap; }
   .col-info { flex: 1; min-width: 0; border-right: 3px solid {{ colores.borde }}; }
-  .col-logo { width: 130px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 6px; }
-  .col-logo img { width: 100%; height: auto; object-fit: contain; }
+  .col-logo { width: 130px; flex-shrink: 0; display: flex; flex-direction: column; padding: 6px; }
+  .col-logo .logo-mitad { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  .col-logo .logo-mitad img { width: 100%; height: auto; object-fit: contain; }
+  .col-logo .icono-mitad {
+    flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
+    border-top: 2px solid {{ colores.borde }}; padding-top: 4px; margin-top: 4px;
+  }
+  .col-logo .icono-mitad svg { width: 55%; height: 55%; }
   /* 🔧 (1 sep 2026, pedido de Israel: "que no se salgan los textos de la
      vista para celular") En pantallas angostas (esta nota se ve tanto
      sola como incrustada en un iframe dentro de "Ver detalle", donde el
@@ -150,7 +156,45 @@
       {% endif %}
     </div>
     <div class="col-logo">
-      <img src="{{ url_for('static', filename='logo_nota.png') }}" alt="Recuerditos Dalia">
+      <div class="logo-mitad">
+        <img src="{{ url_for('static', filename='logo_nota.png') }}" alt="Recuerditos Dalia">
+      </div>
+      <div class="icono-mitad">
+        {# 🔧 (9 sep 2026, pedido de Israel) Ícono según tipo de entrega
+           -- ver _icono_tipo_entrega() en app.py. "urgente" tiene
+           prioridad y reemplaza al de tipo de entrega (los pedidos
+           urgentes siempre son recolección en local, Israel lo
+           confirmó explícitamente -- un solo ícono ya lo dice todo). #}
+        {% if icono_tipo_entrega == 'urgente' %}
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-label="Pedido urgente">
+          <path d="M50 10 L92 85 H8 Z" stroke="{{ colores.borde }}" stroke-width="7" stroke-linejoin="round" fill="none"/>
+          <rect x="45" y="38" width="10" height="26" rx="3" fill="{{ colores.borde }}"/>
+          <circle cx="50" cy="74" r="6" fill="{{ colores.borde }}"/>
+        </svg>
+        {% elif icono_tipo_entrega == 'dhl' %}
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-label="Envío DHL">
+          <path d="M8 58 L45 47 L64 14 L74 17 L60 48 L92 42 L94 51 L60 60 L69 84 L59 87 L44 61 L16 67 Z" fill="{{ colores.borde }}"/>
+        </svg>
+        {% elif icono_tipo_entrega == 'domicilio' %}
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-label="Entrega a domicilio">
+          <rect x="8" y="33" width="46" height="32" stroke="{{ colores.borde }}" stroke-width="6" fill="none"/>
+          <path d="M54 45 H76 L90 60 V65 H54 Z" stroke="{{ colores.borde }}" stroke-width="6" stroke-linejoin="round" fill="none"/>
+          <circle cx="29" cy="72" r="8" stroke="{{ colores.borde }}" stroke-width="6" fill="white"/>
+          <circle cx="73" cy="72" r="8" stroke="{{ colores.borde }}" stroke-width="6" fill="white"/>
+        </svg>
+        {% elif icono_tipo_entrega == 'punto_de_entrega' %}
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-label="Punto de entrega">
+          <path d="M50 92 C50 92 80 60 80 38 C80 19 66 6 50 6 C34 6 20 19 20 38 C20 60 50 92 50 92 Z" fill="{{ colores.borde }}"/>
+          <circle cx="50" cy="38" r="13" fill="white"/>
+        </svg>
+        {% else %}
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-label="Recolección en el local">
+          <path d="M12 50 L50 18 L88 50" stroke="{{ colores.borde }}" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          <path d="M23 44 V88 H77 V44" stroke="{{ colores.borde }}" stroke-width="7" stroke-linejoin="round" fill="none"/>
+          <rect x="42" y="62" width="16" height="26" fill="{{ colores.borde }}"/>
+        </svg>
+        {% endif %}
+      </div>
     </div>
   </div>
 

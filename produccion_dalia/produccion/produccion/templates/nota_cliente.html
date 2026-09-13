@@ -40,12 +40,14 @@
   .col-info { flex: 1; min-width: 0; border-right: 3px solid {{ colores.borde }}; }
   .col-logo { width: 130px; flex-shrink: 0; display: flex; flex-direction: column; padding: 6px; }
   .col-logo .logo-mitad { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
-  .col-logo .logo-mitad img { width: 100%; height: auto; object-fit: contain; }
+  .col-logo .logo-mitad img {
+    max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain;
+  }
   .col-logo .icono-mitad {
     flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
     border-top: 2px solid {{ colores.borde }}; padding-top: 4px; margin-top: 4px;
   }
-  .col-logo .icono-mitad svg { width: 55%; height: 55%; }
+  .col-logo .icono-mitad svg { width: 72%; height: 72%; }
   /* 🔧 (1 sep 2026, pedido de Israel: "que no se salgan los textos de la
      vista para celular") En pantallas angostas (esta nota se ve tanto
      sola como incrustada en un iframe dentro de "Ver detalle", donde el

@@ -26,7 +26,7 @@ from urllib.parse import quote
 
 from flask import (
     Flask, flash, jsonify, redirect, render_template, request,
-    send_from_directory, session, url_for,
+    send_from_directory, send_file, session, url_for,
 )
 from openai import OpenAI
 
@@ -732,6 +732,30 @@ def _es_producto_real(nombre_producto):
     if not nombre:
         return False
     return not any(palabra in nombre for palabra in PALABRAS_NO_PRODUCTO)
+
+
+def _es_pedido_urgente(pedido):
+    """🔧 (9 sep 2026, pedido de Israel: ícono de tipo de entrega en la
+    nota) No existe un campo booleano dedicado para "urgente" -- se
+    anota como texto libre dentro de "notas" (ej. "PEDIDO URGENTE
+    (+$50)", tal como ya lo manda dalia-bot). Se detecta buscando la
+    palabra ahí. Los pedidos urgentes SOLO se recogen en el local
+    (confirmado explícitamente por Israel) -- por eso el ícono de
+    urgente reemplaza al de tipo de entrega, nunca van los dos juntos."""
+    return "urgente" in (pedido.get("notas") or "").lower()
+
+
+def _icono_tipo_entrega(pedido):
+    """Regresa cuál de los 5 íconos debe mostrarse en la nota: 'urgente'
+    tiene prioridad sobre el tipo de entrega (los pedidos urgentes
+    siempre son recolección en local, así que un solo ícono ya lo dice
+    todo)."""
+    if _es_pedido_urgente(pedido):
+        return "urgente"
+    return {
+        "dhl": "dhl", "local": "local",
+        "domicilio": "domicilio", "punto_de_entrega": "punto_de_entrega",
+    }.get(pedido.get("tipo_entrega"), "local")
 
 
 def _total_piezas_y_comision(pedidos_de_vendedor, monto_por_producto):
@@ -1829,7 +1853,12 @@ def pedido_nota(pedido_id):
     Solo lee datos -- si algo está mal, el botón "Editar antes de
     imprimir" manda a /pedido/<id>/editar con "regresar" apuntando de
     vuelta aquí mismo, para corregir y volver a imprimir sin perder el
-    lugar (ver _regresar_seguro arriba)."""
+    lugar (ver _regresar_seguro arriba).
+
+    🔧 (9 sep 2026, pedido de Israel) Se agrega icono_tipo_entrega al
+    contexto -- ver _icono_tipo_entrega arriba -- para el ícono nuevo
+    que se muestra debajo del logo (urgente / dhl / local / domicilio /
+    punto de entrega)."""
     pedido = database.obtener_pedido(pedido_id)
     if not pedido:
         flash("Ese pedido ya no existe.")
@@ -1848,6 +1877,7 @@ def pedido_nota(pedido_id):
         colores=colores_nota, es_bot=(vendedora_folio == "bot"),
         nota_jabones=NOTA_JABONES_TEXTO, nota_horario_domicilio=NOTA_HORARIO_DOMICILIO_TEXTO,
         nota_tarjetita=NOTA_TARJETITA_TEXTO,
+        icono_tipo_entrega=_icono_tipo_entrega(pedido),
     )
 
 

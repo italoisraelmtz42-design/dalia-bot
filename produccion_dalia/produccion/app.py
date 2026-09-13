@@ -26,7 +26,7 @@ from urllib.parse import quote
 
 from flask import (
     Flask, flash, jsonify, redirect, render_template, request,
-    send_from_directory, session, url_for,
+    send_from_directory, send_file, session, url_for,
 )
 from openai import OpenAI
 
@@ -181,6 +181,7 @@ DIAS_SEMANA_LARGOS_ES = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes
 # pedidos, no depende de cada uno. Si cambia el horario del local, el
 # teléfono de contacto, o el texto de las notas de la nota, se edita
 # aquí una sola vez y aplica a todas las notas nuevas que se impriman.
+DIRECCION_LOCAL = "Cedro #200B, Col. Los Encinos, Apodaca (dentro de la papelería ISA)"
 HORARIO_LOCAL_NOTA = ["Lunes a viernes 3:30 - 6:30 PM", "Sábado 11:30 - 2:00 PM"]
 TELEFONO_CONTACTO_VENDEDOR_NOTA = "81 1072 5440"
 NOTA_JABONES_TEXTO = "SE RECOMIENDA NO DEJAR LOS JABONES A SOL DIRECTO O MUCHO CALOR (SE PUEDEN DERRETIR)"
@@ -270,6 +271,14 @@ COLORES_NOTA_POR_VENDEDORA = {
     "karo": {"borde": "#7a52c9", "banner": "#9b7fe0", "banner_texto": "white",
              "etiqueta_bg": "#ece3fb", "texto_fuerte": "#5433a3",
              "notas_imp_bg": "#fff29e", "notas_imp_texto": "#7a5c00"},
+    # 🔧 (4 sep 2026, pedido explícito de Israel: "quiero que la nota
+    # imprimible también tenga algún indicador azul/BOT") Mismo azul que
+    # ya se usa en el tablero/Comisiones para las notas del bot (ver
+    # --azul en base.html). El dinero es de Diana, pero la nota debe
+    # distinguirse a simple vista de las que ella captura a mano.
+    "bot": {"borde": "#2a5db0", "banner": "#4c7fd6", "banner_texto": "white",
+            "etiqueta_bg": "#d9e6fb", "texto_fuerte": "#1e4a94",
+            "notas_imp_bg": "#fff29e", "notas_imp_texto": "#7a5c00"},
 }
 COLOR_NOTA_DEFAULT = COLORES_NOTA_POR_VENDEDORA["diana"]
 
@@ -382,7 +391,7 @@ def exigir_login():
     # persona en el navegador. Debe quedar excluido de este candado de
     # login igual que "login" y "static", o siempre lo mandaría a
     # /login antes de llegar a su propia verificación.
-    rutas_publicas = {"login", "static", "api_pedido_bot"}
+    rutas_publicas = {"login", "static", "api_pedido_bot", "api_pedido_bot_actualizar"}
     if request.endpoint in rutas_publicas:
         return None
     if not session.get("autenticado"):
@@ -726,6 +735,30 @@ def _es_producto_real(nombre_producto):
     return not any(palabra in nombre for palabra in PALABRAS_NO_PRODUCTO)
 
 
+def _es_pedido_urgente(pedido):
+    """🔧 (9 sep 2026, pedido de Israel: ícono de tipo de entrega en la
+    nota) No existe un campo booleano dedicado para "urgente" -- se
+    anota como texto libre dentro de "notas" (ej. "PEDIDO URGENTE
+    (+$50)", tal como ya lo manda dalia-bot). Se detecta buscando la
+    palabra ahí. Los pedidos urgentes SOLO se recogen en el local
+    (confirmado explícitamente por Israel) -- por eso el ícono de
+    urgente reemplaza al de tipo de entrega, nunca van los dos juntos."""
+    return "urgente" in (pedido.get("notas") or "").lower()
+
+
+def _icono_tipo_entrega(pedido):
+    """Regresa cuál de los 5 íconos debe mostrarse en la nota: 'urgente'
+    tiene prioridad sobre el tipo de entrega (los pedidos urgentes
+    siempre son recolección en local, así que un solo ícono ya lo dice
+    todo)."""
+    if _es_pedido_urgente(pedido):
+        return "urgente"
+    return {
+        "dhl": "dhl", "local": "local",
+        "domicilio": "domicilio", "punto_de_entrega": "punto_de_entrega",
+    }.get(pedido.get("tipo_entrega"), "local")
+
+
 def _total_piezas_y_comision(pedidos_de_vendedor, monto_por_producto):
     """Suma las piezas 'reales' (ver _es_producto_real) de una lista de
     pedidos ya filtrada a una sola vendedora, y calcula la comisión."""
@@ -816,7 +849,14 @@ def comisiones():
     # las vea y las corrija (deberían haber quedado marcadas con
     # necesita_revision desde que se subieron, ver _revisar_calidad).
     todos_en_rango = database.listar_capturados_en_rango(ini.isoformat(), fin.isoformat())
-    pedidos = [p for p in todos_en_rango if vendedora_por_folio(p.get("folio")) == vendedor]
+    # 🔧 (4 sep 2026, pedido explícito de Israel: "necesito ver siempre
+    # la última nota realizada en la parte superior, así igual con todos
+    # los vendedores") listar_capturados_en_rango() trae todo en orden
+    # ascendente (la más vieja primero) porque esa misma función también
+    # la usan Finanzas e Indicadores, donde ese orden sí importa -- aquí
+    # se invierte nada más para esta lista de Comisiones, sin tocar la
+    # función compartida.
+    pedidos = [p for p in reversed(todos_en_rango) if vendedora_por_folio(p.get("folio")) == vendedor]
     sin_folio_reconocido = sum(1 for p in todos_en_rango if vendedora_por_folio(p.get("folio")) is None)
 
     total_piezas, total_comision = _total_piezas_y_comision(pedidos, monto_por_producto)
@@ -1123,48 +1163,13 @@ def imprimir_semana_proxima():
 
 
 # ----------------------------------------------------------------------
-# Inventario de materia prima (23 ago 2026, pedido de Israel)
+# 🔧 (4 sep 2026, pedido explícito de Israel: "quita la sección de
+# INVENTARIO, esa no la estamos utilizando") Sección de inventario de
+# materia prima (23 ago 2026) retirada -- las rutas /inventario y el
+# link del menú ya no existen. No se tocó la tabla materia_prima en la
+# base de datos (los datos viejos, si había, se quedan ahí sin usarse;
+# no se está borrando información, solo la pantalla).
 # ----------------------------------------------------------------------
-@app.route("/inventario")
-def inventario():
-    items = database.listar_materia_prima()
-    return render_template("inventario.html", items=items)
-
-
-@app.route("/inventario/nuevo", methods=["POST"])
-def inventario_nuevo():
-    nombre = (request.form.get("nombre") or "").strip()
-    if not nombre:
-        flash("Ponle un nombre al material.")
-        return redirect(url_for("inventario"))
-    cantidad = request.form.get("cantidad") or 0
-    unidad = (request.form.get("unidad") or "").strip() or "pza"
-    database.crear_materia_prima(nombre, cantidad, unidad)
-    flash(f"'{nombre}' agregado al inventario.")
-    return redirect(url_for("inventario"))
-
-
-@app.route("/inventario/<int:item_id>/editar", methods=["POST"])
-def inventario_editar(item_id):
-    item = database.obtener_materia_prima(item_id)
-    if not item:
-        flash("Ese material ya no existe.")
-        return redirect(url_for("inventario"))
-    nombre = (request.form.get("nombre") or "").strip() or item["nombre"]
-    cantidad = request.form.get("cantidad")
-    if cantidad is None or cantidad == "":
-        cantidad = item["cantidad"]
-    unidad = (request.form.get("unidad") or "").strip() or item["unidad"]
-    database.actualizar_materia_prima(item_id, nombre, cantidad, unidad)
-    flash(f"'{nombre}' actualizado.")
-    return redirect(url_for("inventario"))
-
-
-@app.route("/inventario/<int:item_id>/eliminar", methods=["POST"])
-def inventario_eliminar(item_id):
-    database.eliminar_materia_prima(item_id)
-    flash("Material eliminado del inventario.")
-    return redirect(url_for("inventario"))
 
 
 # ----------------------------------------------------------------------
@@ -1620,6 +1625,96 @@ def api_pedido_bot():
     return jsonify({"status": "ok", "pedido_id": pedido_id}), 200
 
 
+@app.route("/api/pedidos/bot/actualizar", methods=["POST"])
+def api_pedido_bot_actualizar():
+    """🔧 (5 sep 2026, Fase 2, pedido explícito de Israel: "nota
+    reeditada") Al terminar el checklist posterior al anticipo, el bot
+    llama aquí UNA sola vez (nunca antes, nunca varias veces -- ver la
+    Fase 2 del bot) para completar la nota que ya se había creado al
+    confirmar el anticipo, con los datos que solo se saben hasta
+    entonces.
+
+    Solo actualiza los campos del ENCABEZADO que de verdad cambiaron
+    (nombre y teléfono del cliente, dirección si se dio) -- nunca toca
+    productos/total/anticipo (eso ya quedó bien desde la creación). El
+    tipo de evento y los datos de la tarjetita se anexan al campo
+    `notas_importantes` (la sección "⚠ NOTAS IMPORTANTES" de la nota,
+    aparte del campo `notas` genérico), nunca se sobreescribe lo que ya
+    hubiera ahí.
+
+    Misma llave compartida que /api/pedidos/bot. Si el folio no existe
+    (por ejemplo, la nota se borró a mano mientras tanto), regresa 404
+    en vez de crear una nota nueva -- esto es EXCLUSIVAMENTE para
+    completar una nota que ya existe."""
+    if not BOT_API_KEY or not hmac.compare_digest(
+        BOT_API_KEY, request.headers.get("X-API-Key", "")
+    ):
+        return jsonify({"error": "no autorizado"}), 401
+
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        body = {}
+
+    folio = (body.get("folio") or "").strip()
+    if not folio:
+        return jsonify({"error": "falta folio"}), 400
+
+    # 🔧 (7 sep 2026, bug real en producción: este endpoint devolvió un
+    # 500 HTML crudo de Flask -- no el JSON limpio que ya tenía
+    # preparado -- porque la excepción ocurría ANTES del try/except de
+    # más abajo (que solo cubría database.actualizar_pedido). No se
+    # pudo reproducir el error exacto en un entorno limpio, lo cual
+    # apunta a un choque transitorio real (el mismo tipo de "database is
+    # locked" que ya se vio y se corrigió del lado del bot -- Producción
+    # Dalia nunca tuvo ese mismo refuerzo). Ahora TODO el cuerpo de la
+    # función queda cubierto por un try/except amplio, con reintento
+    # específico para los choques de bloqueo -- así, pase lo que pase,
+    # el bot siempre recibe un JSON claro (nunca HTML de Flask), y un
+    # choque transitorio de verdad se resuelve solo reintentando en vez
+    # de tronar la primera vez.
+    try:
+        def _buscar_pedido():
+            return database.obtener_pedido_por_folio(folio)
+
+        pedido_existente = database.ejecutar_con_reintento(_buscar_pedido, "obtener_pedido_por_folio")
+        if not pedido_existente:
+            return jsonify({"error": f"no existe ninguna nota con folio {folio!r}"}), 404
+
+        datos_actualizados = dict(pedido_existente)
+        if body.get("cliente"):
+            datos_actualizados["cliente"] = body["cliente"]
+        if body.get("telefono"):
+            datos_actualizados["telefono"] = body["telefono"]
+        if body.get("direccion"):
+            datos_actualizados["direccion"] = body["direccion"]
+
+        # 🔧 (7 sep 2026, pedido explícito de Israel) El tipo de evento y
+        # los datos de la tarjetita van a "NOTAS IMPORTANTES" (una
+        # sección aparte, destacada con ⚠, que ya existía en la nota
+        # pero no se estaba usando desde aquí) -- NO al campo genérico
+        # "notas" (que es para avisos del negocio en general, como "NO
+        # dejar los jabones al sol", y donde antes se estaban mezclando
+        # por error).
+        notas_extra = (body.get("notas_extra") or "").strip()
+        if notas_extra:
+            notas_importantes_actuales = (datos_actualizados.get("notas_importantes") or "").strip()
+            datos_actualizados["notas_importantes"] = (
+                f"{notas_importantes_actuales}\n\n{notas_extra}" if notas_importantes_actuales else notas_extra
+            )
+
+        def _guardar():
+            return database.actualizar_pedido(pedido_existente["id"], datos_actualizados)
+
+        database.ejecutar_con_reintento(_guardar, "actualizar_pedido (bot)")
+    except Exception as e:
+        print(f"⚠️ Error actualizando pedido del bot (folio={folio!r}): {repr(e)}")
+        return jsonify({"error": "no se pudo actualizar"}), 500
+
+    print(f"🤖 Nota reeditada por el bot (Fase 2): folio={folio!r}, id={pedido_existente['id']}")
+    return jsonify({"status": "ok", "pedido_id": pedido_existente["id"]}), 200
+
+
 @app.route("/confirmar/<temp_id>")
 def confirmar(temp_id):
     """🔧 (23 ago 2026, pedido de Israel: "las notas que tengan información
@@ -1759,7 +1854,12 @@ def pedido_nota(pedido_id):
     Solo lee datos -- si algo está mal, el botón "Editar antes de
     imprimir" manda a /pedido/<id>/editar con "regresar" apuntando de
     vuelta aquí mismo, para corregir y volver a imprimir sin perder el
-    lugar (ver _regresar_seguro arriba)."""
+    lugar (ver _regresar_seguro arriba).
+
+    🔧 (9 sep 2026, pedido de Israel) Se agrega icono_tipo_entrega al
+    contexto -- ver _icono_tipo_entrega arriba -- para el ícono nuevo
+    que se muestra debajo del logo (urgente / dhl / local / domicilio /
+    punto de entrega)."""
     pedido = database.obtener_pedido(pedido_id)
     if not pedido:
         flash("Ese pedido ya no existe.")
@@ -1775,9 +1875,11 @@ def pedido_nota(pedido_id):
         "nota_cliente.html", p=pedido, productos=productos,
         dia_entrega_largo=_dia_entrega_largo(pedido.get("fecha_entrega_iso")),
         horario_local=HORARIO_LOCAL_NOTA, telefono_vendedor=telefono_vendedor,
-        colores=colores_nota,
+        colores=colores_nota, es_bot=(vendedora_folio == "bot"),
         nota_jabones=NOTA_JABONES_TEXTO, nota_horario_domicilio=NOTA_HORARIO_DOMICILIO_TEXTO,
         nota_tarjetita=NOTA_TARJETITA_TEXTO,
+        icono_tipo_entrega=_icono_tipo_entrega(pedido),
+        direccion_local=DIRECCION_LOCAL,
     )
 
 

@@ -150,10 +150,10 @@
         <div class="etiqueta">TIPO DE ENTREGA:</div>
         <div class="valor destacado">{{ 'DHL' if p.tipo_entrega == 'dhl' else (p.tipo_entrega.replace('_',' ')|upper if p.tipo_entrega else '—') }}</div>
       </div>
-      {% if p.direccion %}
+      {% if p.direccion or p.tipo_entrega == 'local' %}
       <div class="fila-info">
-        <div class="etiqueta">LUGAR DE ENTREGA:</div>
-        <div class="valor">{{ p.direccion }}</div>
+        <div class="etiqueta">{{ 'RECOGER EN:' if p.tipo_entrega == 'local' else 'LUGAR DE ENTREGA:' }}</div>
+        <div class="valor">{{ p.direccion or direccion_local }}</div>
       </div>
       {% endif %}
     </div>

@@ -83,7 +83,7 @@
   }
   table.productos td.num { text-align: center; white-space: normal; }
   table.productos td.money { text-align: right; overflow-wrap: normal; word-break: keep-all; }
-  table.productos .detalle { color: #7a6f75; font-size: 0.78rem; overflow-wrap: anywhere; }
+  table.productos .detalle { color: #1a1a1a; font-size: 0.78rem; overflow-wrap: anywhere; }
   .notas-fila td { color: #3a2e35; font-style: italic; }
   .bloque-notas-fijas { border-top: 3px solid {{ colores.borde }}; }
   .barra-nota-fija {
@@ -140,7 +140,7 @@
       </div>
       <div class="fila-info">
         <div class="etiqueta">TELEFONO CLIENTE:</div>
-        <div class="valor">{{ p.telefono or '—' }}</div>
+        <div class="valor" style="font-size: 1.05rem;">{{ p.telefono or '—' }}</div>
       </div>
       <div class="fila-info">
         <div class="etiqueta">DÍA DE ENTREGA:</div>
@@ -226,7 +226,7 @@
       <tr>
         <td class="num">{{ prod.cantidad or '—' }}</td>
         <td>
-          {{ prod.producto or '—' }}
+          <strong>{{ prod.producto or '—' }}</strong>
           {% if prod.colores %}
             {% for detalle in prod.colores.split(',') %}
               <div class="detalle">{{ detalle.strip() }}</div>

@@ -1804,6 +1804,31 @@ REGLAS CRÍTICAS DE MEMORIA Y MÚLTIPLES PRODUCTOS (auditoría):
   clienta sin ese dato. Revisa el bloque "[📋 DATOS QUE TODAVÍA FALTAN POR
   PREGUNTAR]": si aparece color_jaboncito ahí, pregúntalo aparte de la
   figura, aunque la figura ya esté confirmada.
+- 🔧 CAMBIAR DE MODELO (no lo confundas con AGREGAR un modelo adicional):
+  si el cliente ya tiene un producto en su pedido y luego indica que
+  prefiere OTRO modelo distinto para lo mismo que está pidiendo (ej. te
+  manda una foto de otro osito y dice "ese me gustó", o dice "mejor el
+  otro que me enseñaste"), lo normal es que quiera CAMBIAR su elección,
+  no comprar los dos. Antes de tocar nada, pregúntale explícitamente y
+  sin ambigüedad -- "¿quieres cambiar tu pedido de [producto viejo] a
+  [producto nuevo], o quieres los dos modelos por separado?" -- y espera
+  su respuesta clara antes de usar ninguna herramienta. 🚨 Nunca actúes
+  solo porque tú mismo redactaste una pregunta de confirmación -- una
+  pregunta tuya no es una respuesta del cliente; si no ves un "sí" (o
+  equivalente) claro del cliente después de tu pregunta, no llames
+  ninguna función todavía. Si el cliente confirma que es un CAMBIO
+  (reemplazo), llama a eliminar_item para quitar el producto viejo Y
+  a agregar_item para el nuevo, en el mismo turno -- nunca dejes los
+  dos en el pedido. Si el cliente confirma que los quiere AMBOS, ahí sí
+  usa agregar_item sin tocar el original. 🚨 Error real ya cometido,
+  nunca lo repitas: una clienta con 60 ositos con jaboncito ($12) ya
+  guardados mandó una foto de otro modelo y dijo "ese me gustó" -- el
+  bot preguntó "¿quieres que actualice tu pedido a ese modelo?" (dando a
+  entender un cambio) pero, sin que la clienta respondiera esa pregunta
+  con un "sí" claro, agregó los 60 ositos nuevos como un producto
+  APARTE -- el pedido terminó con 120 piezas en dos modelos distintos
+  (más de $1,800 en vez de los ~$1,140 que probablemente quería), sin
+  que nadie lo pidiera ni lo confirmara así.
 
 REGLA FIJA DEL ANTICIPO (esta regla NO depende de la Base de Conocimiento,
 así que aplícala siempre, incluso si no ves el archivo de anticipos en este
@@ -2322,12 +2347,32 @@ ESTADO ACTUAL DEL PEDIDO DE ESTE CLIENTE (desde base de datos):
 ===========================================================
 FASE 2 -- CHECKLIST POSTERIOR AL ANTICIPO (estás aquí ahora)
 ===========================================================
-El pedido y el pago YA quedaron confirmados -- deja de vender, deja de
-tocar colores/cantidades/fechas del pedido (eso ya cerró). Tu único
-trabajo ahora es reunir los datos que faltan para pasar el pedido a
-producción, y despedirte. NO uses ninguna herramienta de venta
-(actualizar_pedido, agregar_item, verificar_color, verificar_urgencia_fecha,
-etc.) mientras estés en esta fase.
+El pedido y el pago YA quedaron confirmados. Tu trabajo principal ahora
+es reunir los datos que faltan para pasar el pedido a producción, y
+despedirte -- pero si el cliente pide corregir algo del pedido mismo
+(color, cantidad, fecha de entrega o tipo de entrega), SÍ puedes
+hacerlo, con las mismas herramientas y las mismas reglas de siempre
+(actualizar_item para corregir un color/cantidad ya existente,
+agregar_item para piezas nuevas, actualizar_pedido para fecha/tipo de
+entrega, verificar_color y verificar_urgencia_fecha antes de confirmar
+cualquier cambio de esos). 🔧 (17 sep 2026, pedido explícito de Israel)
+Antes esto estaba prohibido por completo -- una clienta corrigió el
+color del jaboncito más de 4 veces después de pagar, el bot le dijo
+cada vez "ya lo corregí" pero nunca llamó a ninguna función para
+hacerlo de verdad (tenía prohibido tocarlas), así que el pedido real se
+quedó con el color equivocado. 🚨 Nunca vuelvas a decir "ya actualicé
+tu pedido" o cualquier variante de eso sin haber llamado de verdad a la
+función correspondiente en ese mismo turno -- si no llamas la función,
+no pasó, sin importar lo que le digas al cliente.
+
+🚨 IMPORTANTE sobre el TOTAL si el cliente pide un cambio después del
+anticipo: revisa el bloque "Anticipo YA PAGADO" / "RESTO PENDIENTE POR
+PAGAR" en el estado del pedido de abajo -- son los montos REALES de la
+base de datos. Si el cambio que pide el cliente altera el total (ej.
+agregar más piezas), avísale con el nuevo total y el nuevo resto
+pendiente usando esos datos reales, nunca el "$50 mínimo" genérico de
+la política de anticipos -- ese "$50" es solo el mínimo para EMPEZAR un
+pedido nuevo, nunca lo confundas con lo que un cliente ya pagó.
 
 🚨 ESTADO REAL DE ESTE CHECKLIST AHORA MISMO (calculado por el sistema,
 no por ti -- confía en esto, NUNCA vuelvas a preguntar algo que ya
@@ -3834,6 +3879,22 @@ def _formatear_datos_post_pago(datos_pp):
     return lineas
 
 
+def _reiniciar_resumen_post_pago_si_hace_falta(pedido, campos_modificados):
+    """🔧 (17 sep 2026, pedido explícito de Israel: permitir corregir
+    color/cantidad/fecha/tipo de entrega DESPUÉS del anticipo) Si el
+    cliente corrige algo del pedido después de que ya se le había
+    mostrado el resumen final de Fase 2 (armar_resumen_post_pago), ese
+    resumen que ya vio quedó desactualizado -- sin este aviso, un "sí"
+    de confirmación un poco después podría cerrar el pedido con datos
+    viejos que el cliente nunca llegó a confirmar de verdad. Al resetear
+    esta bandera, se obliga a que se vuelva a llamar
+    armar_resumen_post_pago (con los datos ya corregidos) antes de poder
+    cerrar el pedido con finalizar_fase_2_pedido -- ver el forzado de
+    tool_choice en preguntar_ia."""
+    if campos_modificados and pedido.get("_resumen_post_pago_mostrado"):
+        pedido["_resumen_post_pago_mostrado"] = False
+
+
 def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagina_id=None, texto_cliente=None):
     name = tool_call.function.name
     args = tool_call.function.arguments
@@ -4141,6 +4202,12 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                     f"{dia_semana_real}. Si le mencionas el día de la semana al "
                     "cliente, usa siempre este dato, nunca lo calcules de memoria."
                 )
+        if not anticipo_recien_confirmado:
+            # 🔧 Solo aplica a correcciones DESPUÉS del anticipo (ver
+            # _reiniciar_resumen_post_pago_si_hace_falta) -- en el turno
+            # en que el anticipo se confirma por primera vez, todavía no
+            # existe ningún resumen de Fase 2 que invalidar.
+            _reiniciar_resumen_post_pago_si_hace_falta(pedido, campos_modificados)
         return mensaje_resultado, campos_modificados, anticipo_recien_confirmado
 
     if name == "agregar_item":
@@ -4165,14 +4232,17 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                 False,
             )
         campos = agregar_item_pedido(pedido, args)
+        _reiniciar_resumen_post_pago_si_hace_falta(pedido, campos)
         return "ok", campos, False
 
     if name == "actualizar_item":
         campos = actualizar_item_pedido(pedido, args)
+        _reiniciar_resumen_post_pago_si_hace_falta(pedido, campos)
         return "ok", campos, False
 
     if name == "eliminar_item":
         campos = eliminar_item_pedido(pedido, args)
+        _reiniciar_resumen_post_pago_si_hace_falta(pedido, campos)
         return "ok", campos, False
 
     if name == "mostrar_foto_producto":
@@ -4666,6 +4736,20 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         )
         enviar_mensaje_canal(numero, mensaje_cierre_fase_2, canal, pagina_id=pagina_id)
         time.sleep(1.5)
+
+        # 🔧 (14 sep 2026, pedido explícito de Israel) Mismo aviso que ya
+        # se agregó a la nota (ver .aviso-pago-efectivo en
+        # nota_cliente.html) -- también se manda como mensaje canónico
+        # aquí al cerrar la Fase 2, SOLO si la entrega es a domicilio.
+        if "domicilio" in str(pedido.get("tipo_entrega") or "").strip().lower():
+            enviar_mensaje_canal(
+                numero,
+                "RECUERDA, EN ENTREGAS A DOMICILIO SOLO ACEPTAMOS PAGO EN "
+                "EFECTIVO AL MOMENTO DE LA ENTREGA",
+                canal, pagina_id=pagina_id,
+            )
+            time.sleep(1.5)
+
         enviar_mensaje_canal(numero, "⌛", canal, pagina_id=pagina_id)
 
         print(f"✅ [Fase 2] Checklist completo y confirmado para {numero} -- bot apagado (modo DALIA)")

@@ -587,24 +587,65 @@ def _insert_item(conn, pedido_id: int, data: Dict):
 
 
 def confirmar_anticipo_pedido_existente(pedido_id: int, telefono: str, borrador: Dict):
-    """Actualiza un pedido ya existente cuando llega un anticipo nuevo."""
-    # 🔧 (5 sep 2026, Fase 2) mismo interruptor que crear_pedido_desde_borrador.
+    """Actualiza un pedido ya existente cuando llega un anticipo nuevo.
+
+    🔧 (17 sep 2026, pedido explícito de Israel: "que sí pueda corregirlo
+    él mismo, igual que antes del anticipo" -- color, cantidad, fecha y
+    tipo de entrega) Antes, esta función SOLO actualizaba estado/pago --
+    nunca tocaba pedido_items ni entregas. Esto significaba que aunque
+    se le permitiera al modelo corregir un color DESPUÉS del anticipo
+    (ver la sección de Fase 2 en construir_system_prompt), la corrección
+    se quedaba atrapada en la sesión en RAM y JAMÁS llegaba a la base de
+    datos real -- la nota de producción seguía con el dato viejo para
+    siempre. Caso real: una clienta (Laura Garcia) corrigió el color del
+    jaboncito de rosa pastel a rosa palo más de 4 veces, el bot le dijo
+    cada vez "ya lo corregí", pero nunca había ninguna función que de
+    verdad pudiera guardar ese cambio. Ahora, cada vez que se llama a
+    esta función, se resincronizan los productos y los datos de entrega
+    completos desde el borrador actual -- reemplaza lo que hubiera antes
+    con el estado más reciente, igual que hace crear_pedido_desde_borrador
+    la primera vez."""
     modo_atencion_nuevo = ModoAtencion.BOT.value if FASE_2_ACTIVA else ModoAtencion.DALIA.value
     fase_nueva = "post_pago" if FASE_2_ACTIVA else "venta"
     try:
         with get_db_connection() as conn:
             conn.execute(
                 """UPDATE pedidos SET
-                   estado = ?, modo_atencion = ?, fase = ?, fecha_actualizacion = ?
+                   estado = ?, modo_atencion = ?, fase = ?, es_urgente = ?, fecha_actualizacion = ?
                    WHERE id = ?""",
                 (
                     EstadoPedido.ANTICIPO_CONFIRMADO.value,
                     modo_atencion_nuevo,
                     fase_nueva,
+                    1 if (borrador.get("es_urgente") or borrador.get("urgente")) else 0,
                     _now(),
                     pedido_id,
                 ),
             )
+
+            # ---- resincronizar productos (ver docstring arriba) ----
+            conn.execute("DELETE FROM pedido_items WHERE pedido_id = ?", (pedido_id,))
+            items = borrador.get("items")
+            if items and isinstance(items, list) and items:
+                for it in items:
+                    _insert_item(conn, pedido_id, it)
+            elif borrador.get("producto"):
+                _insert_item(conn, pedido_id, borrador)
+
+            # ---- resincronizar datos de entrega ----
+            conn.execute(
+                """UPDATE entregas SET tipo_entrega = ?, municipio = ?, direccion = ?,
+                   fecha_entrega = ?, costo_envio = ? WHERE pedido_id = ?""",
+                (
+                    borrador.get("tipo_entrega") or "local",
+                    borrador.get("municipio"),
+                    borrador.get("direccion"),
+                    borrador.get("fecha_evento") or borrador.get("fecha_entrega"),
+                    float(borrador.get("costo_envio") or 0),
+                    pedido_id,
+                ),
+            )
+
             monto, comprobante = _resolver_monto_anticipo(
                 borrador, telefono, "confirmar_anticipo_pedido_existente"
             )
@@ -749,6 +790,23 @@ def generar_resumen(pedido_id: Optional[int] = None, borrador: Optional[Dict] = 
             if ped.es_urgente:
                 total += 50
             lineas.append(f"TOTAL: ${total:.2f} MXN")
+
+            # 🔧 (17 sep 2026, bug real y grave: Laura Garcia transfirió
+            # $200 de anticipo, pero al preguntar "¿cuánto es el resto?"
+            # el bot contestó usando el "$50 mínimo" genérico de la
+            # política del negocio en vez del monto real ya pagado --
+            # le dijo que debía $550 cuando en realidad debía $400.
+            # Causa raíz: esta función nunca exponía cuánto se había
+            # pagado de verdad, así que el modelo no tenía otra opción
+            # más que usar la cifra genérica de la Base de Conocimiento.
+            # Ahora se calcula con la suma real de pagos confirmados en
+            # la base de datos -- nunca inventado por el modelo.
+            anticipo_pagado = sum(p.monto for p in (ped.pagos or []) if p.confirmado)
+            if anticipo_pagado > 0:
+                resto = total - anticipo_pagado
+                lineas.append(f"Anticipo YA PAGADO (real, de la base de datos): ${anticipo_pagado:.2f} MXN")
+                lineas.append(f"RESTO PENDIENTE POR PAGAR: ${resto:.2f} MXN")
+
             return "\n".join(lineas) if lineas else "Sin datos de pedido."
 
     # ---- borrador ----

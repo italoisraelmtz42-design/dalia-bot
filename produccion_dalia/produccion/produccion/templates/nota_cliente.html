@@ -96,6 +96,10 @@
   .tarjetita {
     color: #c14848; font-style: italic; font-size: 0.74rem; text-align: center; padding: 6px 10px; overflow-wrap: anywhere;
   }
+  .aviso-pago-efectivo {
+    color: #c11414; font-weight: 700; text-transform: uppercase; font-size: 0.8rem;
+    text-align: center; padding: 6px 10px; overflow-wrap: anywhere;
+  }
   .pie { display: flex; flex-wrap: wrap; border-top: 3px solid {{ colores.borde }}; }
   .pie .horario { flex: 1; min-width: 140px; padding: 8px 10px; font-size: 0.76rem; text-align: center; overflow-wrap: anywhere; }
   .pie .horario strong { display: block; font-size: 0.8rem; margin-bottom: 3px; }
@@ -312,7 +316,9 @@
   <div class="bloque-notas-fijas">
     <div class="barra-nota-fija">NOTA #1: {{ nota_jabones }}</div>
     <div class="barra-nota-fija">NOTA #2: {{ nota_horario_domicilio }}</div>
-    <div class="tarjetita">{{ nota_tarjetita }}</div>
+    {% if p.tipo_entrega == 'domicilio' %}
+    <div class="aviso-pago-efectivo">EN ENTREGAS A DOMICILIO SOLO ACEPTAMOS PAGO EN EFECTIVO</div>
+    {% endif %}
   </div>
 
   <div class="contacto">TEL. CONTACTO VENDEDOR: {{ telefono_vendedor }}</div>

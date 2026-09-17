@@ -9,6 +9,22 @@
   <a href="{{ url_for('finanzas', periodo='mes') }}" class="{{ 'activo' if periodo=='mes' else '' }}">Mes</a>
 </nav>
 
+{% if periodo == 'hoy' %}
+{# 🔧 (17 sep 2026, pedido de Israel: "añade un calendario y poder
+   escoger qué día quiero visualizar") Selector de fecha -- al elegir
+   otro día, este mismo formulario recarga la página con ?fecha=... #}
+<form method="get" action="{{ url_for('finanzas') }}" class="card"
+      style="padding:10px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+  <input type="hidden" name="periodo" value="hoy">
+  <label class="muted" for="selector-fecha-finanzas">Ver otro día:</label>
+  <input type="date" id="selector-fecha-finanzas" name="fecha" value="{{ fecha_elegida_iso }}"
+         onchange="this.form.submit()" style="padding:6px 8px;border-radius:8px;border:1px solid #ddd;">
+  {% if not es_actual %}
+    <a class="link-suave" href="{{ url_for('finanzas', periodo='hoy') }}">Ir a hoy</a>
+  {% endif %}
+</form>
+{% endif %}
+
 {% if periodo in ('semana', 'mes') %}
 <div class="card" style="padding:10px 12px;display:flex;align-items:center;justify-content:space-between;">
   <a class="btn" href="{{ url_for('finanzas', **nav_anterior) }}">← {{ 'Semana anterior' if periodo == 'semana' else 'Mes anterior' }}</a>
@@ -33,18 +49,66 @@
     <div class="num">{{ pedidos|length }}</div>
   </div>
   <div class="item">
+    <div class="muted">Urgentes</div>
+    <div class="num">${{ total_urgentes|moneda }}</div>
+  </div>
+  <div class="item">
+    <div class="muted">A domicilio</div>
+    <div class="num">${{ total_domicilio|moneda }}</div>
+  </div>
+  <div class="item">
     <div class="muted">Anticipos recibidos</div>
     <div class="num">${{ total_anticipos|moneda }}</div>
   </div>
   <div class="item">
-    <div class="muted">Total vendido</div>
-    <div class="num">${{ total_ventas|moneda }}</div>
-  </div>
-  <div class="item">
-    <div class="muted">Saldo pendiente</div>
+    <div class="muted">Por pagar</div>
     <div class="num">${{ total_saldos|moneda }}</div>
   </div>
+  <div class="item">
+    <div class="muted">Total venta</div>
+    <div class="num">${{ total_ventas|moneda }}</div>
+  </div>
 </div>
+
+{% if periodo == 'mes' and desglose_por_dia_mes %}
+{# 🔧 (17 sep 2026, pedido de Israel: "quiero ver el resumen por día a
+   día del mes... urgentes, a domicilio, anticipos, por pagar = total
+   venta") Un renglón por cada día que tuvo al menos un pedido
+   capturado -- los 5 números de cada fila siempre suman igual que la
+   nota real de cada pedido (mismo criterio que _desglose_venta_pedido
+   arriba, nunca un cálculo aparte que se pueda desincronizar). #}
+<h3 style="margin:18px 0 8px 0;">📅 Desglose día por día</h3>
+<div class="card" style="overflow-x:auto;padding:0;">
+  <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+    <thead>
+      <tr style="text-align:left;border-bottom:2px solid #f0d5df;">
+        <th style="padding:10px 12px;">Día</th>
+        <th style="padding:10px 12px;">Pedidos</th>
+        <th style="padding:10px 12px;">Urgentes</th>
+        <th style="padding:10px 12px;">A domicilio</th>
+        <th style="padding:10px 12px;">Anticipos</th>
+        <th style="padding:10px 12px;">Por pagar</th>
+        <th style="padding:10px 12px;">Total venta</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in desglose_por_dia_mes %}
+      <tr style="border-bottom:1px solid #f5eef1;">
+        <td style="padding:8px 12px;">
+          <a class="link-suave" href="{{ url_for('finanzas', periodo='hoy', fecha=d.fecha) }}">{{ d.etiqueta }}</a>
+        </td>
+        <td style="padding:8px 12px;">{{ d.pedidos }}</td>
+        <td style="padding:8px 12px;">${{ d.urgente|moneda }}</td>
+        <td style="padding:8px 12px;">${{ d.domicilio|moneda }}</td>
+        <td style="padding:8px 12px;">${{ d.anticipo|moneda }}</td>
+        <td style="padding:8px 12px;">${{ d.por_pagar|moneda }}</td>
+        <td style="padding:8px 12px;font-weight:700;">${{ d.total|moneda }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 {% if not pedidos %}
   <div class="card muted">No se capturó ningún pedido en este período.</div>

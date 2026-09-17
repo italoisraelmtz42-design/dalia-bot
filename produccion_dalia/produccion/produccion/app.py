@@ -181,6 +181,7 @@ DIAS_SEMANA_LARGOS_ES = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes
 # pedidos, no depende de cada uno. Si cambia el horario del local, el
 # teléfono de contacto, o el texto de las notas de la nota, se edita
 # aquí una sola vez y aplica a todas las notas nuevas que se impriman.
+DIRECCION_LOCAL = "Cedro #200B, Col. Los Encinos, Apodaca (dentro de la papelería ISA)"
 HORARIO_LOCAL_NOTA = ["Lunes a viernes 3:30 - 6:30 PM", "Sábado 11:30 - 2:00 PM"]
 TELEFONO_CONTACTO_VENDEDOR_NOTA = "81 1072 5440"
 NOTA_JABONES_TEXTO = "SE RECOMIENDA NO DEJAR LOS JABONES A SOL DIRECTO O MUCHO CALOR (SE PUEDEN DERRETIR)"
@@ -1965,6 +1966,7 @@ def pedido_nota(pedido_id):
         nota_jabones=NOTA_JABONES_TEXTO, nota_horario_domicilio=NOTA_HORARIO_DOMICILIO_TEXTO,
         nota_tarjetita=NOTA_TARJETITA_TEXTO,
         icono_tipo_entrega=_icono_tipo_entrega(pedido),
+        direccion_local=DIRECCION_LOCAL,
     )
 
 

@@ -635,12 +635,72 @@ def cambiar_estatus(pedido_id):
 # ----------------------------------------------------------------------
 # Vista financiera
 # ----------------------------------------------------------------------
+# 🔧 (17 sep 2026, pedido explícito de Israel: "quiero ver el resumen
+# por día a día del mes... total del día dividido en urgentes, a
+# domicilio, anticipos, por pagar = total venta") El costo de envío y
+# el cargo urgente NO son columnas propias en pedidos_confirmados -- el
+# envío queda guardado como un renglón más dentro de "productos" (ver
+# api_pedido_bot), y lo urgente es solo texto libre dentro de "notas"
+# (ver _es_pedido_urgente). Esta función desglosa un pedido ya
+# capturado en esas 5 categorías, reutilizando exactamente el mismo
+# criterio que ya usa _es_producto_real/_es_pedido_urgente para la nota
+# -- así el desglose de aquí siempre cuadra con lo que dice la nota real
+# del pedido, nunca un cálculo aparte que se pueda desincronizar.
+def _desglose_venta_pedido(pedido):
+    urgente = 50.0 if _es_pedido_urgente(pedido) else 0.0
+    domicilio = 0.0
+    for item in (pedido.get("productos") or []):
+        nombre = (item.get("producto") or "")
+        if _es_producto_real(nombre):
+            continue
+        try:
+            cantidad = float(item.get("cantidad") or 1)
+            precio = float(item.get("precio_unitario") or 0)
+        except (TypeError, ValueError):
+            cantidad, precio = 0, 0
+        domicilio += cantidad * precio
+    anticipo = round(float(pedido.get("anticipo") or 0), 2)
+    total = round(float(pedido.get("total") or 0), 2)
+    return {
+        "urgente": round(urgente, 2),
+        "domicilio": round(domicilio, 2),
+        "anticipo": anticipo,
+        "por_pagar": round(total - anticipo, 2),
+        "total": total,
+    }
+
+
+def _desglose_venta_por_dia(pedidos):
+    """Agrupa una lista de pedidos (de listar_capturados_en_rango) por
+    su día de captura (fecha_captura, en hora del negocio) y suma el
+    desglose de cada uno -- para la tabla día a día del mes. Regresa una
+    lista ordenada del día más reciente al más antiguo, incluyendo solo
+    los días que de verdad tuvieron al menos un pedido capturado."""
+    por_dia = {}
+    for p in pedidos:
+        dia = (p.get("fecha_captura") or "")[:10]
+        if not dia:
+            continue
+        d = _desglose_venta_pedido(p)
+        acumulado = por_dia.setdefault(dia, {"urgente": 0.0, "domicilio": 0.0, "anticipo": 0.0, "por_pagar": 0.0, "total": 0.0, "pedidos": 0})
+        for k in ("urgente", "domicilio", "anticipo", "por_pagar", "total"):
+            acumulado[k] = round(acumulado[k] + d[k], 2)
+        acumulado["pedidos"] += 1
+    filas = []
+    for dia in sorted(por_dia.keys(), reverse=True):
+        fecha_obj = datetime.date.fromisoformat(dia)
+        filas.append({"fecha": dia, "etiqueta": fecha_obj.strftime("%d/%m/%Y"), **por_dia[dia]})
+    return filas
+
+
 @app.route("/finanzas")
 def finanzas():
     periodo = request.args.get("periodo", "hoy")
     hoy = _hoy()
     nav_anterior = nav_siguiente = nav_actual = None
     es_actual = True
+    desglose_dia = None  # solo aplica al periodo "hoy" (ver más abajo)
+    desglose_por_dia_mes = None  # solo aplica al periodo "mes"
 
     # 🔧 (23 ago 2026, pedido de Israel: "aquí no es el mismo caso que se
     # pierde al terminar el mes?" -- mismo hueco que ya se corrigió en
@@ -679,14 +739,38 @@ def finanzas():
         nav_siguiente = {"periodo": "mes", "anio": anio_sig, "mes": mes_sig}
         nav_actual = {"periodo": "mes", "anio": hoy.year, "mes": hoy.month}
     else:
-        ini = fin = hoy
-        titulo = f"Hoy — {hoy.strftime('%d/%m/%Y')}"
+        # 🔧 (17 sep 2026, pedido explícito de Israel: "añade un
+        # calendario y poder escoger qué día quiero visualizar") Antes
+        # esta pestaña SIEMPRE era el día de hoy, sin forma de ver un
+        # día específico ya pasado. Ahora acepta ?fecha=YYYY-MM-DD para
+        # ver cualquier día -- si no se manda (o viene inválida), cae de
+        # vuelta a hoy, igual que siempre.
+        fecha_qs = request.args.get("fecha")
+        try:
+            fecha_elegida = datetime.date.fromisoformat(fecha_qs) if fecha_qs else hoy
+        except ValueError:
+            fecha_elegida = hoy
+        ini = fin = fecha_elegida
+        es_actual = (fecha_elegida == hoy)
+        titulo = f"{'Hoy' if es_actual else 'Día'} — {fecha_elegida.strftime('%d/%m/%Y')}"
         periodo = "hoy"
 
     pedidos = database.listar_capturados_en_rango(ini.isoformat(), fin.isoformat())
     total_anticipos = round(sum(p.get("anticipo") or 0 for p in pedidos), 2)
     total_ventas = round(sum(p.get("total") or 0 for p in pedidos), 2)
     total_saldos = round(sum(p.get("saldo") or 0 for p in pedidos), 2)
+
+    # 🔧 (17 sep 2026, pedido explícito de Israel: "el total del día
+    # dividido en urgentes, a domicilio, anticipos, por pagar = total
+    # venta") Mismas 2 categorías extra para cualquier período (Hoy,
+    # Semana o Mes) -- ver _desglose_venta_pedido arriba.
+    total_urgentes = round(sum(_desglose_venta_pedido(p)["urgente"] for p in pedidos), 2)
+    total_domicilio = round(sum(_desglose_venta_pedido(p)["domicilio"] for p in pedidos), 2)
+
+    # Tabla día a día, solo para la vista de Mes -- ver
+    # _desglose_venta_por_dia arriba.
+    if periodo == "mes":
+        desglose_por_dia_mes = _desglose_venta_por_dia(pedidos)
 
     # 🔧 (24 ago 2026, pedido de Israel: "resumen de ventas por mes, que se
     # actualice al momento de subir notas") Aparte del total del período
@@ -703,6 +787,9 @@ def finanzas():
     return render_template(
         "finanzas.html", pedidos=pedidos, periodo=periodo, titulo=titulo,
         total_anticipos=total_anticipos, total_ventas=total_ventas, total_saldos=total_saldos,
+        total_urgentes=total_urgentes, total_domicilio=total_domicilio,
+        desglose_por_dia_mes=desglose_por_dia_mes,
+        fecha_elegida_iso=ini.isoformat() if periodo == "hoy" else None,
         resumen_venta_mes=resumen_venta_mes, resumen_titulo_mes=f"{MESES_ES[hoy.month].capitalize()} {hoy.year}",
         nav_anterior=nav_anterior, nav_siguiente=nav_siguiente, nav_actual=nav_actual, es_actual=es_actual,
     )

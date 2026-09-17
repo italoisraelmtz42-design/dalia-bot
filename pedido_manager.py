@@ -425,6 +425,45 @@ def obtener_pedido_activo(telefono: str) -> Optional[int]:
         return None
 
 
+def pedido_ya_tiene_anticipo_confirmado(pedido_id: int) -> bool:
+    """🔧 (14 sep 2026, bug real y grave -- confirmado de nuevo el 17 sep
+    2026 con una clienta real, Carmen Bautista: su comprobante real era
+    de $50, pero el resumen del pedido le mostró "Anticipo YA PAGADO:
+    $100.00" -- un pago duplicado exacto). Causa raíz: pedido["anticipo_
+    confirmado"] se queda en True para siempre en la sesión en RAM una
+    vez confirmado (nunca se resetea en el camino exitoso, solo en los
+    casos BLOQUEADO) -- y crm.sincronizar_pedido() se llama después de
+    CADA turno de la conversación, sin importar si ya pasó por aquí
+    antes. Con el pedido ya creado, cada turno posterior de la MISMA
+    conversación (Fase 2: nombre, teléfono, evento, dirección,
+    tarjetita, confirmaciones...) volvía a caer en
+    confirmar_anticipo_pedido_existente() e insertaba OTRO renglón de
+    pago duplicado.
+
+    Este candado evita la reinserción: si el pedido YA está en estado
+    ANTICIPO_CONFIRMADO (o más adelante en su ciclo de vida), un nuevo
+    intento de "confirmar" no es una confirmación nueva de verdad --
+    es este mismo bug repitiéndose -- así que no debe registrar otro
+    pago."""
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT estado FROM pedidos WHERE id = ?", (pedido_id,),
+            ).fetchone()
+        if not row:
+            return False
+        return row["estado"] not in (
+            EstadoPedido.BORRADOR.value, EstadoPedido.CAPTURANDO_DATOS.value,
+            EstadoPedido.COTIZADO.value, EstadoPedido.PENDIENTE_ANTICIPO.value,
+        )
+    except Exception as e:
+        logger.error(f"pedido_ya_tiene_anticipo_confirmado: {e}")
+        # 🔧 Ante la duda, NUNCA insertar un pago de más -- si hay un
+        # error consultando, es más seguro tratarlo como "ya
+        # confirmado" (no hacer nada) que arriesgarse a duplicar.
+        return True
+
+
 def obtener_pedido(pedido_id: int) -> Optional[PedidoData]:
     try:
         with get_db_connection() as conn:
@@ -604,26 +643,54 @@ def confirmar_anticipo_pedido_existente(pedido_id: int, telefono: str, borrador:
     esta función, se resincronizan los productos y los datos de entrega
     completos desde el borrador actual -- reemplaza lo que hubiera antes
     con el estado más reciente, igual que hace crear_pedido_desde_borrador
-    la primera vez."""
+    la primera vez.
+
+    🔧 (17 sep 2026, MISMO DÍA, bug real y grave detectado con una
+    clienta real -- Carmen Bautista: su comprobante real era de $50,
+    pero el resumen de su pedido mostró "Anticipo YA PAGADO: $100.00" --
+    un pago duplicado exacto). Causa raíz: esta función se llama después
+    de CADA turno de la conversación mientras el pedido siga con
+    anticipo_confirmado=True en RAM (nunca se resetea) -- antes,
+    insertaba OTRO renglón de pago cada vez, sin importar si ya se
+    había registrado antes. Ahora, la parte de REGISTRAR EL PAGO (y
+    marcar el evento ANTICIPO_CONFIRMADO) solo ocurre la PRIMERA vez
+    -- ver pedido_ya_tiene_anticipo_confirmado() arriba -- pero la
+    resincronización de productos/entrega (la corrección que sí
+    queremos permitir) sigue pasando SIEMPRE, en cada turno, sin
+    importar cuántas veces se llame."""
+    ya_confirmado_antes = pedido_ya_tiene_anticipo_confirmado(pedido_id)
     modo_atencion_nuevo = ModoAtencion.BOT.value if FASE_2_ACTIVA else ModoAtencion.DALIA.value
     fase_nueva = "post_pago" if FASE_2_ACTIVA else "venta"
     try:
         with get_db_connection() as conn:
-            conn.execute(
-                """UPDATE pedidos SET
-                   estado = ?, modo_atencion = ?, fase = ?, es_urgente = ?, fecha_actualizacion = ?
-                   WHERE id = ?""",
-                (
-                    EstadoPedido.ANTICIPO_CONFIRMADO.value,
-                    modo_atencion_nuevo,
-                    fase_nueva,
-                    1 if (borrador.get("es_urgente") or borrador.get("urgente")) else 0,
-                    _now(),
-                    pedido_id,
-                ),
-            )
+            if not ya_confirmado_antes:
+                conn.execute(
+                    """UPDATE pedidos SET
+                       estado = ?, modo_atencion = ?, fase = ?, es_urgente = ?, fecha_actualizacion = ?
+                       WHERE id = ?""",
+                    (
+                        EstadoPedido.ANTICIPO_CONFIRMADO.value,
+                        modo_atencion_nuevo,
+                        fase_nueva,
+                        1 if (borrador.get("es_urgente") or borrador.get("urgente")) else 0,
+                        _now(),
+                        pedido_id,
+                    ),
+                )
+            else:
+                # Ya estaba confirmado -- esto es una corrección
+                # posterior (color/cantidad/fecha/tipo de entrega), no
+                # una confirmación nueva. Se actualiza es_urgente por si
+                # cambió la fecha, pero NUNCA se toca estado/modo_atencion/
+                # fase de nuevo (no hay motivo para reabrir el pedido ni
+                # regresarlo de modo DALIA a modo BOT).
+                conn.execute(
+                    "UPDATE pedidos SET es_urgente = ?, fecha_actualizacion = ? WHERE id = ?",
+                    (1 if (borrador.get("es_urgente") or borrador.get("urgente")) else 0, _now(), pedido_id),
+                )
 
-            # ---- resincronizar productos (ver docstring arriba) ----
+            # ---- resincronizar productos (ver docstring arriba) --
+            # SIEMPRE, sin importar si ya estaba confirmado o no.
             conn.execute("DELETE FROM pedido_items WHERE pedido_id = ?", (pedido_id,))
             items = borrador.get("items")
             if items and isinstance(items, list) and items:
@@ -632,7 +699,7 @@ def confirmar_anticipo_pedido_existente(pedido_id: int, telefono: str, borrador:
             elif borrador.get("producto"):
                 _insert_item(conn, pedido_id, borrador)
 
-            # ---- resincronizar datos de entrega ----
+            # ---- resincronizar datos de entrega (también siempre) ----
             conn.execute(
                 """UPDATE entregas SET tipo_entrega = ?, municipio = ?, direccion = ?,
                    fecha_entrega = ?, costo_envio = ? WHERE pedido_id = ?""",
@@ -646,29 +713,34 @@ def confirmar_anticipo_pedido_existente(pedido_id: int, telefono: str, borrador:
                 ),
             )
 
-            monto, comprobante = _resolver_monto_anticipo(
-                borrador, telefono, "confirmar_anticipo_pedido_existente"
-            )
-            conn.execute(
-                """INSERT INTO pagos
-                   (pedido_id, tipo, monto, metodo, comprobante, confirmado)
-                   VALUES (?, ?, ?, ?, ?, 1)""",
-                (
-                    pedido_id,
-                    "anticipo",
-                    monto,
-                    borrador.get("metodo_pago") or "transferencia",
-                    comprobante,
-                ),
-            )
-            conn.execute(
-                """INSERT INTO pedido_eventos (pedido_id, evento, descripcion, origen)
-                   VALUES (?, ?, ?, ?)""",
-                (pedido_id, "ANTICIPO_CONFIRMADO", "Anticipo recibido y confirmado", OrigenEvento.SISTEMA.value),
-            )
+            if not ya_confirmado_antes:
+                # ---- registrar el pago -- SOLO la primera vez ----
+                monto, comprobante = _resolver_monto_anticipo(
+                    borrador, telefono, "confirmar_anticipo_pedido_existente"
+                )
+                conn.execute(
+                    """INSERT INTO pagos
+                       (pedido_id, tipo, monto, metodo, comprobante, confirmado)
+                       VALUES (?, ?, ?, ?, ?, 1)""",
+                    (
+                        pedido_id,
+                        "anticipo",
+                        monto,
+                        borrador.get("metodo_pago") or "transferencia",
+                        comprobante,
+                    ),
+                )
+                conn.execute(
+                    """INSERT INTO pedido_eventos (pedido_id, evento, descripcion, origen)
+                       VALUES (?, ?, ?, ?)""",
+                    (pedido_id, "ANTICIPO_CONFIRMADO", "Anticipo recibido y confirmado", OrigenEvento.SISTEMA.value),
+                )
             conn.commit()
-        borrar_borrador(telefono)
-        logger_pedidos.info(f"Pedido {pedido_id} actualizado con anticipo")
+        if not ya_confirmado_antes:
+            borrar_borrador(telefono)
+            logger_pedidos.info(f"Pedido {pedido_id} actualizado con anticipo (pago registrado)")
+        else:
+            logger_pedidos.debug(f"Pedido {pedido_id} resincronizado (corrección post-anticipo, sin duplicar pago)")
     except Exception as e:
         logger.error(f"confirmar_anticipo_pedido_existente: {e}")
 

@@ -171,9 +171,15 @@ def sincronizar_pedido(*args, canal="whatsapp", **kwargs):
             # pasaba a modo DALIA, y el bot seguía respondiendo para
             # siempre en ese número, aunque el cliente sí acabara de mandar
             # un anticipo nuevo. Ahora se actualiza el pedido existente:
-            # pasa a modo DALIA y se registra el pago.
+            # pasa a modo DALIA y se registra el pago -- o, si ya se había
+            # confirmado antes (ver pedido_ya_tiene_anticipo_confirmado),
+            # solo resincroniza productos/entrega sin duplicar el pago.
+            _ya_confirmado_para_log = pedido_manager.pedido_ya_tiene_anticipo_confirmado(pedido_id)
             pedido_manager.confirmar_anticipo_pedido_existente(pedido_id, telefono, borrador)
-            logger_crm.info(f"🔁 Pedido existente {pedido_id} actualizado a modo DALIA con nuevo anticipo.")
+            if _ya_confirmado_para_log:
+                logger_crm.debug(f"🔁 Pedido {pedido_id} resincronizado (corrección post-anticipo, sin duplicar pago).")
+            else:
+                logger_crm.info(f"🔁 Pedido existente {pedido_id} actualizado a modo DALIA con nuevo anticipo.")
         return pedido_manager.obtener_pedido(pedido_id)
     else:
         pedido_manager.guardar_borrador_pedido(telefono, borrador)

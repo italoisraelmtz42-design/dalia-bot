@@ -2520,21 +2520,26 @@ TOOLS = [
         "function": {
             "name": "agregar_item",
             "description": (
-                "Agrega un producto al pedido o SUMA cantidad si ya existe el mismo "
-                "lote/producto -- el sistema hace la suma, tú solo mandas el número "
-                "NUEVO que el cliente acaba de decir (nunca hagas tú la suma ni mandes "
-                "el total ya sumado). "
-                "🚨 Úsala para 'agrégame X más', 'X piezas más', 'otras X' -- para "
-                "CORREGIR o FIJAR una cantidad ya existente a un número exacto (ej. "
-                "'mejor que sean 15, no 20'), usa actualizar_item en su lugar, nunca "
-                "esta. 🚨 Error real ya cometido, nunca lo repitas: una clienta con 13 "
-                "piezas ya confirmadas dijo 'agrégame 10 más' -- el bot le contestó "
-                "correctamente 'ahora tienes 23' en el texto, pero mandó cantidad=10 "
-                "aquí (el número que ella dijo, sin sumarlo a las 13 que ya tenía) -- "
-                "el pedido real se quedó en 10, no en 23, muy por debajo de lo que el "
-                "propio bot le había dicho que tenía. Cuando el cliente diga 'X más', "
-                "manda cantidad=X (el número nuevo tal cual), NUNCA la suma que tú "
-                "calculaste -- el sistema ya suma solo. "
+                "Agrega un producto nuevo al pedido, o actualiza uno ya existente "
+                "(mismo producto/color) con el TOTAL exacto de piezas que el cliente "
+                "confirmó -- 'cantidad' es siempre el número TOTAL, no un incremento; "
+                "llamarla varias veces con el mismo total (ej. al ir confirmando color, "
+                "entrega, fecha en el mismo turno) es seguro y nunca duplica nada. "
+                "🚨 Error real y GRAVE ya cometido, nunca lo repitas: una versión anterior "
+                "de esta función SUMABA 'cantidad' sobre lo ya existente en vez de "
+                "fijarlo -- una clienta con 35 abanicos terminó con 140 en el pedido "
+                "real (35 -> 70 -> 140, el doble cada vez) solo porque el modelo volvió "
+                "a mencionar la cantidad varias veces en la misma conversación, cada vez "
+                "sumándose sobre la anterior sin que nadie pidiera más piezas. NUNCA "
+                "sumes tú mismo ni asumas que 'cantidad' se acumula -- manda siempre el "
+                "número TOTAL real que debe quedar. "
+                "🚨 Para el caso de 'agrégame X más', 'X piezas más', 'otras X' (el "
+                "cliente SÍ quiere sumar piezas a lo que ya tenía): usa el campo "
+                "piezas_adicionales=X en su lugar (nunca calcules tú la suma ni la "
+                "mandes en 'cantidad') -- el sistema hace esa suma por ti, una sola vez, "
+                "de forma segura. "
+                "Para CORREGIR o FIJAR una cantidad a un número exacto distinto (ej. "
+                "'mejor que sean 15, no 20'), usa actualizar_item en su lugar. "
                 "NO envíes precio_unitario: el sistema lo asigna solo. "
                 "No borra otros productos del pedido. "
                 "⚠️ NO llames esta función hasta que el cliente te haya dicho un número "
@@ -2550,10 +2555,25 @@ TOOLS = [
                     "cantidad": {
                         "type": "integer",
                         "description": (
-                            "Número de piezas que el cliente dijo EXPLÍCITAMENTE. "
-                            "Nunca asumas 1 ni ningún otro valor -- si el cliente no ha "
-                            "dicho un número, pregúntaselo primero y espera la respuesta "
-                            "antes de llamar a esta función."
+                            "El número TOTAL de piezas que debe quedar para este "
+                            "producto/color -- NUNCA un incremento, NUNCA lo sumes tú "
+                            "mismo sobre lo que ya había. Repetir el mismo total en "
+                            "varias llamadas es seguro. Si el cliente pidió sumar piezas "
+                            "a lo que ya tenía ('agrégame X más'), usa piezas_adicionales "
+                            "en su lugar, no calcules tú la suma aquí."
+                        ),
+                    },
+                    "piezas_adicionales": {
+                        "type": "integer",
+                        "description": (
+                            "SOLO cuando el cliente pide explícitamente sumar piezas a "
+                            "las que ya tenía confirmadas para este mismo producto/color "
+                            "(ej. 'agrégame 10 más', 'ponme 5 piezas más'). Manda aquí "
+                            "ÚNICAMENTE el número adicional que mencionó (ej. 10), nunca "
+                            "el total ya sumado -- el sistema hace la suma real. No uses "
+                            "este campo para la primera vez que se agrega un producto, "
+                            "ni para simplemente reconfirmar una cantidad ya dicha -- "
+                            "para eso usa 'cantidad'."
                         ),
                     },
                     "color_toalla": {"type": "string"},
@@ -3301,27 +3321,34 @@ def agregar_item_pedido(pedido, argumentos_json):
     # manda cantidad aquí pero ya había una cantidad pendiente guardada de
     # un turno anterior, se usa esa en vez de caer directo al default de 1.
     cantidad_solicitada = datos.get("cantidad") or pedido.get("cantidad_pendiente")
+    piezas_adicionales = datos.get("piezas_adicionales")
 
     existing = _buscar_item(pedido, producto, datos)
     if existing:
-        # 🔧 (14 sep 2026, bug real y grave: María Magdalena Covarrubias,
-        # 13 piezas rosa pastel ya confirmadas -- dijo "agrégame 10 más"
-        # y el bot le contestó de palabra "ahora tienes 23" (13+10, bien
-        # calculado en el texto), pero lo que quedó GUARDADO fue 10, no
-        # 23 -- el pedido real se quedó con 3 piezas MENOS de las que
-        # ya tenía, no con 10 de más. Causa raíz: esta línea decía
-        # "existing['cantidad'] = int(cantidad_solicitada)" -- un
-        # REEMPLAZO directo, no una suma -- contradiciendo tanto el
-        # comentario de arriba ("sumar cantidad si viene") como la
-        # descripción de la propia herramienta agregar_item ("agrega un
-        # producto al pedido o SUMA cantidad si ya existe el mismo
-        # producto"). Como agregar_item es justo la herramienta que el
-        # modelo usa para "quiero X piezas MÁS" (a diferencia de
-        # actualizar_item, que sí es para corregir/fijar un número
-        # exacto), esta función tiene que sumar de verdad para cumplir
-        # su propio contrato documentado.
-        if cantidad_solicitada:
-            existing["cantidad"] = int(existing.get("cantidad") or 0) + int(cantidad_solicitada)
+        # 🔧 (17 sep 2026, bug real y GRAVE causado por el fix del 14 sep:
+        # Erika Treviño pidió 35 abanicos -- el pedido terminó con 140
+        # (35 -> 70 -> 140, exactamente el doble cada vez). Causa raíz
+        # del fix anterior: se hizo que "cantidad" SIEMPRE sumara sobre
+        # lo ya existente, para resolver el caso de María Magdalena
+        # ("agrégame 10 más" se guardaba como reemplazo, no como suma).
+        # Pero el modelo, en la práctica, vuelve a llamar agregar_item
+        # con la MISMA cantidad total una y otra vez como parte normal
+        # de la conversación (para fijar color, tipo de entrega, fecha,
+        # etc. en el mismo turno, o simplemente para "confirmar" lo que
+        # ya se había dicho) -- no solo cuando el cliente de verdad pide
+        # piezas adicionales. Con la suma automática, cada una de esas
+        # llamadas redundantes DUPLICABA la cantidad ya guardada.
+        #
+        # Ahora "cantidad" vuelve a ser un valor ABSOLUTO (igual que en
+        # actualizar_item) -- llamarla varias veces con el mismo número
+        # es seguro, nunca duplica nada. Para el caso real de "agrégame
+        # X más", existe un campo NUEVO y EXPLÍCITO, piezas_adicionales,
+        # que sí suma -- así la intención de sumar nunca depende de que
+        # el modelo "adivine" cuál comportamiento aplica.
+        if piezas_adicionales not in (None, ""):
+            existing["cantidad"] = int(existing.get("cantidad") or 0) + int(piezas_adicionales)
+        elif cantidad_solicitada not in (None, ""):
+            existing["cantidad"] = int(cantidad_solicitada)
         for k in ("color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
                   "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado", "con_bolsa"):
             if datos.get(k) not in (None, ""):
@@ -3337,7 +3364,7 @@ def agregar_item_pedido(pedido, argumentos_json):
 
     item = {
         "producto": producto,
-        "cantidad": int(cantidad_solicitada or 1),
+        "cantidad": int(cantidad_solicitada or piezas_adicionales or 1),
     }
     for k in ("color_toalla", "color_mono", "color_velita", "tipo_jaboncito",
               "color_jaboncito", "nombre_bebe", "tarjetita", "mono_personalizado", "con_bolsa"):

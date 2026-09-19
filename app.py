@@ -1801,10 +1801,30 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None, 
             f"(cantidad, colores, etc.).\n"
         )
 
+    contexto_texto_citado = ""
+    if isinstance(pedido, dict) and pedido.get("_texto_citado_en_respuesta"):
+        # 🔧 (18 sep 2026, MISMO DÍA, pedido explícito de Israel: "el bot
+        # no puede ver los mensajes anteriores que le reenvían o sobre
+        # los mensajes que le están contestando" -- confirmó que pasa
+        # igual con mensajes de TEXTO citados, no solo fotos). Ver
+        # resolver_texto_de_mensaje_citado -- esto es el texto real y
+        # exacto de ESE mensaje anterior (del bot o del propio
+        # cliente), no una suposición de a qué se refiere.
+        contexto_texto_citado = (
+            f"\n🚨 CONTEXTO REAL DE ESTE MENSAJE: el cliente usó la función de "
+            f"\"Responder\" de Messenger directamente sobre este mensaje anterior de la "
+            f"conversación: \"{pedido['_texto_citado_en_respuesta']}\". Su mensaje nuevo "
+            f"es la respuesta específica a ESE mensaje citado -- interprétalo con ese "
+            f"contexto en mente, aunque su mensaje nuevo por sí solo sea corto o "
+            f"ambiguo (ej. si el mensaje citado preguntaba algo puntual, su respuesta "
+            f"nueva contesta justo eso, no lo más reciente de la conversación).\n"
+        )
+
     prompt = f"""
 Eres DALIA, asesora de ventas de Recuerditos Dalia.
 {contexto_anuncio}
 {contexto_producto_citado}
+{contexto_texto_citado}
 Toda la información oficial está en la Base de Conocimiento.
 
 REGLAS (prioridad máxima — leen antes que cualquier otra instrucción):
@@ -6947,6 +6967,48 @@ def resolver_producto_de_mensaje_citado(mid, pagina_id=None):
         return None, None
 
 
+def resolver_texto_de_mensaje_citado(mid, pagina_id=None):
+    """🔧 (18 sep 2026, MISMO DÍA, pedido explícito de Israel: "el bot no
+    puede ver los mensajes anteriores que le reenvían o sobre los
+    mensajes que le están contestando" -- confirmó que además del caso
+    de fotos (ver resolver_producto_de_mensaje_citado arriba, ya
+    corregido y confirmado en producción), pasa igual cuando el cliente
+    usa "Responder" sobre un mensaje de TEXTO anterior (del bot o de
+    él mismo) -- el bot no sabe a cuál mensaje se refiere exactamente.
+
+    Se usa GET /{mid}?fields=message (documentado en developers.
+    facebook.com/docs/graph-api/reference/message) para leer el texto
+    real de ESE mensaje anterior -- se llama SOLO cuando
+    resolver_producto_de_mensaje_citado ya no encontró ninguna foto de
+    producto nuestra (evita gastar una segunda llamada a la API cuando
+    la primera ya resolvió el caso más común).
+
+    Regresa el texto tal cual, o None si no se pudo leer (nunca truena
+    -- el bot sigue funcionando normal, respondiendo solo con base en
+    el texto nuevo del cliente, como ya hacía antes de este fix).
+
+    🚨 AVISO: igual que la función hermana de arriba, esto no se pudo
+    probar contra la API real de Meta desde este entorno (sin acceso a
+    internet/token real) -- confirma con un caso real en producción que
+    el campo se llama "message" tal cual."""
+    if not mid:
+        return None
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{mid}",
+            params={"fields": "message", "access_token": token_para_pagina(pagina_id)},
+            timeout=10,
+        )
+        if r.status_code >= 400:
+            print(f"⚠️ No se pudo consultar el texto del mensaje citado {mid}: {r.status_code} {r.text[:200]}")
+            return None
+        texto = (r.json() or {}).get("message")
+        return texto.strip() if texto and texto.strip() else None
+    except Exception as e:
+        print(f"⚠️ Excepción resolviendo el texto del mensaje citado {mid}: {repr(e)}")
+        return None
+
+
 def registrar_entrada_cliente(numero, texto_para_guardar, tipo="texto", canal="whatsapp", pagina_id=None):
     cliente = crm.cargar_cliente(numero)
     crm.guardar_mensaje_cliente(cliente, texto_para_guardar, tipo=tipo, canal=canal)
@@ -6963,7 +7025,7 @@ def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp", pagina_id=None
     enviar_mensaje_canal(numero, respuesta, canal, pagina_id=pagina_id)
 
 
-def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None, proveedor_whatsapp="meta", media_url_imagen_ycloud=None, media_url_audio_ycloud=None, media_url_audio_messenger=None, referral_anuncio=None, producto_citado_nombre=None):
+def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None, proveedor_whatsapp="meta", media_url_imagen_ycloud=None, media_url_audio_ycloud=None, media_url_audio_messenger=None, referral_anuncio=None, producto_citado_nombre=None, texto_citado=None):
     # 🔧 Marca, para ESTE hilo únicamente, si los envíos de este mensaje
     # deben salir por YCloud (número de prueba) o por Meta (producción,
     # comportamiento de siempre). Ver _usar_ycloud_en_este_hilo() arriba.
@@ -7189,6 +7251,14 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         sesion["pedido"]["_producto_citado_en_respuesta"] = producto_citado_nombre
         print(f"📎 Este mensaje responde a nuestra foto de: {producto_citado_nombre}")
 
+    # 🔧 (18 sep 2026, MISMO DÍA) Ver resolver_texto_de_mensaje_citado
+    # arriba -- respaldo para cuando el mensaje citado no era una foto
+    # de producto, sino un mensaje de TEXTO anterior (del bot o del
+    # propio cliente).
+    if texto_citado:
+        sesion["pedido"]["_texto_citado_en_respuesta"] = texto_citado
+        print(f"📎 Este mensaje responde al texto anterior: {texto_citado!r}")
+
     # 🔧 CAMBIO DE DECISIÓN DE NEGOCIO (segunda vuelta): ahora sí se
     # fuerza otra vez un saludo garantizado en el primer mensaje de cada
     # cliente nuevo -- pero a diferencia de la primera versión (que
@@ -7272,6 +7342,7 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             # aquí para que no se le siga recordando al modelo en mensajes
             # futuros sin relación con esta foto en particular.
             sesion["pedido"]["_producto_citado_en_respuesta"] = None
+            sesion["pedido"]["_texto_citado_en_respuesta"] = None
         except Exception as e:
             print("❌ Error llamando a OpenAI:", repr(e))
             respuesta = "Disculpa, tuve un problema técnico. ¿Me puedes repetir tu mensaje? 🙂"
@@ -7821,6 +7892,7 @@ def handle_message_messenger():
                 # adjunto nuevo del cliente, es una referencia a un
                 # mensaje YA EXISTENTE en la conversación.
                 producto_citado_nombre = None
+                texto_citado = None
                 reply_to_mid = (mensaje.get("reply_to") or {}).get("mid")
                 if reply_to_mid:
                     _clave_citada, producto_citado_nombre = resolver_producto_de_mensaje_citado(
@@ -7828,6 +7900,14 @@ def handle_message_messenger():
                     )
                     if producto_citado_nombre:
                         print(f"📎 Mensaje respondiendo a nuestra foto de: {producto_citado_nombre}")
+                    else:
+                        # 🔧 (18 sep 2026, mismo día) No era una foto de
+                        # producto nuestra -- puede ser un mensaje de
+                        # TEXTO citado (del bot o del propio cliente).
+                        # Ver resolver_texto_de_mensaje_citado arriba.
+                        texto_citado = resolver_texto_de_mensaje_citado(reply_to_mid, pagina_id=pagina_id_actual)
+                        if texto_citado:
+                            print(f"📎 Mensaje respondiendo al texto anterior: {texto_citado!r}")
 
                 adjuntos = mensaje.get("attachments") or []
                 imagen_url = None
@@ -7875,7 +7955,7 @@ def handle_message_messenger():
                         procesar_mensaje_en_fondo,
                         psid, texto_cliente or "(el cliente reaccionó con un sticker/👍)",
                         canal="messenger", pagina_id=pagina_id_actual, referral_anuncio=referral_anuncio,
-                        producto_citado_nombre=producto_citado_nombre,
+                        producto_citado_nombre=producto_citado_nombre, texto_citado=texto_citado,
                     )
                 elif imagen_url:
                     _lanzar_en_fondo(
@@ -7883,6 +7963,7 @@ def handle_message_messenger():
                         psid, texto_cliente,
                         media_url_imagen_messenger=imagen_url, canal="messenger", pagina_id=pagina_id_actual,
                         referral_anuncio=referral_anuncio, producto_citado_nombre=producto_citado_nombre,
+                        texto_citado=texto_citado,
                     )
                 elif audio_url:
                     _lanzar_en_fondo(
@@ -7890,13 +7971,14 @@ def handle_message_messenger():
                         psid, texto_cliente,
                         media_url_audio_messenger=audio_url, canal="messenger", pagina_id=pagina_id_actual,
                         referral_anuncio=referral_anuncio, producto_citado_nombre=producto_citado_nombre,
+                        texto_citado=texto_citado,
                     )
                 elif texto_cliente:
                     _lanzar_en_fondo(
                         procesar_mensaje_en_fondo,
                         psid, texto_cliente,
                         canal="messenger", pagina_id=pagina_id_actual, referral_anuncio=referral_anuncio,
-                        producto_citado_nombre=producto_citado_nombre,
+                        producto_citado_nombre=producto_citado_nombre, texto_citado=texto_citado,
                     )
                 else:
                     _lanzar_en_fondo(

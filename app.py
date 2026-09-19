@@ -906,6 +906,26 @@ def _normalizar_color(valor: str) -> str:
     v = v.replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
     return v
 
+
+# 🔧 (18 sep 2026, bug real detectado por Israel) A diferencia de los
+# colores (que ya tenían color_es_valido / verificar_color desde hace
+# semanas), la FIGURA del jaboncito nunca tuvo ninguna validación --
+# caso real: con un pedido de "león de toalla" ya con todos sus colores
+# confirmados, tipo_jaboncito terminó guardado como "jaboncito" (ni
+# siquiera es una figura real) y el checklist lo mostró con ✅ como si
+# la clienta ya lo hubiera elegido, cuando en realidad nunca se le
+# preguntó. Mismo patrón que color_es_valido: si el modelo manda un
+# valor que no es ninguna de las 6 figuras oficiales, se rechaza en vez
+# de guardarse tal cual.
+FIGURAS_JABONCITO_VALIDAS = {"piecito", "cruz", "corazon", "flor", "osito", "estrella"}
+
+
+def figura_jaboncito_es_valida(valor: str) -> bool:
+    if not valor:
+        return True  # todavía no se ha dado, no hay nada que rechazar
+    return _normalizar_color(valor) in FIGURAS_JABONCITO_VALIDAS
+
+
 def color_es_valido(valor: str, producto: str = "") -> bool:
     """Válido para cualquier campo de color EXCEPTO la pareja
     toalla+moño de osito toalla afelpada, que se valida aparte con
@@ -1761,9 +1781,30 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None, 
             f"osito con jaboncito, lee el título real de arriba.\n"
         )
 
+    contexto_producto_citado = ""
+    if isinstance(pedido, dict) and pedido.get("_producto_citado_en_respuesta"):
+        # 🔧 (18 sep 2026, pedido explícito de Israel: "el bot no puede
+        # ver lo que el cliente reenvía" -- caso real, Laura Herrera
+        # usó "Responder" de Messenger sobre la foto del osito con
+        # jaboncito que el bot ya le había mandado, y el bot no tenía
+        # forma de saberlo, así que le siguió preguntando qué producto
+        # quería). Ver resolver_producto_de_mensaje_citado -- esto NO es
+        # una suposición, es el nombre exacto del producto de la foto
+        # que NOSOTROS mandamos y que el cliente citó con "Responder".
+        contexto_producto_citado = (
+            f"\n🚨 CONTEXTO REAL DE ESTE MENSAJE: el cliente usó la función de "
+            f"\"Responder\" de Messenger directamente sobre la foto que TÚ le mandaste "
+            f"de \"{pedido['_producto_citado_en_respuesta']}\" -- aunque en su mensaje de "
+            f"texto no repita el nombre del producto, está confirmando que se refiere a "
+            f"ESE modelo específico. No le preguntes de nuevo a qué producto se refiere; "
+            f"úsalo como el producto de este pedido y sigue con lo que haga falta "
+            f"(cantidad, colores, etc.).\n"
+        )
+
     prompt = f"""
 Eres DALIA, asesora de ventas de Recuerditos Dalia.
 {contexto_anuncio}
+{contexto_producto_citado}
 Toda la información oficial está en la Base de Conocimiento.
 
 REGLAS (prioridad máxima — leen antes que cualquier otra instrucción):
@@ -1842,6 +1883,19 @@ REGLAS CRÍTICAS DE MEMORIA Y MÚLTIPLES PRODUCTOS (auditoría):
   clienta sin ese dato. Revisa el bloque "[📋 DATOS QUE TODAVÍA FALTAN POR
   PREGUNTAR]": si aparece color_jaboncito ahí, pregúntalo aparte de la
   figura, aunque la figura ya esté confirmada.
+- 🔧 "COLOR DE VELITA" SOLO EXISTE PARA VELAS DE TOALLA, NUNCA PARA
+  ANIMALITOS: el campo color_velita es EXCLUSIVO de los productos "vela
+  de toalla chica/grande" -- ningún animalito de toalla (osito, león,
+  elefante, jirafa, caballo, conejo, perrito, búho, unicornio, mariposa)
+  tiene ni necesita ese dato, sin importar cuántos colores lleve. 🚨
+  Error real ya cometido, nunca lo repitas: con un pedido de "león de
+  toalla" ya con toalla, moño y jaboncito confirmados, el bot preguntó
+  de la nada "¿qué color de velita prefieres para el león?" -- un campo
+  que no existe para ese producto y que nunca se pidió en ningún
+  archivo de conocimiento ni en el checklist real del sistema. Si el
+  bloque "[📋 DATOS QUE TODAVÍA FALTAN POR PREGUNTAR]" no menciona
+  color_velita para ese item, NUNCA lo preguntes -- confía en esa lista,
+  no en tu propia idea de qué campos "deberían" aplicar.
 - 🔧 CAMBIAR DE MODELO (no lo confundas con AGREGAR un modelo adicional):
   si el cliente ya tiene un producto en su pedido y luego indica que
   prefiere OTRO modelo distinto para lo mismo que está pidiendo (ej. te
@@ -3335,6 +3389,15 @@ def _validar_colores_item(item):
         if item.get(campo) and not color_es_valido(item[campo], pref):
             print(f"🚫 Color inválido rechazado: {campo}={item[campo]}")
             item[campo] = None
+    # 🔧 (18 sep 2026, bug real: "tipo_jaboncito" terminó guardado como
+    # "jaboncito" -- un valor que no es ninguna de las 6 figuras
+    # oficiales -- para un león de toalla que nunca llegó a elegir
+    # figura. Mismo patrón que los colores: se rechaza en vez de
+    # guardarse tal cual, para que el checklist lo siga mostrando como
+    # pendiente en vez de darlo por confirmado con un valor inválido.
+    if item.get("tipo_jaboncito") and not figura_jaboncito_es_valida(item["tipo_jaboncito"]):
+        print(f"🚫 Figura de jaboncito inválida rechazada: tipo_jaboncito={item['tipo_jaboncito']}")
+        item["tipo_jaboncito"] = None
     # 🔧 Validación extra para osito toalla afelpada: la pareja
     # toalla+moño debe ser una de las 6 combinaciones oficiales, no
     # cualquier combinación de colores individualmente válidos.
@@ -6812,6 +6875,78 @@ def resolver_nombre_messenger(psid, pagina_id=None):
     return None
 
 
+def resolver_producto_de_mensaje_citado(mid, pagina_id=None):
+    """🔧 (18 sep 2026, pedido explícito de Israel: "el bot no puede ver
+    lo que el cliente reenvía" -- caso real: Laura Herrera usó la
+    función de RESPONDER de Messenger sobre la foto del osito con
+    jaboncito que el bot le había mandado antes, y escribió "Me
+    gustaría hacer un pedido de 30 piezas" -- el bot no tenía forma de
+    saber a qué foto se refería, así que le siguió preguntando qué
+    producto quería.
+
+    Cuando alguien usa "Responder" sobre un mensaje anterior, Meta manda
+    en el webhook message.reply_to.mid -- el ID de ESE mensaje anterior
+    (documentado en developers.facebook.com/.../webhooks/webhook-events/
+    messages, sección "Reply Message") -- pero NO su contenido. Para
+    saber qué había en ese mensaje, hay que consultarlo aparte:
+    GET /{mid}/attachments (requiere permiso pages_messaging, que el
+    bot ya tiene para poder mandar mensajes).
+
+    Como las fotos de producto que el bot manda automáticamente siempre
+    salen de nuestro propio servidor (/imagenes/<archivo>, ver
+    url_imagen_producto), NO hace falta Vision para identificar el
+    producto -- el nombre del archivo en la URL YA ES la clave del
+    catálogo. Esto es mucho más confiable que mandarlo a Vision de
+    nuevo: sabemos con certeza qué foto mandamos, porque la mandamos
+    nosotros.
+
+    Regresa (clave_producto, nombre_mostrar) si se pudo resolver, o
+    (None, None) si el mensaje citado no era una foto nuestra, o si la
+    consulta a la API falló por cualquier motivo (nunca truena, solo
+    se pierde el contexto extra -- el bot sigue funcionando normal,
+    preguntando como ya hacía antes de este fix).
+
+    🚨 AVISO: esta función no se pudo probar contra la API real de Meta
+    (sin acceso a internet/token real en el entorno donde se escribió)
+    -- valida con una prueba real en producción que el campo de la URL
+    de la imagen (image_data.url según la documentación) sea el
+    correcto; si Meta regresa el dato en otro campo, ajusta la lista
+    de "posibles_campos_url" de abajo."""
+    if not mid:
+        return None, None
+    try:
+        r = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{mid}/attachments",
+            params={"access_token": token_para_pagina(pagina_id)},
+            timeout=10,
+        )
+        if r.status_code >= 400:
+            print(f"⚠️ No se pudo consultar los adjuntos del mensaje citado {mid}: {r.status_code} {r.text[:200]}")
+            return None, None
+        datos = r.json()
+        adjuntos = datos.get("data") or ([datos] if datos.get("image_data") or datos.get("file_url") else [])
+        for adj in adjuntos:
+            posibles_campos_url = [
+                (adj.get("image_data") or {}).get("url"),
+                adj.get("file_url"),
+                (adj.get("payload") or {}).get("url"),
+            ]
+            url = next((u for u in posibles_campos_url if u), None)
+            if not url or "/imagenes/" not in url:
+                continue
+            nombre_archivo = url.split("/imagenes/", 1)[1].split("?")[0]
+            from urllib.parse import unquote as _unquote
+            nombre_archivo = _unquote(nombre_archivo)
+            clave = _clave_sin_acentos(Path(nombre_archivo).stem.strip().lower().replace(" ", "_"))
+            info = CATALOGO_IMAGENES.get(clave)
+            if info:
+                return clave, info["nombre_mostrar"]
+        return None, None
+    except Exception as e:
+        print(f"⚠️ Excepción resolviendo mensaje citado {mid}: {repr(e)}")
+        return None, None
+
+
 def registrar_entrada_cliente(numero, texto_para_guardar, tipo="texto", canal="whatsapp", pagina_id=None):
     cliente = crm.cargar_cliente(numero)
     crm.guardar_mensaje_cliente(cliente, texto_para_guardar, tipo=tipo, canal=canal)
@@ -6828,7 +6963,7 @@ def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp", pagina_id=None
     enviar_mensaje_canal(numero, respuesta, canal, pagina_id=pagina_id)
 
 
-def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None, proveedor_whatsapp="meta", media_url_imagen_ycloud=None, media_url_audio_ycloud=None, media_url_audio_messenger=None, referral_anuncio=None):
+def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None, proveedor_whatsapp="meta", media_url_imagen_ycloud=None, media_url_audio_ycloud=None, media_url_audio_messenger=None, referral_anuncio=None, producto_citado_nombre=None):
     # 🔧 Marca, para ESTE hilo únicamente, si los envíos de este mensaje
     # deben salir por YCloud (número de prueba) o por Meta (producción,
     # comportamiento de siempre). Ver _usar_ycloud_en_este_hilo() arriba.
@@ -7044,6 +7179,16 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
         sesion["pedido"]["_anuncio_origen"] = referral_anuncio
         print(f"📣 Conversación originada por anuncio de Facebook: {referral_anuncio}")
 
+    # 🔧 (18 sep 2026, pedido explícito de Israel) Ver
+    # resolver_producto_de_mensaje_citado arriba -- a diferencia del
+    # anuncio (que se guarda solo una vez, al inicio), esto SÍ se
+    # sobreescribe cada vez: el cliente puede responder a una foto
+    # distinta en cualquier punto de la conversación, y lo que importa
+    # es a cuál está respondiendo EN ESTE MENSAJE, no la primera vez.
+    if producto_citado_nombre:
+        sesion["pedido"]["_producto_citado_en_respuesta"] = producto_citado_nombre
+        print(f"📎 Este mensaje responde a nuestra foto de: {producto_citado_nombre}")
+
     # 🔧 CAMBIO DE DECISIÓN DE NEGOCIO (segunda vuelta): ahora sí se
     # fuerza otra vez un saludo garantizado en el primer mensaje de cada
     # cliente nuevo -- pero a diferencia de la primera versión (que
@@ -7121,6 +7266,12 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
             if respuesta is not None:
                 print("✅ Respuesta generada")
                 print(respuesta[:300])
+            # 🔧 (18 sep 2026) Ver el guardado de _producto_citado_en_respuesta
+            # arriba -- es contexto de UN SOLO turno (a diferencia de
+            # _anuncio_origen, que aplica toda la conversación). Se limpia
+            # aquí para que no se le siga recordando al modelo en mensajes
+            # futuros sin relación con esta foto en particular.
+            sesion["pedido"]["_producto_citado_en_respuesta"] = None
         except Exception as e:
             print("❌ Error llamando a OpenAI:", repr(e))
             respuesta = "Disculpa, tuve un problema técnico. ¿Me puedes repetir tu mensaje? 🙂"
@@ -7660,6 +7811,24 @@ def handle_message_messenger():
                     if ad_title:
                         referral_anuncio = ad_title.strip()
                         print(f"📣 Mensaje con referral de anuncio -- ad_title={referral_anuncio!r}")
+
+                # 🔧 (18 sep 2026, pedido explícito de Israel: "el bot no
+                # puede ver lo que el cliente reenvía" -- caso real,
+                # Laura Herrera respondiendo ("Responder" de Messenger)
+                # sobre la foto del osito con jaboncito que el bot ya le
+                # había mandado). Ver resolver_producto_de_mensaje_citado
+                # arriba para el detalle completo -- esto NO es un
+                # adjunto nuevo del cliente, es una referencia a un
+                # mensaje YA EXISTENTE en la conversación.
+                producto_citado_nombre = None
+                reply_to_mid = (mensaje.get("reply_to") or {}).get("mid")
+                if reply_to_mid:
+                    _clave_citada, producto_citado_nombre = resolver_producto_de_mensaje_citado(
+                        reply_to_mid, pagina_id=pagina_id_actual,
+                    )
+                    if producto_citado_nombre:
+                        print(f"📎 Mensaje respondiendo a nuestra foto de: {producto_citado_nombre}")
+
                 adjuntos = mensaje.get("attachments") or []
                 imagen_url = None
                 audio_url = None
@@ -7706,26 +7875,28 @@ def handle_message_messenger():
                         procesar_mensaje_en_fondo,
                         psid, texto_cliente or "(el cliente reaccionó con un sticker/👍)",
                         canal="messenger", pagina_id=pagina_id_actual, referral_anuncio=referral_anuncio,
+                        producto_citado_nombre=producto_citado_nombre,
                     )
                 elif imagen_url:
                     _lanzar_en_fondo(
                         procesar_mensaje_en_fondo,
                         psid, texto_cliente,
                         media_url_imagen_messenger=imagen_url, canal="messenger", pagina_id=pagina_id_actual,
-                        referral_anuncio=referral_anuncio,
+                        referral_anuncio=referral_anuncio, producto_citado_nombre=producto_citado_nombre,
                     )
                 elif audio_url:
                     _lanzar_en_fondo(
                         procesar_mensaje_en_fondo,
                         psid, texto_cliente,
                         media_url_audio_messenger=audio_url, canal="messenger", pagina_id=pagina_id_actual,
-                        referral_anuncio=referral_anuncio,
+                        referral_anuncio=referral_anuncio, producto_citado_nombre=producto_citado_nombre,
                     )
                 elif texto_cliente:
                     _lanzar_en_fondo(
                         procesar_mensaje_en_fondo,
                         psid, texto_cliente,
                         canal="messenger", pagina_id=pagina_id_actual, referral_anuncio=referral_anuncio,
+                        producto_citado_nombre=producto_citado_nombre,
                     )
                 else:
                     _lanzar_en_fondo(

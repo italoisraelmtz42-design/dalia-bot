@@ -1500,6 +1500,29 @@ def sumar_dias_habiles(fecha_inicio, dias_habiles):
     return fecha
 
 
+def _proxima_fecha_disponible_tras_hoy(hoy):
+    """🔧 (18 sep 2026, bug real detectado por Israel) Cuando se
+    rechaza una entrega para HOY MISMO (ver la regla de "ya no se
+    ofrece el mismo día"), el sistema ofrecía "mañana" a ciegas, sin
+    revisar si mañana cae domingo -- un día en que el negocio no abre
+    para nada, ni siquiera para recolección urgente en el local. Caso
+    real: una clienta preguntó un sábado por recuerditos para su
+    revelación de género ESE MISMO DÍA, y el bot le ofreció como
+    alternativa más rápida "mañana 20/09/2026" -- que era domingo, un
+    día en que no se puede entregar bajo ninguna circunstancia. Esta
+    función calcula la fecha real más próxima que sí se puede ofrecer:
+    normalmente mañana, pero si mañana es domingo, se recorre al lunes.
+    Regresa (fecha, es_manana) para que el mensaje pueda decir "mañana"
+    solo cuando de verdad lo es, y "el lunes" cuando se tuvo que
+    recorrer."""
+    candidata = hoy + timedelta(days=1)
+    es_manana = True
+    if candidata.weekday() == 6:  # domingo -- no abrimos
+        candidata += timedelta(days=1)
+        es_manana = False
+    return candidata, es_manana
+
+
 def sumar_dias_habiles_sin_sabado(fecha_inicio, dias_habiles):
     """🔧 (6 sep 2026, pedido explícito de Israel, Zona Extendida --
     García/Saltillo) A diferencia de sumar_dias_habiles() (que cuenta
@@ -1697,6 +1720,21 @@ def construir_system_prompt(pedido, pedido_id, info_enviada, conocimiento=None, 
     # informativo para el cliente.
     fecha_minima = sumar_dias_habiles(ahora.date(), 4)
     dia_semana_minima = dias[fecha_minima.weekday()]
+
+    # 🔧 (18 sep 2026, bug real detectado por Israel) Ver
+    # _proxima_fecha_disponible_tras_hoy arriba -- se calcula aquí,
+    # siempre, para que el modelo NUNCA tenga que calcular "mañana" por
+    # su cuenta en una respuesta libre (sin haber llamado a ninguna
+    # herramienta). Caso real: una clienta preguntó un sábado qué podía
+    # dar de recuerditos para su evento de HOY, y el bot -- sin llamar
+    # ninguna función, solo redactando su propia respuesta -- le dijo
+    # "lo más rápido es mañana 20/09/2026", sin darse cuenta de que ese
+    # "mañana" caía domingo, un día en que el negocio no abre para nada.
+    _fecha_disponible_calculada, _es_manana_calculado = _proxima_fecha_disponible_tras_hoy(ahora.date())
+    _texto_fecha_disponible = (
+        f"MAÑANA ({_fecha_disponible_calculada.strftime('%d/%m/%Y')})" if _es_manana_calculado
+        else f"el LUNES ({_fecha_disponible_calculada.strftime('%d/%m/%Y')}) -- mañana es domingo y el negocio no abre ese día"
+    )
 
     contexto_anuncio = ""
     if isinstance(pedido, dict) and pedido.get("_anuncio_origen"):
@@ -2312,6 +2350,12 @@ BASE DE CONOCIMIENTO:
 
 Hoy es {dia_semana} {fecha}.
 La hora actual es {hora} (hora de Monterrey, México).
+
+🚨 SI EL CLIENTE PREGUNTA POR ENTREGA "HOY MISMO" O "LO MÁS RÁPIDO POSIBLE"
+(aunque todavía no haya dado una fecha formal): la fecha real más próxima
+que se puede ofrecer, calculada por el sistema (nunca la calcules tú
+mismo), es {_texto_fecha_disponible}. Nunca digas "mañana" si mañana cae
+domingo -- el negocio no abre ese día bajo ninguna circunstancia.
 
 INFORMACIÓN QUE YA SE LE ENVIÓ A ESTE CLIENTE EN MENSAJES ANTERIORES
 (no la repitas salvo que el cliente la pida explícitamente de nuevo):
@@ -3936,13 +3980,17 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         # se revisa aquí, apenas se intenta poner una fecha_evento de hoy
         # o pasada, para que nunca avance ni un turno más con eso.
         if pedido.pop("_fecha_evento_rechazada_mismo_dia", False):
-            _manana = (datetime.now(ZONA_HORARIA_NEGOCIO).date() + timedelta(days=1)).strftime("%d/%m/%Y")
+            _hoy_para_calculo = datetime.now(ZONA_HORARIA_NEGOCIO).date()
+            _fecha_disponible, _es_manana = _proxima_fecha_disponible_tras_hoy(_hoy_para_calculo)
+            _texto_dia = "MAÑANA" if _es_manana else "el LUNES"
             print("🚨 Se bloqueó fecha_evento: el cliente pidió entrega para hoy mismo o una fecha pasada")
             return (
                 f"BLOQUEADO: ya NO se ofrece entrega el mismo día bajo ninguna "
                 f"circunstancia, ni siquiera pagando el cargo urgente de $50. Lo más "
-                f"rápido posible es MAÑANA ({_manana}). Explícale esto al cliente con "
-                f"amabilidad y pregúntale si esa fecha (u otra más adelante) le funciona.",
+                f"rápido posible es {_texto_dia} ({_fecha_disponible.strftime('%d/%m/%Y')})"
+                f"{' -- mañana es domingo y no abrimos' if not _es_manana else ''}. "
+                f"Explícale esto al cliente con amabilidad y pregúntale si esa fecha "
+                f"(u otra más adelante) le funciona.",
                 campos_modificados,
                 False,
             )
@@ -4335,14 +4383,16 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         # pagando el cargo urgente -- se revisa esto ANTES que la
         # urgencia normal, porque "urgente" ya no incluye el día de hoy.
         if fecha_candidata <= hoy_real:
-            manana = (hoy_real + timedelta(days=1)).strftime("%d/%m/%Y")
+            fecha_disponible, es_manana = _proxima_fecha_disponible_tras_hoy(hoy_real)
+            texto_dia = "MAÑANA" if es_manana else "el LUNES"
             return (
                 f"📅 CÁLCULO REAL (hecho por el sistema, no lo recalcules tú): "
                 f"{fecha_candidata.strftime('%d/%m/%Y')} NO se puede ofrecer -- ya NO "
                 f"se entrega el mismo día bajo ninguna circunstancia, ni pagando el "
                 f"cargo urgente de $50. Dile al cliente que lo más rápido posible es "
-                f"MAÑANA ({manana}), y pregúntale si esa fecha (u otra más adelante) "
-                f"le funciona.",
+                f"{texto_dia} ({fecha_disponible.strftime('%d/%m/%Y')})"
+                f"{', ya que mañana es domingo y no abrimos' if not es_manana else ''}, "
+                f"y pregúntale si esa fecha (u otra más adelante) le funciona.",
                 [],
                 False,
             )

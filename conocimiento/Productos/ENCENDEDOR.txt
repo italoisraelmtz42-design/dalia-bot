@@ -1,4 +1,3 @@
-
 ENCENDEDORES PERSONALIZADOS
 
 mandar siempre la siguiente imagen del recuerdito:
@@ -11,9 +10,13 @@ PRECIO $10.00 C/U SIN BOLSA DE CELOFAN
 PRECIO $11.00 C/U CON BOLSA DE CELOFAN
 
 Descripción comercial
-Encendedor con etiqueta personalizada. 
+Encendedor con etiqueta personalizada.
 
-Destacar la personalización en la tarjetita que se envuelve en el encendedor.
+Destacar la personalización de la ETIQUETA que se envuelve en el
+encendedor (NO es una tarjetita como la de los demás productos -- el
+encendedor no lleva tarjetita personalizada aparte, ni moño; solo la
+etiqueta envuelta en el propio encendedor, y la bolsa de celofán es
+opcional según lo que elija el cliente).
 
 el diseño lo puede mandar el cliente o escoger de los diseños que tenemos.
 
@@ -31,8 +34,3 @@ Palabras clave
 Encendedor
 Encendedor personalizado
 Encendedores
-
-
-
-
-

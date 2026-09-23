@@ -2937,6 +2937,36 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "verificar_info_producto_sin_color",
+            "description": (
+                "🚨 OBLIGATORIA: llama a esta función en cuanto el cliente "
+                "mencione encendedor o destapador, incluso antes de que "
+                "pregunte por colores -- estos 2 productos NO tienen ningún "
+                "color que elegir (ni toalla, ni moño, ni jaboncito), y esta "
+                "función te da el precio real y la aclaración exacta para que "
+                "nunca ofrezcas colores que no existen para ellos. 🚨 Error "
+                "real ya cometido DOS VECES seguidas, con clientas distintas, "
+                "nunca lo repitas: el bot le dijo a una clienta que los moños "
+                "de los encendedores \"sí tienen estos colores disponibles\" y "
+                "le preguntó qué color de moño quería -- los encendedores no "
+                "tienen moño para nada. Llama siempre a esta función en vez de "
+                "responder de memoria sobre estos 2 productos."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "producto": {
+                        "type": "string",
+                        "enum": ["encendedor", "destapador"],
+                        "description": "Cuál de los dos productos mencionó el cliente.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "armar_resumen_final",
             "description": (
                 "🚨 OBLIGATORIA: llama esta función en cuanto sientas que ya "
@@ -3837,6 +3867,25 @@ _PATRON_INFO_ENTREGAS_EN_TEXTO = re.compile(
 )
 
 
+# 🔧 (19 sep 2026, bug real REPETIDO -- ya se había corregido dos veces
+# con instrucciones de texto (en el prompt y en el archivo de
+# conocimiento de "Colores disponibles") y volvió a pasar con una
+# clienta distinta pidiendo encendedores para boda, sin que ella
+# siquiera mencionara ningún color -- fue el bot quien los ofreció por
+# su cuenta ("los moños sí tienen estos colores...") sin que ninguna
+# herramienta se disparara, porque nada obliga a llamar una función
+# solo con la palabra "encendedores". Mismo patrón que
+# _PATRON_INFO_ENTREGAS_EN_TEXTO: en cuanto el cliente mencione
+# encendedor o destapador, se obliga a llamar a
+# verificar_info_producto_sin_color esa misma vuelta, para que la
+# aclaración de "no tiene colores" llegue SIEMPRE, sin depender de que
+# el modelo se acuerde de la regla de texto.
+_PATRON_ENCENDEDOR_DESTAPADOR_EN_TEXTO = re.compile(
+    r"(encendedor|destapador)",
+    re.IGNORECASE,
+)
+
+
 # 🔧 (7 sep 2026, Fase 2, bug real: el modelo nunca llamaba a
 # armar_resumen_post_pago ni a finalizar_fase_2_pedido -- solo componía
 # su propio resumen de memoria una y otra vez, y el bot nunca se
@@ -4598,6 +4647,29 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                 False,
             )
 
+        # 🔧 (19 sep 2026, bug real REPETIDO -- ya se había corregido con
+        # una instrucción de texto y volvió a pasar con otra clienta
+        # distinta pidiendo encendedores para boda) Encendedores y
+        # destapadores NO tienen ningún color que elegir (ni toalla, ni
+        # moño, ni jaboncito) -- solo llevan etiqueta personalizada y la
+        # opción de con/sin bolsa. Como una instrucción de texto sola no
+        # bastó dos veces seguidas, esto lo hace cumplir directo por
+        # código: si el producto es uno de estos 2, se corta aquí mismo
+        # con la respuesta correcta, sin siquiera comparar contra la
+        # lista general de colores.
+        _producto_normalizado = normalizar_producto_clave(producto_texto)
+        if any(p in _producto_normalizado for p in ("encendedor", "destapador")):
+            return (
+                "🚨 ESTE PRODUCTO NO TIENE COLORES (calculado por el sistema, no lo "
+                "recalcules tú): los encendedores y destapadores no manejan ningún "
+                "color para elegir -- ni toalla, ni moño, ni jaboncito. Solo llevan "
+                "una etiqueta personalizada (sin opción de color) y la opción de "
+                "con o sin bolsa de celofán. Dile esto al cliente claramente, en vez "
+                "de ofrecerle la lista general de colores.",
+                [],
+                False,
+            )
+
         lista_general = ", ".join(COLORES_OFICIALES_DISPLAY)
         lineas_resultado = []
         for color_texto in colores_texto:
@@ -4650,6 +4722,33 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
             f"- Envío a DOMICILIO: costo según municipio (pregúntale cuál es "
             f"para cotizarlo).\n\n"
             f"Usa estos datos tal cual para contestarle al cliente."
+        )
+        return mensaje_resultado, [], False
+
+    if name == "verificar_info_producto_sin_color":
+        # 🔧 (19 sep 2026, bug real repetido DOS VECES con clientas
+        # distintas: el bot ofreció colores de moño para encendedores,
+        # cuando estos 2 productos no manejan ningún color -- ni
+        # siquiera se necesitó que la clienta preguntara por colores,
+        # el bot los ofreció por su cuenta apenas mencionó el producto.
+        # Se le da la respuesta ya calculada, con los precios reales,
+        # para que nunca tenga que inventar ni ofrecer colores.
+        try:
+            args_obj = json.loads(args or "{}")
+        except json.JSONDecodeError:
+            args_obj = {}
+        producto_mencionado = (args_obj.get("producto") or "").strip().lower() or "encendedor/destapador"
+        mensaje_resultado = (
+            "🚨 ESTE PRODUCTO NO TIENE COLORES (calculado por el sistema, no lo "
+            "recalcules tú ni ofrezcas la lista general de colores):\n\n"
+            f"- Encendedor: $10.00 c/u sin bolsa de celofán, $11.00 c/u con bolsa.\n"
+            f"- Destapador: $15.50 c/u sin bolsa de celofán, $16.50 c/u con bolsa.\n\n"
+            f"Ninguno de los dos maneja color de toalla, moño ni jaboncito -- solo "
+            f"llevan una etiqueta personalizada (el diseño lo puede mandar el "
+            f"cliente o elegir de los que ya manejamos) y la opción de con/sin "
+            f"bolsa de celofán, que es lo único que debes preguntarle al cliente "
+            f"sobre {producto_mencionado}. Nunca le ofrezcas ni le preguntes por "
+            f"colores para estos 2 productos."
         )
         return mensaje_resultado, [], False
 
@@ -5117,6 +5216,19 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
             # datos reales de entrega ANTES de que el modelo conteste de
             # memoria.
             tool_choice_este_turno = {"type": "function", "function": {"name": "verificar_info_entregas"}}
+        elif (
+            indice_iteracion == 0
+            and texto_cliente
+            and _PATRON_ENCENDEDOR_DESTAPADOR_EN_TEXTO.search(texto_cliente)
+        ):
+            # 🔧 (19 sep 2026) ver _PATRON_ENCENDEDOR_DESTAPADOR_EN_TEXTO
+            # arriba -- bug real repetido DOS VECES con clientas distintas
+            # (el bot ofreció colores de moño para encendedores, un
+            # producto que no maneja ningún color). Se obliga a llamar
+            # verificar_info_producto_sin_color en cuanto se mencione
+            # cualquiera de los 2 productos, ANTES de que el modelo pueda
+            # inventar u ofrecer colores de memoria.
+            tool_choice_este_turno = {"type": "function", "function": {"name": "verificar_info_producto_sin_color"}}
         elif (
             pedido_manager.FASE_2_ACTIVA
             and pedido_manager.obtener_fase(numero) == "post_pago"

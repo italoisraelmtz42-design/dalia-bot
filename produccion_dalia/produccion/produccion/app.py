@@ -309,9 +309,16 @@ PRECIOS_ENVIO_MUNICIPIO = [
     ("Santa Catarina", 100),
     ("San Pedro", 120), ("Juárez", 120),
     ("Pesquería", 150),
+    # 🔧 (5 nov 2026, pedido de Israel) Zona Extendida: mismo costo que el bot.
+    ("García", 150), ("Saltillo", 150),
 ]
 PRECIOS_ENVIO_MUNICIPIO_DICT = dict(PRECIOS_ENVIO_MUNICIPIO)
 PRECIOS_ENVIO_MUNICIPIO_DICT_NORMALIZADO = {k.lower(): v for k, v in PRECIOS_ENVIO_MUNICIPIO}
+# Variantes con que el bot puede mandar estos dos municipios (con estado, sin acento).
+PRECIOS_ENVIO_MUNICIPIO_DICT_NORMALIZADO.update({
+    "garcia": 150, "garcía, nuevo león": 150, "garcia, nuevo leon": 150, "garcía, n.l.": 150,
+    "saltillo, coahuila": 150,
+})
 PRECIO_ENVIO_DHL = 300
 
 

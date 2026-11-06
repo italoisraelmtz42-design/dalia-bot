@@ -84,6 +84,12 @@ Si el cliente decide el envió a domicilio, solicitar entonces esta información
  cargo urgente -- no es una cuestión de "urgente o no", simplemente no
  es posible antes para estos dos destinos.
 
+*SOLO PARA GARCÍA, NUEVO LEÓN (no aplica a Saltillo): las entregas se hacen
+ ÚNICAMENTE los LUNES, MIÉRCOLES y VIERNES -- los demás días no hay entregas
+ ahí. La fecha debe cumplir los 6 días hábiles Y caer en uno de esos 3 días
+ (la fecha válida la calcula el sistema; si el cliente pide otro día, ofrécele
+ el lunes, miércoles o viernes más próximo).
+
 Ejemplo real: si el pedido se paga el domingo 6 de septiembre, la fecha
 más próxima de entrega es el lunes 14 de septiembre (Lun 7, Mar 8, Mié 9,
 Jue 10, Vie 11 = 5 días hábiles; sábado 12 y domingo 13 no cuentan;

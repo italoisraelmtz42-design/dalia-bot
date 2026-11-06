@@ -4094,6 +4094,317 @@ def _formatear_datos_post_pago(datos_pp):
     return lineas
 
 
+# ===========================================================================
+# 🔧 (19 oct 2026, bug real: Lety García Juárez) HORARIO DE ENTREGA A DOMICILIO
+# El horario (entre 1:00 pm y 10:00 pm, SIN hora exacta) ya estaba escrito en
+# "Entregas y envíos.txt" y en las reglas irrompibles, pero el modelo nunca se
+# lo dijo a la clienta y, cuando ella escribió "para el día 20 sería por la
+# tarde", le confirmó "La entrega será el 20 de octubre en la tarde, como me
+# indicaste" -- prometiendo algo que la empresa de reparto no puede cumplir.
+# Como una instrucción solo en texto ya falló, se hace cumplir POR CÓDIGO:
+#   1) Al quedar el pedido como domicilio local, el aviso se agrega SIEMPRE
+#      (una vez) a la respuesta del bot.
+#   2) Si el cliente menciona parte del día u hora ("por la tarde", "a las 5"),
+#      o el modelo confirma una, se quita esa frase y se agrega la aclaración.
+# DHL (envío fuera de zona) NO aplica: ese envío no tiene horario de reparto.
+# ===========================================================================
+AVISO_HORARIO_DOMICILIO = (
+    "🚚 Importante: las entregas a domicilio NO tienen hora exacta. El repartidor "
+    "puede llegar en cualquier momento entre la 1:00 pm y las 10:00 pm (13:00 a "
+    "22:00 hrs) del día de la entrega."
+)
+AVISO_HORARIO_DOMICILIO_ACLARACION = (
+    "🚚 Te aclaro: en las entregas a domicilio no podemos confirmar una hora ni "
+    "un horario en específico (ni mañana, ni tarde, ni noche). El repartidor puede "
+    "llegar en cualquier momento entre la 1:00 pm y las 10:00 pm (13:00 a 22:00 hrs) "
+    "del día de la entrega."
+)
+_PATRON_HORA_O_PARTE_DEL_DIA = re.compile(
+    r"(?:\bpor\s+la\s+(?:tarde|ma[ñn]ana|noche)\b|\ben\s+la\s+(?:tarde|ma[ñn]ana|noche)\b"
+    r"|\bde\s+(?:tarde|noche|ma[ñn]ana)\b|\bmedio\s*d[ií]a\b|\bmediod[ií]a\b"
+    r"|\ba\s+las?\s+\d{1,2}(?::\d{2})?\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.|hrs?)\b"
+    r"|\bhora\s+(?:exacta|espec[ií]fica)\b|\bsea\s+(?:x|por)\s+la\s+tarde\b|\bx\s+la\s+tard[eé]\b)",
+    re.IGNORECASE,
+)
+
+
+def _es_domicilio_local(pedido):
+    te = str((pedido or {}).get("tipo_entrega") or "").strip().lower()
+    return "domicilio" in te and not (pedido or {}).get("_envio_fuera_de_zona")
+
+
+def ajustar_texto_horario_domicilio(texto, pedido, texto_cliente=None):
+    """Garantiza por código el aviso de horario de domicilio y evita que el
+    bot confirme una hora/parte del día. Devuelve el texto final."""
+    if not texto or not _es_domicilio_local(pedido):
+        return texto
+    ya_dice_aviso = bool(re.search(r"hora\s+exacta", texto, re.IGNORECASE)) and \
+        bool(re.search(r"1:00\s*pm|13:00|1\s*pm", texto, re.IGNORECASE))
+    cliente_menciona = bool(texto_cliente and _PATRON_HORA_O_PARTE_DEL_DIA.search(texto_cliente))
+    # Frases del bot que confirman/prometen una hora o parte del día.
+    partes = re.split(r"(?<=[.!?])\s+|\n+", texto)
+    conservadas, hubo_promesa = [], False
+    for frase in partes:
+        if frase and _PATRON_HORA_O_PARTE_DEL_DIA.search(frase) and not re.search(
+            r"hora\s+exacta|1:00\s*pm|13:00|10:00\s*pm|22:00", frase, re.IGNORECASE
+        ):
+            hubo_promesa = True
+            continue
+        conservadas.append(frase)
+    if ya_dice_aviso and not hubo_promesa:
+        pedido["_aviso_horario_domicilio_enviado"] = True
+        return texto
+    if hubo_promesa:
+        texto_base = "\n".join(f for f in conservadas if f).strip()
+        aviso = AVISO_HORARIO_DOMICILIO_ACLARACION
+    else:
+        texto_base = texto.strip()
+        if cliente_menciona:
+            aviso = AVISO_HORARIO_DOMICILIO_ACLARACION
+        elif pedido.get("_aviso_horario_domicilio_enviado"):
+            return texto
+        else:
+            aviso = AVISO_HORARIO_DOMICILIO
+    pedido["_aviso_horario_domicilio_enviado"] = True
+    print("🚚 Se agregó por código el aviso de horario de entrega a domicilio (sin hora exacta, 13:00-22:00)")
+    return (texto_base + "\n\n" + aviso) if texto_base else aviso
+
+
+# ===========================================================================
+# 🔧 (19 oct 2026, bug real: cliente de Valle Verde, 9 oct) NÚMERO INVENTADO
+# El cliente pidió un WhatsApp para formalizar y el bot inventó
+# "+52 81 1234 5678" (y lo llamó "WhatsApp del local" junto a la dirección).
+# El cliente contestó "Ese número no existe" / "Fake" y se perdió la venta.
+# El único número directo real está en Numero_Contacto_Directo.txt, y solo se
+# comparte si el cliente insiste. Como el modelo lo inventó pese a la regla,
+# se hace cumplir por código:
+#   1) Cualquier número telefónico en la respuesta que NO sea el real (ni uno
+#      que el propio cliente escribió) se elimina junto con su frase.
+#   2) Si el cliente insiste/desconfía (o dice que el número no existe/fake),
+#      la respuesta se sustituye por el mensaje con el número real.
+# Tarjeta (16 díg.) y CLABE (18 díg.) no se tocan: solo se revisan 10-13 díg.
+# ===========================================================================
+NUMERO_CONTACTO_DIRECTO = "81 1072 5440"
+_PATRON_TELEFONO = re.compile(r"\+?\d(?:[ \-\.]?\d){7,20}")
+_PATRON_CLIENTE_INSISTE_NUMERO = re.compile(
+    r"(fake|falso|no\s+ex[ií]?s?te?|no\s+es\s+(?:v[aá]lido|correcto)|no\s+conf[ií]o|"
+    r"no\s+me\s+contest|prefiero\s+(?:hablar|llamar)|hablar\s+por\s+tel|n[uú]mero\s+directo|"
+    r"quiero\s+llamar|me\s+das\s+un\s+tel|n[uú]mero\s+de\s+tel[eé]fono\s+directo)",
+    re.IGNORECASE,
+)
+
+
+def _solo_digitos(t):
+    return re.sub(r"\D", "", t or "")
+
+
+def sanitizar_telefonos_en_respuesta(texto, texto_cliente=None, pedido=None):
+    if not texto:
+        return texto
+    real = _solo_digitos(NUMERO_CONTACTO_DIRECTO)
+    permitidos = {real}
+    for fuente in (texto_cliente, (pedido or {}).get("telefono")):
+        for m in _PATRON_TELEFONO.finditer(str(fuente or "")):
+            permitidos.add(_solo_digitos(m.group(0))[-10:])
+    # Números de línea de producción/equipo configurados por env.
+    for n in (DALIA_WHATSAPP_NUMERO, VENDEDORA_WHATSAPP_NUMERO, ISRAEL_WHATSAPP_NUMERO):
+        if n:
+            permitidos.add(_solo_digitos(n)[-10:])
+    hay_falso = False
+    for m in _PATRON_TELEFONO.finditer(texto):
+        d = _solo_digitos(m.group(0))
+        if 10 <= len(d) <= 13 and d[-10:] not in permitidos:
+            hay_falso = True
+            break
+    insiste = bool(texto_cliente and _PATRON_CLIENTE_INSISTE_NUMERO.search(texto_cliente))
+    if insiste and real not in _solo_digitos(texto):
+        print("📞 El cliente insiste/desconfía del número -- se da el número real por código")
+        return (
+            f"Claro, te paso el número de Diana, una de las chicas del equipo: "
+            f"{NUMERO_CONTACTO_DIRECTO}, ella también te puede ayudar 😊"
+        )
+    if not hay_falso:
+        return texto
+    print("🚨 Se eliminó un número telefónico inventado de la respuesta del bot")
+    partes = re.split(r"(?<=[.!?])\s+|\n+", texto)
+    limpias = []
+    for fr in partes:
+        if not fr:
+            continue
+        tiene_falso = any(
+            10 <= len(_solo_digitos(m.group(0))) <= 13 and _solo_digitos(m.group(0))[-10:] not in permitidos
+            for m in _PATRON_TELEFONO.finditer(fr)
+        )
+        if not tiene_falso and not re.fullmatch(r"\W*(?:whatsapp|tel[eé]fono)\W*", fr, re.IGNORECASE):
+            limpias.append(fr)
+    base = "\n".join(limpias).strip()
+    extra = "Aquí mismo por este chat te ayudo a formalizar tu pedido sin problema 😊"
+    return (base + "\n\n" + extra) if base else extra
+
+
+_PATRON_PARTE_DEL_DIA_SOLA = re.compile(
+    r"\b(?:por|en)\s+la\s+(?:tarde|ma[ñn]ana|noche)\b", re.IGNORECASE)
+
+
+def quitar_promesa_parte_del_dia_sin_entrega_definida(texto, pedido):
+    """Si aún no hay tipo de entrega, el bot no puede prometer 'por la mañana'
+    (domicilio no tiene horario; local tiene horario fijo)."""
+    if not texto or str((pedido or {}).get("tipo_entrega") or "").strip():
+        return texto
+    partes = re.split(r"(?<=[.!?])\s+|\n+", texto)
+    out = [f for f in partes if f and not _PATRON_PARTE_DEL_DIA_SOLA.search(f)]
+    if len(out) == len([f for f in partes if f]):
+        return texto
+    print("🕐 Se quitó una promesa de parte del día antes de definir tipo de entrega")
+    return "\n".join(out).strip() or texto
+
+
+# ===========================================================================
+# 🔧 (19 oct 2026, bug real: Eli Jb, león de toalla) EL BOT "DA" COLORES
+# El bot guardó toalla/moño/jaboncito "blanco" sin que la clienta hubiera
+# dicho ningún color y, cuando ella dijo "color café la vela" (no existe),
+# lo reemplazó solo por "blanco". Los colores SOLO los decide el cliente.
+# Candado por código: un color que el modelo intenta guardar debe aparecer
+# en algún mensaje del CLIENTE (o el cliente debe estar aceptando/delegando
+# explícitamente: "sí", "estoy de acuerdo", "el que veas conveniente"). Si
+# no, se bloquea la herramienta y se le indica preguntarle al cliente.
+# En turnos con imagen no se bloquea (el modelo puede leer colores de ella).
+# ===========================================================================
+_CLAVES_COLOR_ARGS = ("color_toalla", "color_mono", "color_jaboncito", "color_velita", "color")
+_PATRON_ACEPTA_O_DELEGA = re.compile(
+    r"(^\s*(?:s[ií]+p?|ok(?:ey|ay)?|va|vale|claro|dale|perfecto|correcto|correkto|simon|sim[oó]n)\b|"
+    r"de\s+acuerdo|est[aá]\s+bien|el\s+que\s+(?:t[uú]\s+)?(?:veas|quieras|recomiendes)|"
+    r"lo\s+que\s+(?:t[uú]\s+)?(?:veas|quieras|recomiendes)|a\s+tu\s+(?:elecci[oó]n|criterio|gusto)|"
+    r"como\s+(?:t[uú]\s+)?(?:veas|quieras)|conveniente)",
+    re.IGNORECASE,
+)
+
+
+def _sin_acentos_basico(t):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(t or "").lower()) if unicodedata.category(c) != "Mn")
+
+
+def _textos_del_cliente(sesion, texto_cliente):
+    textos = [texto_cliente or ""]
+    for m in (sesion or {}).get("messages", []) or []:
+        if isinstance(m, dict) and m.get("role") == "user":
+            c = m.get("content")
+            if isinstance(c, str):
+                textos.append(c)
+            elif isinstance(c, list):
+                for parte in c:
+                    if isinstance(parte, dict) and parte.get("type") == "text":
+                        textos.append(parte.get("text") or "")
+    return textos
+
+
+def colores_no_dichos_por_el_cliente(args_json, sesion, texto_cliente):
+    """Lista de colores en args que el cliente nunca mencionó. [] si todo ok."""
+    try:
+        datos = json.loads(args_json) if args_json else {}
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(datos, dict):
+        return []
+    valores = []
+    for k in _CLAVES_COLOR_ARGS:
+        v = datos.get(k)
+        if isinstance(v, str) and v.strip():
+            valores.append(v)
+    if isinstance(datos.get("colores"), list):
+        valores.extend(str(x) for x in datos["colores"] if x)
+    if not valores:
+        return []
+    if sesion and sesion.get("_turno_con_imagen"):
+        return []
+    if texto_cliente and _PATRON_ACEPTA_O_DELEGA.search(texto_cliente):
+        return []
+    todo_txt = " ".join(_textos_del_cliente(sesion, texto_cliente))
+    # Colores ya guardados antes en el pedido (por si el historial se recortó).
+    ped = (sesion or {}).get("pedido") or {}
+    for fuente in [ped] + [i for i in (ped.get("items") or []) if isinstance(i, dict)]:
+        for k in _CLAVES_COLOR_ARGS:
+            if isinstance(fuente.get(k), str):
+                todo_txt += " " + fuente[k]
+    todo = _sin_acentos_basico(todo_txt).replace(" ", "")
+    return [v for v in valores if _sin_acentos_basico(v).replace(" ", "") not in todo]
+
+
+# ===========================================================================
+# 🔧 (19 oct 2026, bug real: Perla Torres, Tampico) ENVÍO NACIONAL (DHL)
+# "Ya van varias veces que les da opción de pagar al recibir en pedidos
+# nacionales": el bot le dijo a una clienta de Tampico que podía pagar el
+# resto "en efectivo al mensajero". En DHL el pedido debe estar 100%
+# LIQUIDADO ANTES de enviarse -- nunca se paga al recibir. Además el bot
+# nunca marcó el pedido como foráneo (la bandera _envio_fuera_de_zona solo
+# se ponía al guardar un municipio, y Tampico llegó en la dirección), así que
+# el resumen salió SIN el envío de $300 y se mandó el aviso de "pago en
+# efectivo al entregar" (que es solo para domicilio local).
+# Por código: (1) se detecta el envío nacional, (2) se marca la bandera y se
+# fija el costo de $300, (3) se reemplaza cualquier frase de pago-al-recibir
+# por la regla real de DHL.
+# ===========================================================================
+_PATRON_PAGO_AL_RECIBIR = re.compile(
+    r"(al\s+recibir(?:lo|los)?|contra\s*entrega|al\s+momento\s+de\s+(?:la\s+)?entrega|"
+    r"cuando\s+(?:te\s+)?(?:lo\s+|los\s+)?(?:entreg|lleg|reciba)|con\s+el\s+mensajero|"
+    r"al\s+mensajero|pagar(?:lo|la)?\s+(?:al\s+)?(?:llegar|llegando)|en\s+efectivo\s+(?:al|cuando|con)|"
+    r"se\s+paga\s+al\s+recibir|al\s+llegar\s+(?:el|tu)\s+pedido|pago\s+en\s+efectivo)",
+    re.IGNORECASE,
+)
+AVISO_PAGO_DHL = (
+    "Para envíos por paquetería DHL el pedido debe estar 100% liquidado ANTES de "
+    "enviarse; no se puede pagar al recibir. Puedes dejar un anticipo desde $50 para "
+    "apartar tu pedido y liquidar el resto antes del envío."
+)
+
+
+def pedido_es_envio_nacional(pedido, sesion=None):
+    """True si el pedido es a domicilio FUERA del área metropolitana (DHL)."""
+    if not isinstance(pedido, dict):
+        return False
+    if "domicilio" not in str(pedido.get("tipo_entrega") or "").strip().lower():
+        return False
+    mun = pedido.get("municipio")
+    if mun:
+        try:
+            return resolver_costo_envio(mun) is None
+        except Exception:
+            return bool(pedido.get("_envio_fuera_de_zona"))
+    if pedido.get("_envio_fuera_de_zona"):
+        return True
+    # Sin municipio guardado: si el bot ya habló de DHL en esta conversación,
+    # el cliente es foráneo (caso Tampico: la ciudad llegó dentro del texto).
+    for m in (sesion or {}).get("messages", []) or []:
+        if isinstance(m, dict) and m.get("role") == "assistant" and isinstance(m.get("content"), str):
+            if re.search(r"\bDHL\b", m["content"]):
+                return True
+    return False
+
+
+def marcar_envio_nacional_si_corresponde(pedido, sesion=None):
+    if pedido_es_envio_nacional(pedido, sesion):
+        if not pedido.get("_envio_fuera_de_zona"):
+            print("📦 Pedido marcado como envío nacional (DHL) por detección en la conversación")
+        pedido["_envio_fuera_de_zona"] = True
+        if not pedido.get("costo_envio"):
+            pedido["costo_envio"] = COSTO_ENVIO_FUERA_DE_ZONA
+        return True
+    return False
+
+
+def corregir_pago_contra_entrega_nacional(texto, pedido, sesion=None):
+    if not texto or not marcar_envio_nacional_si_corresponde(pedido, sesion):
+        return texto
+    partes = re.split(r"(?<=[.!?])\s+|\n+", texto)
+    conservadas = [f for f in partes if f and not _PATRON_PAGO_AL_RECIBIR.search(f)]
+    if len(conservadas) == len([f for f in partes if f]):
+        return texto
+    print("🚨 Se reemplazó una frase de 'pago al recibir' en un pedido nacional (DHL)")
+    base = "\n".join(conservadas).strip()
+    return (base + "\n\n" + AVISO_PAGO_DHL) if base else AVISO_PAGO_DHL
+
+
 def _reiniciar_resumen_post_pago_si_hace_falta(pedido, campos_modificados):
     """🔧 (17 sep 2026, pedido explícito de Israel: permitir corregir
     color/cantidad/fecha/tipo de entrega DESPUÉS del anticipo) Si el
@@ -4113,6 +4424,20 @@ def _reiniciar_resumen_post_pago_si_hace_falta(pedido, campos_modificados):
 def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagina_id=None, texto_cliente=None):
     name = tool_call.function.name
     args = tool_call.function.arguments
+
+    if name in ("actualizar_pedido", "agregar_item", "actualizar_item"):
+        _inventados = colores_no_dichos_por_el_cliente(args, sesion, texto_cliente)
+        if _inventados:
+            print(f"🚨 Se bloqueó {name}: colores que el cliente nunca dijo: {_inventados}")
+            return (
+                f"BLOQUEADO: el cliente NO ha dicho el/los color(es) {', '.join(_inventados)}. "
+                "Los colores los decide SOLO el cliente: no los inventes, no los "
+                "completes por tu cuenta ni cambies un color que el cliente dijo por otro. "
+                "Si el cliente dijo un color que no existe (ej. 'café'), ofrécele los "
+                "colores oficiales parecidos y espera su respuesta. Pregúntale qué color quiere.",
+                [],
+                False,
+            )
 
     if name == "actualizar_pedido":
         ya_estaba_confirmado = pedido.get("anticipo_confirmado") is True
@@ -4421,6 +4746,7 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                     f"{dia_semana_real}. Si le mencionas el día de la semana al "
                     "cliente, usa siempre este dato, nunca lo calcules de memoria."
                 )
+        marcar_envio_nacional_si_corresponde(pedido, sesion)
         if not anticipo_recien_confirmado:
             # 🔧 Solo aplica a correcciones DESPUÉS del anticipo (ver
             # _reiniciar_resumen_post_pago_si_hace_falta) -- en el turno
@@ -4821,6 +5147,20 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
                     f"cuál de los 4 puntos reales quiere."
                 )
 
+        # 🔧 (19 oct 2026, bug real: Perla Torres) El bot guardó el NOMBRE de
+        # la clienta ("Perla Torres") como teléfono y como tipo de evento.
+        # Un teléfono debe tener al menos 10 dígitos; el tipo de evento no
+        # puede ser un teléfono ni el mismo texto que el nombre.
+        _tel = args_obj.get("telefono_contacto")
+        if _tel and len(re.sub(r"\D", "", str(_tel))) < 10:
+            print(f"🚨 Se descartó telefono_contacto inválido: {_tel!r}")
+            args_obj.pop("telefono_contacto", None)
+        _ev = str(args_obj.get("tipo_evento") or "").strip()
+        if _ev and (len(re.sub(r"\D", "", _ev)) >= 7 or
+                    _ev.lower() == str(args_obj.get("nombre_cliente") or "").strip().lower()):
+            print(f"🚨 Se descartó tipo_evento inválido: {_ev!r}")
+            args_obj.pop("tipo_evento", None)
+
         pedido_manager.guardar_datos_post_pago(numero, args_obj)
         print(f"📋 [Fase 2] Datos post-pago capturados para {numero}: {list(args_obj.keys())}")
         # 🔧 (7 sep 2026, Fase 2) Si el cliente corrige o completa algo
@@ -5012,7 +5352,8 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         # se agregó a la nota (ver .aviso-pago-efectivo en
         # nota_cliente.html) -- también se manda como mensaje canónico
         # aquí al cerrar la Fase 2, SOLO si la entrega es a domicilio.
-        if "domicilio" in str(pedido.get("tipo_entrega") or "").strip().lower():
+        marcar_envio_nacional_si_corresponde(pedido, sesion)
+        if _es_domicilio_local(pedido):
             enviar_mensaje_canal(
                 numero,
                 "RECUERDA, EN ENTREGAS A DOMICILIO SOLO ACEPTAMOS PAGO EN "
@@ -5095,6 +5436,7 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
     pedido = sesion["pedido"]
     info_enviada = sesion["info_enviada"]
     pedido_id = sesion.get("pedido_id")
+    sesion["_turno_con_imagen"] = bool(imagen_base64)
 
     # 🔧 (19 ago 2026, bug real reportado por Israel) Respaldo
     # determinístico para "cantidad ya dicha mientras se aclara el
@@ -5336,6 +5678,10 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
             continue
 
         texto = mensaje.content or "Disculpa, ¿me repites tu mensaje? 🙂"
+        texto = corregir_pago_contra_entrega_nacional(texto, pedido, sesion)
+        texto = sanitizar_telefonos_en_respuesta(texto, texto_cliente, pedido)
+        texto = quitar_promesa_parte_del_dia_sin_entrega_definida(texto, pedido)
+        texto = ajustar_texto_horario_domicilio(texto, pedido, texto_cliente)
         historial.append({"role": "assistant", "content": texto})
         _liberar_imagen_del_historial(historial, imagen_base64, texto_cliente)
 
@@ -5408,6 +5754,10 @@ def preguntar_ia(numero, texto_cliente, imagen_base64=None, imagen_mime=None, ca
             max_tokens=600,
         )
         texto = r_final.choices[0].message.content or "Disculpa, dame un segundo y te confirmo 🙂"
+        texto = corregir_pago_contra_entrega_nacional(texto, pedido, sesion)
+        texto = sanitizar_telefonos_en_respuesta(texto, texto_cliente, pedido)
+        texto = quitar_promesa_parte_del_dia_sin_entrega_definida(texto, pedido)
+        texto = ajustar_texto_horario_domicilio(texto, pedido, texto_cliente)
         print("🆘 Se agotaron las vueltas de herramientas -- se forzó una respuesta final con tool_choice='none' en vez de mandar solo el mensaje de relleno")
     except Exception as e:
         print(f"⚠️ Falló el intento final forzado tras agotar las vueltas: {repr(e)}")

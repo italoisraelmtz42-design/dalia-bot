@@ -154,6 +154,11 @@ _REGLAS_PRODUCTO_ORDENADAS = [
 ]
 
 
+def _sin_acentos(t):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", t) if unicodedata.category(c) != "Mn")
+
+
 def campos_requeridos_para(nombre_producto: str) -> list:
     """Devuelve la lista de campos que de verdad aplican para este producto.
     Si no hace match con ninguna regla conocida, regresa la lista universal
@@ -161,9 +166,15 @@ def campos_requeridos_para(nombre_producto: str) -> list:
     if not nombre_producto:
         return FALTANTES_UNIVERSALES
 
-    texto = nombre_producto.lower()
+    # 🔧 (19 oct 2026, bug real: Eli Jb, "león de toalla") El nombre llega
+    # con acento ("león", "búho", "oración con decenario") pero las reglas
+    # usan palabras sin acento ("leon", "buho"), así que NO hacía match y
+    # caía a FALTANTES_UNIVERSALES (que incluye color_velita, dirección,
+    # nombre_bebe, etc.): el bot insistía 12 veces en pedir color de velita
+    # a un león que no lleva velita. Ahora se quitan acentos de ambos lados.
+    texto = _sin_acentos(nombre_producto.lower())
     for palabras_clave, armar_campos in _REGLAS_PRODUCTO_ORDENADAS:
-        if any(palabra in texto for palabra in palabras_clave):
+        if any(_sin_acentos(palabra) in texto for palabra in palabras_clave):
             return armar_campos(texto)
 
     return FALTANTES_UNIVERSALES

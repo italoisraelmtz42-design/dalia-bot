@@ -1543,6 +1543,17 @@ def _proxima_fecha_disponible_tras_hoy(hoy):
     return candidata, es_manana
 
 
+DIAS_ENTREGA_GARCIA = (0, 2, 4)  # lunes, miércoles, viernes
+
+
+def es_garcia_nl(municipio):
+    """García, Nuevo León (NO San Pedro Garza García, NO Saltillo)."""
+    if not municipio:
+        return False
+    palabras = set(normalizar_producto_clave(municipio).replace(",", " ").split())
+    return "garcia" in palabras and "pedro" not in palabras and "garza" not in palabras
+
+
 def sumar_dias_habiles_sin_sabado(fecha_inicio, dias_habiles):
     """🔧 (6 sep 2026, pedido explícito de Israel, Zona Extendida --
     García/Saltillo) A diferencia de sumar_dias_habiles() (que cuenta
@@ -3404,6 +3415,23 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
             if "es_urgente" not in campos_modificados:
                 campos_modificados.append("es_urgente")
 
+    # 🔧 (5 nov 2026, pedido de Israel) García, Nuevo León SOLO se entrega
+    # lunes, miércoles o viernes (los otros días no hay ruta ahí). Aplica solo
+    # a García (no a Saltillo ni a San Pedro Garza García) y en domicilio.
+    if (("fecha_evento" in campos_modificados or "municipio" in campos_modificados)
+            and es_garcia_nl(pedido.get("municipio"))
+            and "domicilio" in str(pedido.get("tipo_entrega") or "").lower()):
+        _f_g = parsear_fecha_pedido(pedido.get("fecha_evento"))
+        if _f_g is not None and _f_g.weekday() not in DIAS_ENTREGA_GARCIA:
+            _hoy_g = datetime.now(ZONA_HORARIA_NEGOCIO).date()
+            _min_g = sumar_dias_habiles_sin_sabado(_hoy_g, 6)
+            _cand = max(_f_g, _min_g)
+            while _cand.weekday() not in DIAS_ENTREGA_GARCIA:
+                _cand += timedelta(days=1)
+            pedido["fecha_evento"] = _fecha_evento_previa if "fecha_evento" in campos_modificados else None
+            campos_modificados = [c for c in campos_modificados if c != "fecha_evento"]
+            pedido["_fecha_evento_rechazada_garcia_dia"] = _cand.strftime("%d/%m/%Y")
+
     # 🔧 Urgencia determinística -- ver es_pedido_urgente() arriba. En
     # cuanto se sepa fecha_evento, Python decide si es urgente o no
     # comparando contra la fecha real de HOY, sin importar qué haya
@@ -3444,6 +3472,25 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
     return campos_modificados
 
 
+def canonizar_figura_jaboncito(valor):
+    """Devuelve el nombre oficial de la figura (piecito, cruz, corazón, flor,
+    osito, estrella) si el texto es una variante reconocible; si no, None."""
+    t = _sin_acentos_basico(valor)
+    if re.search(r"\bpie|\bpies\b|\bpiesito|\bpiecito|\bpiesitos", t):
+        return "piecito"
+    if re.search(r"\bcruz|\bcruces", t):
+        return "cruz"
+    if re.search(r"\bcorazon", t):
+        return "corazón"
+    if re.search(r"\bflor", t):
+        return "flor"
+    if re.search(r"\bosit", t):
+        return "osito"
+    if re.search(r"\bestrella", t):
+        return "estrella"
+    return None
+
+
 def _validar_colores_item(item):
     campos_color = ("color_toalla", "color_mono", "color_velita", "color_jaboncito")
     pref = item.get("producto") or ""
@@ -3457,6 +3504,15 @@ def _validar_colores_item(item):
     # figura. Mismo patrón que los colores: se rechaza en vez de
     # guardarse tal cual, para que el checklist lo siga mostrando como
     # pendiente en vez de darlo por confirmado con un valor inválido.
+    # 🔧 (5 nov 2026, bug real: Perla Torres) La clienta pidió "figura de jabón
+    # de pies": el modelo guardó "pies"/"pie", que NO estaba en la lista de 6
+    # figuras, así que se descartaba en silencio y el checklist seguía
+    # mostrando "❌ Figura de jaboncito" aunque el bot dijera que la guardó.
+    # Ahora se reconocen las variantes comunes y se guarda el nombre oficial.
+    if item.get("tipo_jaboncito"):
+        _fig = canonizar_figura_jaboncito(item["tipo_jaboncito"])
+        if _fig:
+            item["tipo_jaboncito"] = _fig
     if item.get("tipo_jaboncito") and not figura_jaboncito_es_valida(item["tipo_jaboncito"]):
         print(f"🚫 Figura de jaboncito inválida rechazada: tipo_jaboncito={item['tipo_jaboncito']}")
         item["tipo_jaboncito"] = None
@@ -4468,6 +4524,19 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         # García/Saltillo): ver _fecha_evento_rechazada_zona_extendida en
         # aplicar_actualizacion_pedido -- 6 días hábiles fijos, sin
         # sábado, nunca se acelera ni pagando urgente.
+        _fecha_garcia_dia = pedido.pop("_fecha_evento_rechazada_garcia_dia", None)
+        if _fecha_garcia_dia:
+            print(f"🚨 Se bloqueó fecha_evento: García solo se entrega lunes/miércoles/viernes (siguiente: {_fecha_garcia_dia})")
+            return (
+                "BLOQUEADO: las entregas a García, Nuevo León SOLO se hacen los LUNES, "
+                "MIÉRCOLES y VIERNES (los demás días no hay entregas ahí), con un mínimo de "
+                f"6 días hábiles. La fecha válida más próxima a la que pidió el cliente es "
+                f"{_fecha_garcia_dia}. Explícaselo con amabilidad y pregúntale si esa fecha "
+                "(u otro lunes, miércoles o viernes posterior) le funciona. No guardes "
+                "ninguna otra fecha.",
+                campos_modificados,
+                False,
+            )
         _fecha_minima_zona_rechazo = pedido.pop("_fecha_evento_rechazada_zona_extendida", None)
         if _fecha_minima_zona_rechazo:
             print(f"🚨 Se bloqueó fecha_evento: Zona Extendida (García/Saltillo) exige mínimo {_fecha_minima_zona_rechazo}")
@@ -5151,6 +5220,43 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         # la clienta ("Perla Torres") como teléfono y como tipo de evento.
         # Un teléfono debe tener al menos 10 dígitos; el tipo de evento no
         # puede ser un teléfono ni el mismo texto que el nombre.
+        # 🔧 (5 nov 2026, bug real: Perla Torres) El nombre del BEBÉ
+        # ("Jafeth Abdiel", que venía en el texto de la tarjetita) se guardó
+        # como nombre de la clienta. Se rechaza si coincide con el nombre del
+        # bebé o con el texto de la tarjetita ya capturado.
+        _nom = str(args_obj.get("nombre_cliente") or "").strip()
+        if _nom:
+            _datos_prev = pedido_manager.obtener_datos_post_pago(numero) or {}
+            _ref = " ".join([
+                str(_datos_prev.get("tarjetita_texto") or ""),
+                str(args_obj.get("tarjetita_texto") or ""),
+            ] + [str(i.get("nombre_bebe") or "") for i in (pedido.get("items") or []) if isinstance(i, dict)])
+            _n = _sin_acentos_basico(_nom).strip()
+            _r = _sin_acentos_basico(_ref)
+            _resto = _sin_acentos_basico(texto_cliente or "").replace(_n, " ")
+            _resto = re.sub(r"\b(me|llamo|mi|nombre|es|soy|el|de|la|del|cliente|apellido|y|a nombre)\b|[^\w]", " ", _resto)
+            # Solo cuenta como "dijo su nombre" si el mensaje ES (casi) solo el nombre.
+            _cliente_dijo_su_nombre = bool(_n and _n in _sin_acentos_basico(texto_cliente or "") and not _resto.strip())
+            if _n and _n in _r and not _cliente_dijo_su_nombre:
+                print(f"🚨 Se descartó nombre_cliente={_nom!r}: parece el nombre del bebé/tarjetita, no de la clienta")
+                args_obj.pop("nombre_cliente", None)
+
+        # 🔧 (5 nov 2026, bug real: Lety García) El cliente mandó en un solo
+        # mensaje datos y, en su propia línea, "# 65" (número de diseño de
+        # tarjetita): el bot lo pegó al final de la dirección. Se separa.
+        _dir = args_obj.get("direccion_entrega")
+        if _dir and texto_cliente:
+            _linea_num = re.search(r"(?m)^\s*#\s*(\d{1,3})\s*$", texto_cliente)
+            if _linea_num:
+                _sufijo = re.search(r"\s*#\s*" + _linea_num.group(1) + r"\s*$", str(_dir))
+                if _sufijo:
+                    args_obj["direccion_entrega"] = str(_dir)[:_sufijo.start()].rstrip(" ,.")
+                    if not args_obj.get("tarjetita_diseno"):
+                        _prev = (pedido_manager.obtener_datos_post_pago(numero) or {}).get("tarjetita_diseno")
+                        if not _prev:
+                            args_obj["tarjetita_diseno"] = _linea_num.group(1)
+                    print(f"🔧 '# {_linea_num.group(1)}' separado de la dirección (era el diseño de tarjetita)")
+
         _tel = args_obj.get("telefono_contacto")
         if _tel and len(re.sub(r"\D", "", str(_tel))) < 10:
             print(f"🚨 Se descartó telefono_contacto inválido: {_tel!r}")
@@ -7499,6 +7605,42 @@ def procesar_mensaje_no_soportado(numero, tipo, canal="whatsapp", pagina_id=None
     enviar_mensaje_canal(numero, respuesta, canal, pagina_id=pagina_id)
 
 
+# ===========================================================================
+# 🔧 (5 nov 2026, caso Perla Torres) RESPUESTAS DUPLICADAS: cuando el cliente
+# manda 2-3 mensajes cortos seguidos ("60" / "Piezas", "Cuando será el total" /
+# "De mi pedido"), cada mensaje disparaba SU PROPIA respuesta del bot y el
+# cliente recibía 2-3 respuestas encimadas (a veces contradictorias). Ahora el
+# bot espera unos segundos: si llegan más mensajes de texto del mismo cliente,
+# solo el ÚLTIMO hilo responde, con todos los textos juntos. Se desactiva con
+# DEBOUNCE_MENSAJES_SEGUNDOS=0 en Render.
+# ===========================================================================
+try:
+    DEBOUNCE_MENSAJES_SEGUNDOS = float(os.getenv("DEBOUNCE_MENSAJES_SEGUNDOS", "3"))
+except ValueError:
+    DEBOUNCE_MENSAJES_SEGUNDOS = 3.0
+_COLA_TEXTO_PENDIENTE = {}
+_COLA_TEXTO_LOCK = threading.Lock()
+
+
+def juntar_mensajes_seguidos(numero, texto, espera=None):
+    """Registra `texto` y espera. Devuelve el texto combinado si este hilo es
+    el último en llegar, o None si otro hilo más reciente responderá."""
+    espera = DEBOUNCE_MENSAJES_SEGUNDOS if espera is None else espera
+    if espera <= 0 or not texto:
+        return texto
+    token = object()
+    with _COLA_TEXTO_LOCK:
+        _COLA_TEXTO_PENDIENTE.setdefault(numero, []).append((token, texto))
+    time.sleep(espera)
+    with _COLA_TEXTO_LOCK:
+        cola = _COLA_TEXTO_PENDIENTE.get(numero) or []
+        if not cola or cola[-1][0] is not token:
+            return None
+        combinado = "\n".join(t for _, t in cola)
+        _COLA_TEXTO_PENDIENTE[numero] = []
+    return combinado
+
+
 def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media_id_audio=None, canal="whatsapp", media_url_imagen_messenger=None, pagina_id=None, proveedor_whatsapp="meta", media_url_imagen_ycloud=None, media_url_audio_ycloud=None, media_url_audio_messenger=None, referral_anuncio=None, producto_citado_nombre=None, texto_citado=None):
     # 🔧 Marca, para ESTE hilo únicamente, si los envíos de este mensaje
     # deben salir por YCloud (número de prueba) o por Meta (producción,
@@ -7517,6 +7659,16 @@ def procesar_mensaje_en_fondo(numero, texto_cliente, media_id_imagen=None, media
     if BOT_PAUSADO_GLOBAL:
         print(f"🆘 BOT_PAUSADO=true -- ignorando mensaje de {numero} por completo.")
         return
+
+    # Solo mensajes de texto puros (sin foto/audio/respuesta citada/anuncio).
+    if (texto_cliente and numero not in NUMEROS_AUTORIZADOS_RESET and not (media_id_imagen or media_id_audio or media_url_imagen_messenger
+            or media_url_imagen_ycloud or media_url_audio_ycloud or media_url_audio_messenger
+            or producto_citado_nombre or texto_citado or referral_anuncio)):
+        _combinado = juntar_mensajes_seguidos(numero, texto_cliente)
+        if _combinado is None:
+            print(f"⏭️ Mensaje de {numero} agrupado con uno más reciente -- responderá el último hilo")
+            return
+        texto_cliente = _combinado
 
     # 🔧 Se checa ANTES de guardar el mensaje entrante -- si se checara
     # después, este mismo mensaje ya contaría como "1 mensaje previo" y

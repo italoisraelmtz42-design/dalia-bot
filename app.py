@@ -3415,6 +3415,22 @@ def aplicar_actualizacion_pedido(pedido, argumentos_json):
             if "es_urgente" not in campos_modificados:
                 campos_modificados.append("es_urgente")
 
+    # 🔧 (8 nov 2026, pedido de Israel, bug real: Adriana Quiroz) NINGUNA
+    # entrega puede caer en DOMINGO: el local está cerrado y tampoco hay
+    # entregas a domicilio, DHL, punto de entrega ni a ningún municipio.
+    # Sí se pueden TOMAR pedidos en domingo, solo no entregar. El bot aceptó
+    # "domingo 13 de diciembre" con recolección en el local. Candado por
+    # código, sin importar el tipo de entrega.
+    if "fecha_evento" in campos_modificados:
+        _f_dom = parsear_fecha_pedido(pedido.get("fecha_evento"))
+        if _f_dom is not None and _f_dom.weekday() == 6:
+            pedido["fecha_evento"] = _fecha_evento_previa
+            campos_modificados = [c for c in campos_modificados if c != "fecha_evento"]
+            pedido["_fecha_evento_rechazada_domingo"] = (
+                (_f_dom - timedelta(days=1)).strftime("%d/%m/%Y"),
+                (_f_dom + timedelta(days=1)).strftime("%d/%m/%Y"),
+            )
+
     # 🔧 (5 nov 2026, pedido de Israel) García, Nuevo León SOLO se entrega
     # lunes, miércoles o viernes (los otros días no hay ruta ahí). Aplica solo
     # a García (no a Saltillo ni a San Pedro Garza García) y en domicilio.
@@ -4524,6 +4540,22 @@ def ejecutar_tool_call(tool_call, sesion, numero, pedido, canal="whatsapp", pagi
         # García/Saltillo): ver _fecha_evento_rechazada_zona_extendida en
         # aplicar_actualizacion_pedido -- 6 días hábiles fijos, sin
         # sábado, nunca se acelera ni pagando urgente.
+        _rechazo_domingo = pedido.pop("_fecha_evento_rechazada_domingo", None)
+        if _rechazo_domingo:
+            _sab, _lun = _rechazo_domingo
+            print(f"🚨 Se bloqueó fecha_evento en DOMINGO (alternativas: sábado {_sab} / lunes {_lun})")
+            return (
+                "BLOQUEADO: el cliente pidió una fecha que cae en DOMINGO y ningún pedido "
+                "se entrega en domingo (el local está cerrado y tampoco hay entregas a "
+                "domicilio, DHL, puntos de entrega ni ningún municipio). Sí se pueden "
+                "tomar pedidos en domingo, solo no entregarlos ese día. Explícaselo con "
+                f"amabilidad y ofrécele el sábado {_sab} (en local el sábado es de 11:30 am a "
+                f"2:00 pm) o el lunes {_lun}, o la fecha que prefiera. Si su EVENTO es ese "
+                "domingo, recuérdale que la entrega debe ser antes (por ejemplo el sábado). "
+                "No guardes la fecha del domingo.",
+                campos_modificados,
+                False,
+            )
         _fecha_garcia_dia = pedido.pop("_fecha_evento_rechazada_garcia_dia", None)
         if _fecha_garcia_dia:
             print(f"🚨 Se bloqueó fecha_evento: García solo se entrega lunes/miércoles/viernes (siguiente: {_fecha_garcia_dia})")

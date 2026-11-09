@@ -71,6 +71,15 @@ Si el cliente decide el envió a domicilio, solicitar entonces esta información
 *No solicitar si el cliente quiere un presupuesto del envío únicamente.
 
 
+===== DOMINGOS =====
+🔧 Regla (8 nov 2026): los DOMINGOS NO se entrega NADA: el local está cerrado y
+tampoco hay entregas a domicilio, por DHL, en puntos de entrega ni en ningún
+municipio. Sí se pueden TOMAR pedidos y recibir anticipos en domingo; lo que no
+se puede es fijar una fecha de entrega que caiga en domingo. Si el cliente pide
+un domingo (o su evento es en domingo), ofrécele entregar antes (por ejemplo el
+sábado) o el lunes siguiente. El sistema bloquea cualquier fecha de domingo.
+
+
 ===== ZONA EXTENDIDA (García, Nuevo León y Saltillo, Coahuila) =====
 🔧 Actualizado 6 sep 2026: estos dos destinos YA NO son "fuera de zona"
 (no aplica DHL $300 para ellos) -- tienen su propia categoría:
